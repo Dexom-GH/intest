@@ -49,9 +49,9 @@ Read these before evaluating — they are firm for v1, and they rule InTest out 
 
 Worth knowing before you start, because it surprises people.
 
-InTest generates a request body for every operation that needs one. Where your spec provides an
-`example`, that body is real. Where it does not, InTest emits an obvious `TODO:` placeholder —
-**and the test fails until a human replaces it.**
+`intest fixtures repair` creates a request body for every operation that needs one. Where your
+spec provides an `example`, that body is real. Where it does not, InTest emits an obvious
+`TODO:` placeholder — **and the test fails until a human replaces it.**
 
 That is deliberate. The alternative is filling in plausible-looking junk (`"string"`, `0`),
 which a permissive endpoint accepts, so the suite passes while asserting nothing. A red test
@@ -76,6 +76,10 @@ intest init
 
 # Generate tests from the spec
 intest generate
+
+# Create fixtures for operations with request bodies, and update them when the spec moves.
+# `generate` reports what is missing; this is the only command that writes under fixtures/.
+intest fixtures repair
 
 # In CI: fail if the committed output is stale
 intest generate --check

@@ -457,7 +457,7 @@ Rev 2 and earlier drafts of rev 3 scattered commands across seven sections, and 
 | `intest generate` | `Generated/`, `coverage-report.json`, and `spec.json` when `spec.source` is a URL (§9) | `fixtures/`, team-owned files | 0 ok · 1 fixture drift or validation failure |
 | `intest generate --check` | Nothing | Everything | 0 identical · 1 `Generated/` or `coverage-report.json` differs · 2 tool error · 4 tool-version mismatch |
 | `intest generate --emit-plan` | `TestPlan` JSON to stdout | Everything | 0 ok |
-| `intest fixtures repair` | `fixtures/` — adds `TODO:` sentinels for newly-required properties, flags removed ones | `Generated/`, team-owned files | 0 ok, including nothing to repair |
+| `intest fixtures repair` | `fixtures/` — **creates missing fixtures** by tier precedence, adds `TODO:` sentinels for newly-required properties, flags removed ones. Never overwrites an existing value | `Generated/`, team-owned files | 0 ok, including nothing to repair |
 | `intest fixtures promote` | Nothing — prints a paste-ready snippet and names the target file | Everything, `spec.source` especially (§10) | 0 ok |
 | `intest survey <spec-glob>` | Nothing — prints a spec-population report (§17) | Everything | 0 ok · 2 no spec matched or unparseable |
 | `intest upgrade` | `intestVersion` in `intest.json`, the version in `.config/dotnet-tools.json`, then re-runs `generate` | `fixtures/`, team-owned files | 0 ok · 1 regeneration failed |
@@ -1177,21 +1177,38 @@ Generation warns on any literal value matching credential heuristics.
 `fixtures/create-order.json` deep-merged with `fixtures/{profile}/create-order.json`;
 environment wins.
 
-### Drift detection — reports, does not mutate
+### Drift detection — one command mutates, and it is never `generate`
 
-- **`intest generate`** validates fixtures against the current schema, **reports drift, and exits
-  non-zero.** Writes nothing under `fixtures/`.
-- **`intest fixtures repair`** mutates — adds missing required properties as `TODO:` sentinels,
-  flags removed ones.
+**`intest fixtures repair` is the only command that writes under `fixtures/`**, and it owns
+three cases, not two:
+
+| Case | What `repair` does |
+|---|---|
+| Fixture **file absent** for an operation that needs a request body | **Creates it**, composed by the tier precedence above (§10) and recording the tier in `$meta` |
+| Fixture present, schema gained a required property | Adds it as a `TODO:` sentinel |
+| Fixture present, property no longer in the schema | Flags it; never silently deletes hand-written data |
+
+Creation belongs here because absence is the degenerate case of incomplete — a missing fixture
+and an incomplete one are the same problem at different stages, and splitting them across two
+commands would mean two things write under `fixtures/`. An earlier revision defined `repair` as
+the second and third cases only, which left nothing in the design responsible for the first: a
+fresh project with POST operations generated tests referencing fixtures no command created.
+
+**`intest generate` validates and reports; it writes nothing under `fixtures/`.** A missing
+fixture is reported as drift like any other:
 
 ```
-Fixture drift (2):
+Fixture drift (3):
+  create-order.json   MISSING — no fixture for operation 'createOrder' (request body required)
   create-order.json   missing required property 'shippingMethod' (added in spec)
   update-order.json   property 'legacyRef' no longer in schema
-Run `intest fixtures repair` to add sentinels.
+Run `intest fixtures repair` to create and update fixtures.
 ```
 
-Keeping `generate` read-only under `fixtures/` is what makes `--check` coherent.
+Keeping `generate` read-only under `fixtures/` is what makes `--check` coherent, and it is why
+the first run of a new project is a deliberate two-step: `generate`, then `repair`. `repair`
+never overwrites an existing value — it only adds what is absent and flags what is stale, so
+running it on a mature project cannot destroy hand-written data.
 
 ### Promotion — emits, does not write
 
@@ -1745,6 +1762,11 @@ the source-presence problem above.
 11. **URL joining test.** Base URLs with and without a trailing slash, paths with and without
     a leading slash, asserting the resolved absolute URI. Cheap, and it guards a silent-wrong
     -route failure (§7).
+12. **Fixture lifecycle test.** From an empty `fixtures/` directory and a spec containing a POST
+    operation: `generate` reports the fixture as missing and writes nothing; `repair` creates it
+    at the expected tier; a second `repair` is a no-op; and a `repair` run after a hand-edited
+    value leaves that value untouched. This is the path that had no owner until it was traced
+    end to end, and the no-overwrite assertion is what protects hand-written data.
 
 ---
 
@@ -1859,6 +1881,7 @@ Shouldly 5 when GA · Microsoft.OpenApi transformer snippets for ASP.NET Core 11
 | Skip operations with no response schema | **Status-only contract test instead.** Skipping deleted every bodiless 204/205/304 operation from the suite, and discarded the status check that the inline-schema argument says has value |
 | Auth tests cost "a multi-identity token provider (§13)" | **The cost is the team's.** InTest ships a static provider, so 401 tests always run and 403 tests are `MemberCondition`-gated with a coverage note — never red on day one for a capability InTest chose not to ship |
 | `intest upgrade` referenced but undefined; no CLI inventory anywhere | **§5 command surface** — every command, what it writes, what it never writes, exit codes, and a stated exit-code convention |
+| No command created the **initial** fixtures — `generate` is read-only under `fixtures/` and `repair` only amended existing files | **Resolved.** `repair` owns creation too; a missing fixture is reported as drift, and the first run of a project is a deliberate `generate` then `repair` (§10) |
 | §2 claimed URL input, but every downstream mechanism assumed a local build artifact — MSBuild cannot copy from `https://` | **Resolved.** A URL source is snapshotted to a committed, generator-owned `spec.json` at generation time; `--check` compares the snapshot and never re-fetches (§9) |
 | Architecture free to bake in MSTest | **Constrained.** MSTest is ~a fifth of .NET test projects by download volume, so §3 requires the neutral layers to name no MSTest type, with the MSTest-specific surface enumerated. v1 still ships MSTest only |
 | `ITestTokenProvider` had no way to advertise identities | **`Identities` property added.** `MultiIdentityAvailable` is `Identities.Count > 1` — a declared capability, not a probe. The shipped static provider returns one, so 403 tests gate off by construction |
