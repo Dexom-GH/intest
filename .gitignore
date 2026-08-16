@@ -55,8 +55,10 @@ Thumbs.db
 *.swp
 
 ## Agent instruction files — local tooling, deliberately not published.
-## Kept on disk, untracked. See the note in CONTRIBUTING before re-adding any of these.
+## Kept on disk, untracked. Not part of the project; do not re-add without discussion.
 AGENTS.md
+CLAUDE.md
+GEMINI.md
 caveman.*
 .clinerules/
 .cursor/
