@@ -12,9 +12,10 @@ documentation. §18 records what changed and why.
 > **Name.** The tool is `InTest`, invoked as `intest`. Availability verified against
 > nuget.org on 2026-08-16: `InTest`, `InTest.Cli`, `InTest.Runtime` and `InTest.Core` all
 > return 404 on the flat-container index, and a fuzzy package search for `intest` returns
-> zero hits. On GitHub the org name `intest` is **not** available — a personal account holds
-> it — so the repository lives under an existing organisation. No C# repository of substance
-> uses the name. (Rev 2's provisional name `Jig` was taken: nuget.org carries `Jig` 0.2.0–0.3.1.)
+> zero hits, and no C# repository of substance uses the name. On GitHub the org name `intest`
+> is **not** available — a personal account holds it — so the repository lives at
+> **`github.com/Dexom-GH/intest`**, MIT licensed. (Rev 2's provisional name `Jig` was taken:
+> nuget.org carries `Jig` 0.2.0–0.3.1.)
 >
 > Casing convention: `InTest` for packages, namespaces and types; `intest` for the CLI
 > command, `intest.json`, and `INTEST_PROFILE`. The split-cap form disambiguates it from the
@@ -52,10 +53,10 @@ run with `dotnet test` like any other test project. InTest is a development-time
 
 ### Project status
 
-InTest is open source and will be published publicly. Three consequences are load-bearing and
-are addressed where they arise: the NuGet ID must be available (§20), CI cannot depend on
-the organisation's private specs (§16), and CI-environment detection must not assume Azure
-DevOps (§14).
+InTest is open source, MIT licensed, published at `github.com/Dexom-GH/intest`. Three
+consequences are load-bearing and are addressed where they arise: the NuGet IDs must be
+reserved (§20), CI cannot depend on the organisation's private specs (§16), and CI-environment
+detection must not assume Azure DevOps (§14).
 
 ---
 
@@ -1745,8 +1746,7 @@ Apache-2.0 · .NET 8 and 9 EOL 10 November 2026 · `WithOpenApi` deprecated in .
 
 1. **Reserve the NuGet IDs.** `InTest`, `InTest.Cli`, `InTest.Runtime` and `InTest.Core` were
    free on 2026-08-16 but are not reserved. Publish placeholder versions, or apply for the
-   `InTest.` ID prefix, before announcing anything. Also decide which GitHub organisation
-   hosts the repo, since `github.com/intest` is held by a personal account.
+   `InTest.` ID prefix, before announcing anything. **Blocking for release.**
 2. **Fixture ownership.** The tier-4 backlog burns down only if someone owns it.
    *Recommendation:* the team owning the API owns its fixtures, and the spec-example
    percentage goes in their regular health review. Needs a decision.
@@ -1758,10 +1758,18 @@ Apache-2.0 · .NET 8 and 9 EOL 10 November 2026 · `WithOpenApi` deprecated in .
    package without regenerating, and can regenerate without upgrading the package. Both need a
    stated support window, and `--check`'s version comparison (§8) needs to know which
    mismatches are errors and which are tolerated.
-5. **Open-source licence for InTest itself.** MIT is the obvious default and matches every
-   dependency; needs confirming.
-6. **Where the internal round-trip job lives** (§16 item 4), given real org specs cannot enter
+5. **Where the internal round-trip job lives** (§16 item 4), given real org specs cannot enter
    a public repo.
+
+### Closed
+
+- **Licence — MIT.** Confirmed: `LICENSE` on `Dexom-GH/intest` is MIT, © 2026 Dexom-GH. It
+  matches every pinned dependency (Microsoft.OpenApi, NJsonSchema, Shouldly, MSTest, Scriban,
+  System.CommandLine), so InTest adds no licence surface of its own — which is the same test
+  that excluded FluentAssertions and `JsonSchema.Net` (§4).
+- **Hosting organisation — `Dexom-GH`.** `github.com/intest` is held by a personal account, so
+  the repo lives at `github.com/Dexom-GH/intest`. Half of item 1 above; the NuGet IDs remain
+  unreserved.
 
 ---
 
