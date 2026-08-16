@@ -111,6 +111,10 @@ minutes rather than after a day of scaffolding.
 
 ### Deferred to v2
 
+- **xUnit and NUnit template sets.** The single largest constraint on reach: MSTest is roughly
+  a fifth of .NET test projects by download volume. v1 does not ship them, but §3 requires the
+  architecture to keep them additive rather than a rewrite — the neutral layers must not name
+  an MSTest type. Highest-priority v2 item.
 - **A second HTTP pack (Flurl).** See §3 — `ApiTestBase.Client` cannot be typed for two packs
   from one package, and v2 must pick a resolution before adding one.
 - **Version selection.** v1 generates every operation in the document (§12).
@@ -182,6 +186,45 @@ release 2024-01-17, so it was the wrong candidate for first-class support regard
 
 `InTest.Runtime` earns the separation: shared behaviour ships as a versioned dependency, so a
 bug fix does not require every team to regenerate.
+
+### Framework portability — designed for three, ships one
+
+v1 ships MSTest. But MSTest addresses roughly a fifth of .NET test projects by NuGet download
+volume — xUnit and NUnit together are the larger share — so a design that bakes MSTest into its
+lower layers caps the tool's reach permanently. **The architecture must make xUnit and NUnit
+additive rather than a rewrite**, on the same reasoning that made the assertion seam pay off:
+that seam existed before a second assertion set did, and adding one cost nothing as a result.
+
+This is a design constraint, not a v1 feature. Nothing framework-specific is abstracted
+speculatively; what is required is that the neutral layers stay neutral.
+
+**The boundary.** Everything below is framework-neutral and must not name an MSTest type:
+
+| Neutral | Why it can be |
+|---|---|
+| `TestPlan` | Describes operations, cases, data rows, categories and expected outcomes. It must not carry MSTest attribute names — `[DataRow]`, `[TestCategory]` and `[MemberCondition]` are rendering decisions |
+| Configuration, profiles, DI composition | Plain `IConfiguration` / `IServiceProvider` |
+| Schema bundle, `ApiResponseAssertions` | Take values in, return results out |
+| Readiness, run ID, fixture loading and token resolution | No test-framework surface |
+| `IAssemblyFixture`, `ITestTokenProvider`, `ITestDataProvider` | Already framework-neutral interfaces |
+| HTTP handlers and the ambient accessor | `AsyncLocal`, not framework state |
+
+Everything below is **framework-specific** and belongs in a thin adapter — one namespace in v1,
+one package per framework when a second ships:
+
+| MSTest-specific | What the others need instead |
+|---|---|
+| `ApiTestBase` and its `TestContext` | xUnit has no `TestContext`; identity and output arrive differently |
+| `TestId` from `TestContext.TestDisplayName` (§14) | Each framework exposes the resolved data-row name differently. **This is the sharpest coupling in the design** and needs a neutral `ITestIdentity` the adapter supplies |
+| `[AssemblyInitialize]` / `[AssemblyCleanup]` | xUnit: assembly fixtures; NUnit: `SetUpFixture` with `[OneTimeSetUp]` |
+| `[DataRow]` / `[DynamicData]` | xUnit: `[InlineData]` / `[MemberData]`; NUnit: `[TestCase]` / `[TestCaseSource]` |
+| `[TestCategory]` | xUnit: `[Trait]`; NUnit: `[Category]` |
+| `[MemberCondition]` gating (§9) | xUnit has no conditional-execution attribute; needs a different mechanism |
+| Parallelization and timeout models (§11) | Differ substantially, and are consumer-owned in every case |
+
+**The practical rule for v1:** if a type in the neutral layer would have to change to support
+xUnit, it is in the wrong layer. `project.framework` stays frozen per project (§5) — a suite
+cannot be migrated in place — but the *tool* must be able to emit all three.
 
 ### Versioning and compatibility
 
@@ -364,7 +407,7 @@ The rule: **an axis is frozen if changing it invalidates hand-written code.**
 
 | Axis | Status | Why |
 |---|---|---|
-| Test framework | **Frozen** | Lifecycle, parameterization and parallelism models differ. Every hand-written partial targets them |
+| Test framework | **Frozen per project** | Lifecycle, parameterization and parallelism models differ, and every hand-written partial targets them — a suite cannot be migrated in place. This does **not** mean the tool emits one framework: §3 requires the architecture to support MSTest, xUnit and NUnit, with v1 shipping MSTest |
 | Identifier naming | **Frozen** | Renaming generated classes orphans every hand-written partial |
 | HTTP pack | n/a in v1 | One pack ships, so there is no axis. When v2 adds a second, it is **frozen** — `ApiTestBase.Client` is typed per pack, so any hand-written test touching `Client` stops compiling on a swap |
 | Assertion set | **Additive** | Hand-written assertions are never migrated — adding a set adds a library, so `assertions` is an array. Command is `intest assertions add`, never "switch" |
@@ -411,7 +454,7 @@ Rev 2 and earlier drafts of rev 3 scattered commands across seven sections, and 
 | Command | Writes | Never writes | Exit |
 |---|---|---|---|
 | `intest init` | `intest.json`, `.csproj`, `.editorconfig`, `AssemblyInfo.cs`, `TestStartup.cs`, `<Name>TestBase.cs`, `appsettings*.json`, `*.runsettings`, `.config/dotnet-tools.json` | Anything already present — refuses rather than overwrites | 0 ok · 3 already initialised |
-| `intest generate` | `Generated/`, `coverage-report.json` | `fixtures/`, team-owned files | 0 ok · 1 fixture drift or validation failure |
+| `intest generate` | `Generated/`, `coverage-report.json`, and `spec.json` when `spec.source` is a URL (§9) | `fixtures/`, team-owned files | 0 ok · 1 fixture drift or validation failure |
 | `intest generate --check` | Nothing | Everything | 0 identical · 1 `Generated/` or `coverage-report.json` differs · 2 tool error · 4 tool-version mismatch |
 | `intest generate --emit-plan` | `TestPlan` JSON to stdout | Everything | 0 ok |
 | `intest fixtures repair` | `fixtures/` — adds `TODO:` sentinels for newly-required properties, flags removed ones | `Generated/`, team-owned files | 0 ok, including nothing to repair |
@@ -443,9 +486,10 @@ commands write outside `Generated/`, which was simply false: `generate` also wri
 `coverage-report.json` at the project root, and `assertions add` edits `intest.json`.
 
 - **`generate` never writes `fixtures/` and never writes a team-owned file.** That is the real
-  guarantee. It writes `Generated/` and `coverage-report.json`, both of which it owns
-  outright and regenerates wholesale.
-- **Nothing writes to `spec.source`.** It is a build artifact (§10).
+  guarantee. It writes `Generated/`, `coverage-report.json`, and — when `spec.source` is a URL
+  — the `spec.json` snapshot, all of which it owns outright and regenerates wholesale.
+- **Nothing writes to `spec.source`.** When it is a local path it is a build artifact (§10);
+  when it is a URL it is someone else's server. Either way InTest only ever reads it.
 - **`upgrade` is the one deliberate way to adopt a new tool version**, because `--check` fails
   on a version mismatch by design (§8). It bumps the manifest and the config together and
   regenerates, so the version change and its output change land in one reviewable commit
@@ -764,6 +808,30 @@ target, but the fail-loud behaviour is already correct.
 The spec is neither committed nor embedded. Diffs stay small and there is no second copy to
 drift.
 
+##### When `spec.source` is a URL
+
+§2 accepts a URL as input, and for many developers it is the only input they have — a Swagger
+endpoint on a running service, with no build artifact anywhere. MSBuild cannot copy from
+`https://`, so the mechanism above does not apply and an earlier draft simply left this
+undefined.
+
+**A URL source is snapshotted at generation time.** `intest generate` fetches it and writes
+`spec.json` into the project as a generator-owned, committed file; the `.csproj` copies that
+local file to the output directory exactly as above. Everything downstream — bundling,
+publishing into a gate stage, the `MSB3030` guard — is then identical for both source kinds.
+
+Two consequences, both wanted:
+
+- **The snapshot is committed**, so a spec change arrives as a reviewable diff on the PR, which
+  is the same property §8 relies on for generated code. A URL source otherwise has no diff at
+  all, and the spec would change under the suite silently.
+- **`--check` does not re-fetch.** It compares against the committed snapshot, so CI stays
+  hermetic and does not depend on the service being reachable. Refreshing is what `generate`
+  is for — a deliberate act by a developer, on a branch.
+
+This keeps the ownership invariant intact: `spec.json` is generator-owned like `Generated/` and
+`coverage-report.json`, and `generate` still never writes `fixtures/` or a team-owned file (§5).
+
 #### Bundling
 
 At `AssemblyInitialize`, each `components.schemas` entry is serialized and assembled into a
@@ -1053,6 +1121,26 @@ Fixture validation failed (3 fixtures, 5 problems):
 
 This works because generation happens in a branch: developer regenerates, tests fail on the
 PR, fixtures get fixed, PR merges. **The gate never sees red.**
+
+#### This conflicts with "easy to adopt", knowingly
+
+Principle 5 and the goal of being easy for any developer to pick up pull in opposite directions
+here, and the spec should say so rather than pretend otherwise.
+
+On a POST-heavy API, a first run generates a suite in which a large fraction of tests fail
+immediately on `TODO:` sentinels. That is the design working correctly, and to a newcomer it
+reads as the tool being broken. **The decision is to keep failing anyway**, because the
+alternative — a suite that is green while asserting nothing — is the failure this whole section
+exists to prevent, and it is unrecoverable: nobody investigates a passing test.
+
+What makes it navigable is honesty rather than a softer default:
+
+- Validation is aggregated into one message naming every unresolved sentinel and its file, not
+  N identical per-test failures.
+- `intest survey` (§17) predicts the fixture burden from `example` coverage **before** anyone
+  adopts InTest, so the cliff is a known cost rather than a surprise.
+- A meaningful suite runs on day one with no fixture work at all: every GET and DELETE contract
+  test, every declared-error test, and every no-token 401 test need no request body.
 
 Plausible-but-fake values (`"string"`, `0`) are the genuinely dangerous alternative —
 schema-valid, so a permissive endpoint returns 200 and the suite asserts nothing while looking
@@ -1771,6 +1859,8 @@ Shouldly 5 when GA · Microsoft.OpenApi transformer snippets for ASP.NET Core 11
 | Skip operations with no response schema | **Status-only contract test instead.** Skipping deleted every bodiless 204/205/304 operation from the suite, and discarded the status check that the inline-schema argument says has value |
 | Auth tests cost "a multi-identity token provider (§13)" | **The cost is the team's.** InTest ships a static provider, so 401 tests always run and 403 tests are `MemberCondition`-gated with a coverage note — never red on day one for a capability InTest chose not to ship |
 | `intest upgrade` referenced but undefined; no CLI inventory anywhere | **§5 command surface** — every command, what it writes, what it never writes, exit codes, and a stated exit-code convention |
+| §2 claimed URL input, but every downstream mechanism assumed a local build artifact — MSBuild cannot copy from `https://` | **Resolved.** A URL source is snapshotted to a committed, generator-owned `spec.json` at generation time; `--check` compares the snapshot and never re-fetches (§9) |
+| Architecture free to bake in MSTest | **Constrained.** MSTest is ~a fifth of .NET test projects by download volume, so §3 requires the neutral layers to name no MSTest type, with the MSTest-specific surface enumerated. v1 still ships MSTest only |
 | `ITestTokenProvider` had no way to advertise identities | **`Identities` property added.** `MultiIdentityAvailable` is `Identities.Count > 1` — a declared capability, not a probe. The shipped static provider returns one, so 403 tests gate off by construction |
 | "only three commands write outside `Generated/`" | **False, and the wrong invariant.** `generate` writes `coverage-report.json`; `assertions add` edits `intest.json`. Restated as ownership: `generate` never writes `fixtures/` or a team-owned file |
 | `--check` compared `Generated/` only | **Also compares `coverage-report.json`**, the one generated artefact tracking spec *shape* rather than templates |
@@ -1904,6 +1994,9 @@ answers it will never receive.
 | Own generator, not openapi-generator templates | Full output control; no JVM on agents; org-specific assertions |
 | `net10.0`, no preview packages | .NET 8/9 EOL Nov 2026; preview churn is not worth the features |
 | `Microsoft.OpenApi` 3.10.0, not 2.3.x | All 2.x stable versions are deprecated with a vulnerability advisory |
+| Design for MSTest, xUnit and NUnit; ship MSTest | MSTest is roughly a fifth of .NET test projects by download volume, so baking it into the neutral layers would cap reach permanently. The assertion seam proved the pattern: build the boundary before the second implementation, and adding one costs nothing |
+| Fixture sentinels keep failing, despite the adoption cost | A green suite asserting nothing is unrecoverable — nobody investigates a passing test. Aggregated messages, `intest survey`, and a fixture-free day-one subset make it navigable without weakening it |
+| URL specs snapshotted, not fetched at build or check time | MSBuild cannot copy from a URL; a committed snapshot also gives a URL source the reviewable diff it otherwise lacks, and keeps `--check` hermetic |
 | One HTTP pack in v1: HttpClient via `IHttpClientFactory` | `ApiTestBase.Client` cannot be typed for two packs from one package. Shipping one removes the constraint rather than working around it, and drops a template set plus two test dimensions |
 | NJsonSchema despite 7 unevaluatable 2020-12 keywords | Measured 27/27 on the OpenAPI 3.0 vocabulary; all 7 gaps are illegal in 3.0. The only complete .NET alternative charges commercial users, and this project cannot require a paid licence. The keyword report makes the residual gap visible rather than silent |
 | No shipped identity implementation | Auth is the team's. Shipping `DefaultAzureCredential` would add an undeclared dependency and an Azure assumption to a tool that must not have one |

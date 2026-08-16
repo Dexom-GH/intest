@@ -41,9 +41,29 @@ Read these before evaluating — they are firm for v1, and they rule InTest out 
 | | |
 |---|---|
 | Test project TFM | `net10.0`. Independent of your API's TFM — an API on `net8.0` is fine |
-| Test framework | **MSTest only.** xUnit and NUnit are not supported |
-| Spec | OpenAPI 3.x, JSON or YAML, file or URL |
+| Test framework | **MSTest only in v1.** xUnit and NUnit are the highest-priority v2 work, and the architecture is built to keep them additive — but today, if you are standardised on either, InTest is not for you yet |
+| Spec | OpenAPI 3.x, JSON or YAML, local file or URL |
 | Target | A deployed, reachable API |
+
+## What day one actually looks like
+
+Worth knowing before you start, because it surprises people.
+
+InTest generates a request body for every operation that needs one. Where your spec provides an
+`example`, that body is real. Where it does not, InTest emits an obvious `TODO:` placeholder —
+**and the test fails until a human replaces it.**
+
+That is deliberate. The alternative is filling in plausible-looking junk (`"string"`, `0`),
+which a permissive endpoint accepts, so the suite passes while asserting nothing. A red test
+gets fixed; a green test that proves nothing never does.
+
+In practice that means, on an API with lots of POSTs and few spec examples, your first run is
+mostly red and there is real work to do. Two things make that manageable:
+
+- Run `intest survey` **before** adopting — it tells you what fraction of operations carry
+  examples, so you can size the work in advance instead of discovering it.
+- A useful suite runs immediately with no fixture work at all: every GET and DELETE contract
+  test, every declared-error test (404s, 400s), and every no-token 401 test needs no body.
 
 ## How it will work
 
