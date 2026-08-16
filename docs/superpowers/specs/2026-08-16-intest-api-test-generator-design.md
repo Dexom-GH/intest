@@ -1,0 +1,1798 @@
+# InTest — API Integration Test Generator
+
+**Status:** Design · Revision 3
+**Date:** 2026-08-16
+**Supersedes:** Revision 2
+
+Revision 3 replaces rev 2 after every external claim was re-verified against vendor
+documentation and, where possible, against a real build. Claims marked *measured* were
+established by restoring, building, and running code on .NET SDK 10.0.303 — not by reading
+documentation. §18 records what changed and why.
+
+> **Name.** The tool is `InTest`, invoked as `intest`. Availability verified against
+> nuget.org on 2026-08-16: `InTest`, `InTest.Cli`, `InTest.Runtime` and `InTest.Core` all
+> return 404 on the flat-container index, and a fuzzy package search for `intest` returns
+> zero hits. On GitHub the org name `intest` is **not** available — a personal account holds
+> it — so the repository lives under an existing organisation. No C# repository of substance
+> uses the name. (Rev 2's provisional name `Jig` was taken: nuget.org carries `Jig` 0.2.0–0.3.1.)
+>
+> Casing convention: `InTest` for packages, namespaces and types; `intest` for the CLI
+> command, `intest.json`, and `INTEST_PROFILE`. The split-cap form disambiguates it from the
+> unrelated English stem it otherwise shares.
+
+---
+
+## 1. Purpose
+
+InTest generates a complete, owned .NET test project that exercises deployed APIs over real
+HTTP, suitable for running as a post-deployment gate in Azure DevOps.
+
+The output is a normal MSTest project. It is committed to the repo, edited by the team, and
+run with `dotnet test` like any other test project. InTest is a development-time tool.
+
+### Design principles
+
+1. **The team owns the output.** Full test project, committed, readable, editable.
+2. **Generation is a PR-time activity.** Bad output fails on the PR, not in the gate.
+3. **Generation never *writes* in the pipeline.** `intest generate --check` reads and compares;
+   it is the only InTest invocation CI makes. (Rev 2 said "does not run in the pipeline" while
+   also specifying `--check` in CI. This is the resolved form.)
+4. **No changes to the gate stage.** The generated project runs there like any other test
+   project — `dotnet test`, nothing else. This principle is scoped to the gate deliberately:
+   the **PR pipeline does change**, gaining a tool restore, an API build, and a `--check` step
+   (§8). Rev 2 stated "no pipeline changes" unqualified, which was not true of the PR pipeline
+   and is not true cross-repo.
+5. **Fail loudly.** Placeholder or invalid data causes a clear failure a developer must fix.
+   No skip-flags, no silent green.
+6. **Generated code is idiomatic and direct.** No facades that obscure failure messages.
+7. **Prefer the framework's own mechanism.** Parallelization, timeouts, retries, conditional
+   execution and filtering all have first-class MSTest mechanisms. InTest uses them rather than
+   inventing a parallel control surface.
+8. **Stable, non-preview dependencies only.**
+
+### Project status
+
+InTest is open source and will be published publicly. Three consequences are load-bearing and
+are addressed where they arise: the NuGet ID must be available (§20), CI cannot depend on
+the organisation's private specs (§16), and CI-environment detection must not assume Azure
+DevOps (§14).
+
+---
+
+## 2. Scope
+
+### In scope for v1
+
+| Area | v1 |
+|---|---|
+| Input | OpenAPI 3.x, JSON or YAML, file or URL |
+| Producers | Swashbuckle, built-in `Microsoft.AspNetCore.OpenApi`, NSwag |
+| Test framework | MSTest |
+| HTTP pack | **HttpClient via `IHttpClientFactory` — one pack only** |
+| Assertions | **Shouldly (primary) and MSTest `Assert` — both ship in v1** |
+| Schema validation | NJsonSchema |
+| Content types | `application/json` |
+| API versions | Every operation in the document; no version selection |
+| Test kinds | Contract, declared-error, auth, variation |
+| Scoping | Whole spec, by tag/controller, by operation |
+
+Scope was reviewed for decomposition and deliberately kept whole.
+
+### Deferred to v2
+
+- **A second HTTP pack (Flurl).** See §3 — `ApiTestBase.Client` cannot be typed for two packs
+  from one package, and v2 must pick a resolution before adding one.
+- **Version selection.** v1 generates every operation in the document (§12).
+- **WCF/SOAP.** Teams provide the `svcutil` proxy; InTest will not generate the client.
+- **Non-JSON content types** — `multipart/form-data`, `x-www-form-urlencoded`, XML, binary.
+- **Scenario-per-class layout** (BDD *grouping*; BDD *naming* is in v1).
+- **`[ResourceLock]` and `[DependsOn]`**, both of which ship in MSTest 4.4 (§4).
+
+Every deferral that can cause an operation to go untested or under-tested appears in the
+coverage report on every run (§12). The two that cannot — the second HTTP pack and version
+selection — change how tests are written, not which operations are covered.
+
+### Explicit non-goals
+
+- **Stateful flow tests.** Per-operation generation has no ordering model. Revisit when
+  MSTest 4.4 ships `[DependsOn]`, which is exactly such a model.
+- **Load or performance testing.**
+- **Full combinatorial input coverage.** That belongs in unit tests.
+- **Owning parallelization.** See §11.
+
+---
+
+## 3. Architecture
+
+### Two-stage pipeline
+
+```
+spec → [front-end] → TestPlan (JSON) → [template set] → .cs files + fixtures
+```
+
+**TestPlan** is the stable internal contract. Front-ends target it; template sets consume it.
+Dumpable via `--emit-plan` for debugging.
+
+**Design constraint for v2:** `expectedOutcome` in TestPlan must be abstract, not literally an
+HTTP status int, or SOAP faults won't fit.
+
+### Template sets — internal, not a public extension point
+
+v1 ships template sets InTest owns. There is no manifest format and no `templates extract`
+command; `--emit-plan` covers the debugging need.
+
+**Assertion emission is a separate include** (`{{ include "assertions/status" }}`). Rev 2
+carried this seam speculatively for a v2 second assertion library. In rev 3 the seam is
+**exercised at v1**, because Shouldly and MSTest `Assert` both ship. Unproven abstraction
+becomes proven structure.
+
+**One HTTP pack in v1.** Rev 2 shipped two (Flurl primary, HttpClient secondary) with a parity
+policy. Rev 3 ships HttpClient only, and there is no parity policy because there is nothing to
+keep in parity.
+
+The forcing argument is structural, not preference. `ApiTestBase` exposes `Client`, which is
+`HttpClient` under one pack and `IFlurlClient` under the other — a single concrete base class
+in a single package cannot serve both. The alternatives were a generic `ApiTestBase<TClient>`
+(leaks a generator concern into every hand-written partial), a third `InTest.Runtime.Flurl`
+package (contradicts §3's two-package rule), or a base class exposing no client at all
+(pushes a resolve line into every test). Shipping one pack removes the constraint instead of
+working around it, and removes a template set, a golden-file dimension, and a
+compile-verification dimension with it.
+
+Flurl moves to the v2 backlog. Independently: its last commit is 2025-01-01 and its last
+release 2024-01-17, so it was the wrong candidate for first-class support regardless.
+
+### Deliverables — two packages
+
+| Artifact | Contents |
+|---|---|
+| `InTest.Cli` | `dotnet tool`. Front-ends, TestPlan, rendering, CLI. Internal namespaces. |
+| `InTest.Runtime` | **NuGet package referenced by the generated project.** Base class, interfaces, readiness, run ID, fixture loading, schema bundle, assertion helpers, HTTP handlers. |
+
+`InTest.Runtime` earns the separation: shared behaviour ships as a versioned dependency, so a
+bug fix does not require every team to regenerate.
+
+---
+
+## 4. Stack and version policy
+
+**Target `net10.0`.** .NET 8 and .NET 9 both reach end of support on **10 November 2026**.
+.NET 10 is LTS through **14 November 2028** (rev 2 said 10 November; corrected).
+
+The test project's TFM is independent of the API's. Even where the API targets `net8.0`, the
+test project targets `net10.0`.
+
+### Pinned dependencies
+
+All stable. *Measured:* the full set restores and builds clean together on SDK 10.0.303 with
+zero warnings and zero NuGet-audit findings.
+
+| Package | Version | Notes |
+|---|---|---|
+| `MSTest.TestFramework` / `.TestAdapter` / `.Analyzers` | 4.3.3 | Latest stable |
+| `Microsoft.NET.Test.Sdk` | 18.9.0 | **Added in rev 3.** The classic package triple needs it for `dotnet test` under VSTest |
+| `Shouldly` | 4.3.0 | Primary assertion set |
+| `NJsonSchema` | 11.6.1 | **Added in rev 3.** Response schema validation. MIT |
+| `Microsoft.OpenApi` | 3.10.0 | **Was 2.3.x.** See below |
+| `Microsoft.OpenApi.YamlReader` | 3.10.0 | Separate package — required for YAML |
+| `Microsoft.Extensions.Http` | 10.0.11 | `IHttpClientFactory` |
+| `Scriban` | 7.2.6 | Templating |
+| `System.CommandLine` | 2.0.11 | GA; 3.0 is preview |
+
+**The `Microsoft.OpenApi` bump is not optional.** Every stable 2.x version is deprecated on
+nuget.org carrying a vulnerability advisory ("vulnerability through circular references
+resolution"), as are 3.0.0–3.5.3. The floor for a clean version is **3.5.4**. Rev 2's
+instruction to pin 2.3.x would have shipped a flagged dependency into every consumer repo,
+which central package management and a lock file would then have held in place.
+
+Microsoft.OpenApi 3.x also supports OpenAPI 3.2 while remaining backward compatible with 2.0,
+3.0 and 3.1, and ASP.NET Core 11 moves to it — so 3.x is where the ecosystem is heading.
+
+**Do not use `MSTest.Sdk`.** NuGet-provided MSBuild SDKs have limited tooling support for
+version updates, and `MSTest.Sdk` defaults to Microsoft.Testing.Platform, which changes the
+runsettings surface that §7 and §9 depend on. Use the classic package triple plus
+`Microsoft.NET.Test.Sdk`.
+
+**Enforcement, not policy:** central package management in `Directory.Packages.props`, plus a
+lock file. The generated scaffold references no prerelease packages.
+
+### Deliberately excluded
+
+| Thing | Why excluded | Revisit when |
+|---|---|---|
+| Shouldly 5 | Preview (5.0.0-preview.2). Moves to `[CallerArgumentExpression]`, removing the source-reading dependency, but has breaking changes | 5.x GA |
+| MSTest `[ResourceLock]` | **Confirmed MSTest 4.4**; docs state it is preview-only until 4.4.0 releases | 4.4.0 stable |
+| MSTest `[DependsOn]` | **Also 4.4.** A real ordering model — revisit the stateful-flow non-goal then | 4.4.0 stable |
+| MSTEST0073–MSTEST0077 | **4.4.** Includes MSTEST0076, which rev 2 depended on | 4.4.0 stable |
+| `JsonSchema.Net` | Stable and technically excellent, but licensed MIT **under an Open Source Maintenance Fee agreement**: commercial users at ≥ US$10,000 annual gross revenue owe a fee. Same licence-surface test that ruled out FluentAssertions | If the fee is accepted |
+| FluentAssertions | v8 is commercial (~$130/dev/yr); 7.x is Apache-2.0 but frozen | Not planned |
+| `System.CommandLine` 3.x | Preview | GA |
+
+### MSTest 4.3.x floor — what it unlocks
+
+| Feature | Since |
+|---|---|
+| Cooperative cancellation for `[Timeout]` | 3.6 |
+| `TestContext` parameter on `[AssemblyCleanup]` | 3.8 |
+| `RetryAttribute`, `RetryBaseAttribute` | 3.8 |
+| `ConditionBaseAttribute`, `OSCondition` | 3.8 |
+| `CICondition` | 3.10 |
+| `MemberCondition`, `ArchitectureCondition`, `ExecutableCondition` | 4.3 |
+| `RetryAttribute` at class level | 4.3 |
+| `RandomizeTestOrder` / `RandomTestOrderSeed` | 4.3 |
+
+`RetryBaseAttribute.ExecuteAsync` and its `RetryContext`/`RetryResult` types are experimental
+(diagnostic `MSTESTEXP`). `MemberCondition` is not.
+
+**Two things rev 2 specified must be removed** because they require 4.4 or no longer exist:
+
+- `mstest_parallel_safety_mode = always` in the generated `.editorconfig` — MSTEST0076 does
+  not exist in 4.3.3.
+- `ClassCleanupBehavior.EndOfClass` — **the enum is removed in MSTest v4**. End-of-class is
+  now the only behaviour, so the pin does not compile.
+
+**Enable cooperative cancellation globally** via runsettings and turn on MSTEST0045. By
+default MSTest wraps each timed test in a separate task and merely stops observing it on
+timeout — the test keeps running and mutating state. Because every generated test threads
+`TestContext.CancellationToken` into `SendAsync` (§9), this setting actually cancels in-flight
+requests rather than orphaning them.
+
+---
+
+## 5. Configuration and command surface
+
+`intest.json` at the test project root, committed.
+
+```jsonc
+{
+  "schemaVersion": 1,
+  "intestVersion": "1.0.0",
+  "spec": {
+    "source": "../Orders/bin/Debug/net10.0/orders.json",
+    "producer": "auto"           // auto | swashbuckle | aspnetcore | nswag
+  },
+  "project": {
+    "name": "Orders.ApiTests",
+    "rootNamespace": "Orders.ApiTests",
+    "framework": "mstest",       // FROZEN
+    "assertions": ["shouldly"],  // shouldly | mstest — additive, never a swap
+    "testBaseClass": "Orders.ApiTests.OrdersTestBase"
+  },
+  "naming": {
+    "identifiers": {             // FROZEN
+      "style": "pascal",
+      "class":     "{Tag}Tests",
+      "method":    "{OperationId}_Contract",
+      "variation": "{OperationId}_{Property}_{Case}"
+    },
+    "display": {                 // changeable any time
+      "method":    "Given {Tag}, when {OperationId}, then {Status}",
+      "variation": "{Property} = {Value} → {Status}"
+    }
+  },
+  "tags": {
+    "strategy": "first",
+    "map": { "orders-v2": "Orders" },
+    "untaggedClass": "DefaultTests"
+  },
+  "generation": {
+    "categories": { "contract": "Contract", "variation": "Variation" },
+    "variations": { "strings": true, "numbers": true, "security": false }
+  },
+  "readiness": {
+    "enabled": true,
+    "path": "/health/ready",
+    "expectStatus": 200,
+    "expectVersion": null,
+    "consecutiveSuccesses": 2,
+    "timeoutSeconds": 120,
+    "intervalSeconds": 3
+  },
+  "runId": { "prefix": null, "maxLength": 40 },
+  "operations": {
+    "createOrder": { "expect": 201, "mutates": true },
+    "deleteTenant": { "skip": "destructive" }
+  }
+}
+```
+
+`generation.parallel` does not exist — see §11.
+
+### Frozen vs. additive axes
+
+The rule: **an axis is frozen if changing it invalidates hand-written code.**
+
+| Axis | Status | Why |
+|---|---|---|
+| Test framework | **Frozen** | Lifecycle, parameterization and parallelism models differ. Every hand-written partial targets them |
+| Identifier naming | **Frozen** | Renaming generated classes orphans every hand-written partial |
+| HTTP pack | n/a in v1 | One pack ships, so there is no axis. When v2 adds a second, it is **frozen** — `ApiTestBase.Client` is typed per pack, so any hand-written test touching `Client` stops compiling on a swap |
+| Assertion set | **Additive** | Hand-written assertions are never migrated — adding a set adds a library, so `assertions` is an array. Command is `intest assertions add`, never "switch" |
+| Display naming | Free | Cosmetic; no compile impact |
+
+Attempting to change a frozen axis **fails with a real error**:
+
+```
+Cannot change naming.identifiers.class ("{Tag}Tests" → "{Tag}ApiTests") after initialization.
+Frozen at init on 2026-03-14 by intest v1.0.0.
+7 files contain hand-written partials targeting the current class names.
+```
+
+The example uses identifier naming deliberately, because it is the only frozen axis a v1 user
+can actually attempt to change — v1 ships one test framework and one HTTP pack, so those
+messages are unreachable. The framework message exists for completeness and needs no
+migration document until a second framework ships.
+
+The honest migration for any frozen axis is: generate fresh alongside, port hand-written tests
+manually, delete the old project. Ship it as a procedure, not a `--force` flag that produces
+something uncompilable.
+
+### Naming constraints
+
+- **Sanitize** to valid C# identifiers — no leading digits, no reserved words.
+- **Dedupe deterministically** — collisions suffixed by a stable key, never by ordinal.
+- **Emit a matching `.editorconfig`** so StyleCop and .NET naming analyzers do not flood a
+  snake_case project.
+- **Status stays out of identifiers.** Contract methods are `{OperationId}_Contract`; status
+  appears in the display name only. Anything volatile goes in display, never identity.
+
+One qualification rev 2 lacked: the stated reason for freezing identifiers is preserving
+Azure DevOps test history. **MSTest v4 changed `TestCase.Id` generation**, and Microsoft
+notes this "affects Azure DevOps features, for example, tracking test failures over time." So
+that history resets on the v3→v4 move regardless of naming. Freezing identifiers is still
+right — it protects hand-written partials — but the AzDO-history argument is weaker than rev
+2 presented it.
+
+### Command surface
+
+Rev 2 and earlier drafts of rev 3 scattered commands across seven sections, and introduced
+`intest upgrade` (§8) without ever defining it. The full v1 surface:
+
+| Command | Writes | Never writes | Exit |
+|---|---|---|---|
+| `intest init` | `intest.json`, `.csproj`, `.editorconfig`, `AssemblyInfo.cs`, `TestStartup.cs`, `<Name>TestBase.cs`, `appsettings*.json`, `*.runsettings`, `.config/dotnet-tools.json` | Anything already present — refuses rather than overwrites | 0 ok · 3 already initialised |
+| `intest generate` | `Generated/`, `coverage-report.json` | `fixtures/`, team-owned files | 0 ok · 1 fixture drift or validation failure |
+| `intest generate --check` | Nothing | Everything | 0 identical · 1 `Generated/` or `coverage-report.json` differs · 2 tool error · 4 tool-version mismatch |
+| `intest generate --emit-plan` | `TestPlan` JSON to stdout | Everything | 0 ok |
+| `intest fixtures repair` | `fixtures/` — adds `TODO:` sentinels for newly-required properties, flags removed ones | `Generated/`, team-owned files | 0 ok, including nothing to repair |
+| `intest fixtures promote` | Nothing — prints a paste-ready snippet and names the target file | Everything, `spec.source` especially (§10) | 0 ok |
+| `intest upgrade` | `intestVersion` in `intest.json`, the version in `.config/dotnet-tools.json`, then re-runs `generate` | `fixtures/`, team-owned files | 0 ok · 1 regeneration failed |
+| `intest assertions add <name>` | Appends to `project.assertions`, then re-runs `generate` | Existing assertions in hand-written or generated code | 0 ok · 3 already present |
+
+**Exit-code convention.**
+
+| Code | Meaning |
+|---|---|
+| `0` | The requested state was reached, **including when no work was needed** — a PR script running `fixtures repair` unconditionally must not fail on a clean tree |
+| `1` | Real work is outstanding that a human must do: fixture drift, validation failures, `--check` differences |
+| `2` | **Tool error** — unparseable spec, `spec.source` missing, malformed `intest.json`, unhandled exception. Nothing was written |
+| `3` | The command declined because proceeding would destroy or duplicate existing state |
+| `4` | Tool/config version mismatch, so CI can distinguish it from a genuine diff |
+
+`2` is returned by **any** command and is listed per-command only where it is likely. It is
+separate from `1` deliberately: folding a crash or an unreadable spec into `1` would make CI
+unable to tell "the fixtures drifted, fix them" from "the tool blew up" — two failures with
+entirely different responses, and only one of them is the developer's to act on.
+
+### Invariants
+
+Three properties hold across the whole surface, and they are what make `--check` coherent.
+Note that the invariant is **ownership, not location** — an earlier draft claimed only three
+commands write outside `Generated/`, which was simply false: `generate` also writes
+`coverage-report.json` at the project root, and `assertions add` edits `intest.json`.
+
+- **`generate` never writes `fixtures/` and never writes a team-owned file.** That is the real
+  guarantee. It writes `Generated/` and `coverage-report.json`, both of which it owns
+  outright and regenerates wholesale.
+- **Nothing writes to `spec.source`.** It is a build artifact (§10).
+- **`upgrade` is the one deliberate way to adopt a new tool version**, because `--check` fails
+  on a version mismatch by design (§8). It bumps the manifest and the config together and
+  regenerates, so the version change and its output change land in one reviewable commit
+  rather than arriving disguised as spec drift.
+
+Because `coverage-report.json` is generator-owned, committed and regenerated wholesale,
+**`--check` compares it alongside `Generated/`.** It is the one generated artefact whose
+content tracks the *shape* of the spec rather than the templates, so a spec change that adds
+an untagged operation, a new synthesized operationId, or a newly unevaluatable keyword shows
+up there and nowhere else. Excluding it would let exactly the drift the report exists to
+surface pass `--check` silently.
+
+---
+
+## 6. Spec producers and operationId
+
+The producer is **irrelevant to parsing** — all three emit standard OpenAPI. `spec.producer`
+is used only for promotion snippets (§10) and scaffold instructions. It never enters the parse
+path. Default `auto`, sniffed from operationId shape and document metadata.
+
+### operationId behaviour differs materially
+
+operationId is the keystone: naming, the `operations` config map, fixture filenames, dedupe
+and identity all key on it.
+
+| Producer | Default | Opt-in mechanism |
+|---|---|---|
+| **Swashbuckle** | **Absent** | `[HttpGet("{id}", Name = "...")]` per route, or a `CustomOperationIds` strategy |
+| **Built-in** | **Absent** | `[EndpointName]` attribute, or `WithName` (minimal APIs) |
+| **NSwag** | **Always present**, auto-derived `{Controller}_{Action}` | `SwaggerOperationAttribute(operationId)` |
+
+Swashbuckle omits it deliberately — it was dropped in 4.0 because auto-generating an ID that
+satisfies OpenAPI's uniqueness requirement while remaining meaningful in client libraries is
+non-trivial. **operationId is commonly null in a default controller API.**
+
+NSwag is the more dangerous case: it emits `Beer_GetById`, `Users_Post`, and **ignores the
+`Name` property on the HTTP verb attribute**, so `[HttpPost(Name = "CreateUser")]` still
+yields `Users_Post`. The ID looks stable but churns silently when someone renames the action.
+
+*Measured:* a Swashbuckle-shaped OpenAPI 3.0 document parsed with Microsoft.OpenApi 3.10.0
+returned `operationId = <null>` with tags intact, confirming the null case is what the parser
+actually sees.
+
+### InTest's handling — producer-agnostic
+
+1. **Present** → use it.
+2. **Absent** → synthesize a stable key from method + normalized path (`post_orders`,
+   `get_orders_id`). Never from ordinal or declaration order.
+3. **Orphan detection on every generate**, regardless of source. An `intest.json` `operations`
+   entry or a `fixtures/` file whose operation no longer exists gets a loud warning. This is
+   what catches both rename-churn and route changes.
+
+**v0 must measure operationId coverage across real org specs before the naming scheme is
+committed.** If coverage is near zero — likely with Swashbuckle or the built-in package —
+then rolling out a `CustomOperationIds` convention to the API teams is a prerequisite, not a
+config detail. It also improves their Swagger UI and any generated clients.
+
+### Build-time spec generation
+
+| Producer | Mechanism | Caveat |
+|---|---|---|
+| Swashbuckle | `Microsoft.Extensions.ApiDescription.Server` (10.0.11 for .NET 10) | — |
+| Built-in | Native build-time generation | **YAML at build time isn't supported yet** |
+| NSwag | `NSwag.MSBuild` (14.7.1) | Set `NoBuild=true` to avoid build recursion |
+
+`spec.source` pointing at a build artifact is **correct** — the artifact is always current.
+Only `promote` must never write there (§10).
+
+---
+
+## 7. Runtime configuration and secrets
+
+The generated project runs with **no changes to the gate stage** — `dotnet test` and nothing
+else. (The PR pipeline does change; see principle 4 and §8.)
+
+```
+appsettings.json           # committed — defaults, readiness, profile list
+appsettings.dqv.json       # committed — DQV base URL, non-secret settings
+appsettings.qa.json
+appsettings.local.json     # gitignored
++ user-secrets (local)
++ team-registered providers (Key Vault, encrypted file, …)
+```
+
+`TestHost` builds an `IConfiguration` in `AssemblyInitialize`. `TestStartup.cs` (team-owned,
+scaffolded at init) is where additional providers and the named HTTP client are registered.
+**Secrets never live in the test project or in fixtures.**
+
+### Profile selection
+
+Exactly one value identifies the target environment. Precedence, first hit wins:
+
+1. `.runsettings` `TestRunParameters` → `profile` (read via `TestContext.Properties`)
+2. Environment variable `INTEST_PROFILE`
+3. Default in `appsettings.json`
+
+Set `<RunSettingsFilePath>` in the generated `.csproj` so a `.runsettings` is picked up with
+**zero command-line arguments**. Multi-stage pipelines pass `--settings qa.runsettings` or
+`dotnet test -- TestRunParameters.Parameter(name="profile", value="qa")`.
+
+**The scaffolded `orders.runsettings` must ship with `profile` commented out.** Because
+`<RunSettingsFilePath>` loads it unconditionally, a scaffold that declares `profile` makes
+tier 1 always match, `INTEST_PROFILE` becomes unreachable dead code, and a developer exporting
+the variable silently runs against the wrong environment. The scaffold therefore contains:
+
+```xml
+<TestRunParameters>
+  <!-- Uncommenting this PINS the profile and makes INTEST_PROFILE unreachable.
+       Leave commented unless this runsettings file is environment-specific. -->
+  <!-- <Parameter name="profile" value="dqv" /> -->
+</TestRunParameters>
+```
+
+Environment-specific files (`qa.runsettings`) *do* declare it — that is their purpose. The
+default one does not.
+
+### `servers[]` is ignored
+
+The base URL comes from configuration only. InTest never reads the spec's `servers[]` block —
+it typically points at localhost or a template the deployed environment does not match, and
+silently preferring it over `appsettings.{profile}.json` would be the same class of bug as the
+trailing-slash problem below. Stated explicitly because teams otherwise assume the spec
+supplies it.
+
+Two notes rev 2 lacked. **`TestContext.Properties` is `IDictionary<string, object>` in MSTest
+v4** — any `.Contains` call becomes `.ContainsKey`. And `dotnet test` on the .NET 10 SDK still
+defaults to **VSTest mode**, so `--filter`, `--settings`, `RunSettingsFilePath` and
+`TestRunParameters` all behave as assumed here. *Measured.*
+
+### Base URL normalization — a correctness rule, not a convention
+
+*Measured:* `new Uri(base, relative)` silently drops the last base path segment in three of
+four combinations.
+
+```
+base=https://h/api    rel=orders/1   -> https://h/orders/1       ← "api" gone
+base=https://h/api    rel=/orders/1  -> https://h/orders/1       ← "api" gone
+base=https://h/api/   rel=orders/1   -> https://h/api/orders/1   ← only correct form
+base=https://h/api/   rel=/orders/1  -> https://h/orders/1       ← "api" gone
+```
+
+OpenAPI paths always begin with `/`. Therefore:
+
+- Generated request paths **strip** the leading slash.
+- `InTestUrl.NormalizeBase` **appends** a trailing slash to the configured base URL if absent.
+
+Without both, a hand-typed base URL missing its slash produces a green suite hitting the wrong
+routes — precisely the false-green failure mode §10 exists to prevent.
+
+---
+
+## 8. Generated project
+
+### Layout
+
+```
+Orders.ApiTests/
+├── .config/dotnet-tools.json     # pins the InTest CLI version — committed
+├── intest.json                      # config — committed
+├── coverage-report.json          # generator-owned — committed, regenerated, --check'd
+├── appsettings*.json
+├── orders.runsettings
+├── .editorconfig                 # naming style
+├── Generated/                    # regenerated wholesale — NEVER hand-edited
+│   ├── TestHost.g.cs             # AssemblyInitialize, DI, readiness, run ID, schema bundle
+│   ├── OrdersTests.g.cs
+│   └── Schemas.g.cs              # schema KEYS, not schema bodies
+├── fixtures/
+│   ├── create-order.json
+│   └── qa/create-order.json      # environment overlay
+├── AssemblyInfo.cs               # team-owned — parallelization intent, authoritative
+├── TestStartup.cs                # team-owned — DI + named HttpClient registration
+├── OrdersTestBase.cs             # team-owned — shared helpers
+├── Fixtures/DatabaseSeed.cs      # team-owned — IAssemblyFixture
+└── OrdersTests.cs                # team-owned — same partial class
+```
+
+`spec.json` is **not** in this tree. It is copied to the output directory at build time (§9).
+
+### Regeneration model
+
+- Generated classes are `partial`. Hand-written code lives in a same-named partial in a
+  non-`.g.cs` file.
+- Regeneration touches **only `Generated/`**. Never fixtures, never team-owned files.
+- Generated output is **committed**, so spec changes show as a reviewable diff on the PR.
+- CI runs `intest generate --check` and fails if committed output differs from a fresh run.
+  That comparison covers **`Generated/` and `coverage-report.json`** — see §5. The report is
+  where a spec-shape change surfaces (a newly untagged operation, a new synthesized
+  operationId, a newly unevaluatable keyword), so omitting it from the comparison would let
+  precisely the drift it exists to surface slip through.
+
+`--check` is only coherent because `generate` never writes fixtures (§10).
+
+### What `--check` costs the PR pipeline
+
+Rev 2 waved this away as "one prerequisite, not two." That holds only when the API and the
+tests are in the same solution. Stated properly, `--check` requires three things:
+
+1. **The API built.** `spec.source` is a build artifact. Same-repo, the test project's own
+   build already needs it (§9), so it is free. **Cross-repo, the PR pipeline must clone and
+   build the API** — a real added step, and the reason principle 4 is scoped to the gate stage
+   rather than claimed for all pipelines.
+2. **A pinned tool version.** The generated scaffold includes `.config/dotnet-tools.json`
+   pinning the InTest CLI, and CI runs `dotnet tool restore`. Without it, any version drift
+   between a developer's machine and the agent produces a diff that reads as "the spec
+   changed" when the generator changed.
+3. **A version match.** `--check` compares `intestVersion` in `intest.json` against the running
+   tool and fails with a distinct message before comparing any output:
+
+   ```
+   intest.json was generated by intest 1.0.0; running tool is 1.1.0.
+   Regenerate with the pinned version, or run `intest upgrade` to adopt 1.1.0 deliberately.
+   ```
+
+   Otherwise a legitimate tool upgrade is indistinguishable from spec drift, and the natural
+   reaction to a confusing `--check` failure is to regenerate — which silently adopts the new
+   version across the repo.
+
+### Tag → class mapping
+
+- **Multiple tags** → first tag wins by default (`tags.strategy: "first"`), overridable via
+  `tags.map`.
+- **No tags** → `tags.untaggedClass` (default `DefaultTests`), **and a line in the coverage
+  report.** Silently bucketing untagged operations is how they get forgotten.
+
+---
+
+## 9. HTTP invocation, schema validation, and test kinds
+
+### HTTP client construction
+
+HttpClient via `IHttpClientFactory`. Registration happens once, in scaffolded
+`TestStartup.cs`:
+
+```csharp
+services.AddHttpClient(InTestClients.Api, c => c.BaseAddress = InTestUrl.NormalizeBase(baseUrl))
+        .AddHttpMessageHandler<RunIdHandler>()     // X-Test-Run-Id
+        .AddHttpMessageHandler<AuthHandler>();     // wraps ITestTokenProvider
+```
+
+`RunIdHandler` stamps `X-Test-Run-Id` by reading an `AsyncLocal<string?>` accessor set in
+`[TestInitialize]`. It **must** be `AsyncLocal` rather than an injected scoped service:
+factory-created handlers are not scoped to the DI scope. *Measured:* the ambient value flows
+correctly into the handler across successive scopes.
+
+**The ambient is null before any test runs.** Readiness probing and `IAssemblyFixture` seeding
+both issue HTTP through the same named client during `AssemblyInitialize`, when no test is in
+scope. The handler therefore falls back:
+
+```csharp
+request.Headers.TryAddWithoutValidation("X-Test-Run-Id",
+    InTestAmbient.TestId.Value ?? TestHost.RunId);
+```
+
+This matters most for fixtures: entities they seed carry the run ID, and the sweeper (§14) is
+what eventually deletes them. A null header on fixture traffic would leave exactly the
+orphaned data §14 plans against.
+
+Consequence for rev 2: `TestHost.CreateClient(TestId)` — constructing a client per test — is
+removed. It is the anti-pattern under `IHttpClientFactory`. Tests resolve the named client;
+per-test data travels via the ambient accessor.
+
+`AllowAnyHttpStatus()` also disappears. `HttpClient` never throws on a non-2xx status unless
+`EnsureSuccessStatusCode()` is called. That is one fewer concept in every generated method,
+and it existed in rev 2's generated code only because Flurl throws by default.
+
+### Schema validation
+
+`NJsonSchema` 11.6.1, chosen for three reasons: it is plain MIT with no licence surface, it
+handles both OpenAPI dialects from one code path, and it validates through instances rather
+than a process-global registry — which matters because a global registry would introduce
+shared mutable state into exactly the area §11 disclaims owning.
+
+*Measured*, against the same schema expressed as OpenAPI 3.0 (`nullable: true`) and 3.1
+(`"type": ["null","string"]`):
+
+```
+{"id":"a","quantity":2,"notes":null}   valid=True
+{"id":"a","quantity":2,"notes":"hi"}   valid=True
+{"id":"a","quantity":0}                valid=False  NumberTooSmall@#/quantity
+{"id":"a"}                             valid=False  PropertyRequired@#/quantity
+{"id":"a","quantity":2,"notes":5}      valid=False  StringExpected@#/notes
+```
+
+`Kind` + `Path` are the raw material for the custom failure messages §15 justifies
+`ApiResponseAssertions` on.
+
+#### Where the schemas come from
+
+The generated `.csproj` copies the spec to the output directory at build time:
+
+```xml
+<PropertyGroup>
+  <InTestSpecSource>../Orders/bin/Debug/net10.0/orders.json</InTestSpecSource>
+</PropertyGroup>
+<ItemGroup>
+  <Content Include="$(InTestSpecSource)" Link="spec.json" CopyToOutputDirectory="PreserveNewest" />
+</ItemGroup>
+```
+
+*Measured:* `spec.json` lands beside the test DLL, **`dotnet publish` carries it into the
+artifact** — the property that makes a separate gate stage work — and a missing spec is a
+build error (`MSB3030`), not a silent skip. InTest wraps that with a clearer message via a guard
+target, but the fail-loud behaviour is already correct.
+
+The spec is neither committed nor embedded. Diffs stay small and there is no second copy to
+drift.
+
+#### Bundling
+
+At `AssemblyInitialize`, each `components.schemas` entry is serialized and assembled into a
+single `{"definitions": { … }}` document with `#/components/schemas/` rewritten to
+`#/definitions/`. `Generated/Schemas.g.cs` therefore holds **keys**, not schema bodies —
+`Schemas.Order` resolves out of the runtime bundle.
+
+**Bundle with `definitions`; never inline the `$ref`s.** Self-referential schemas are common,
+and circular-reference resolution is the exact defect that deprecated the entire
+Microsoft.OpenApi 2.x line.
+
+##### Inline response schemas
+
+Not every response schema lives in `components.schemas`. Anonymous ones are common —
+`type: array` with inline `items`, inline error envelopes — and Swashbuckle produces them
+routinely. A bundle built only from `components.schemas` would leave those operations with no
+key, and a contract test with no schema to assert silently degrades to a status-code check.
+
+**Every response schema gets a bundle entry.** Schemas absent from `components.schemas` are
+bundled under a synthesized, deterministic key:
+
+```
+op:{operationId}:{statusCode}:{mediaType}      → op:listOrders:200:application/json
+```
+
+The key derives from operation identity, never from ordinal, so it is stable across
+regenerations for the same reason operationId synthesis is (§6). `Schemas.g.cs` exposes it
+under the same generated-identifier rules as any other schema. Inline schemas are reported as
+a coverage **note**, not a skip — those operations are tested.
+
+##### Unevaluatable keywords
+
+*Measured:* NJsonSchema evaluates **27 of 27** OpenAPI 3.0 Schema Object keywords correctly
+(§18). It **silently ignores** seven JSON Schema 2019-09/2020-12 keywords — `const`,
+`if`/`then`/`else`, `prefixItems`, `unevaluatedProperties`, `dependentSchemas`,
+`dependentRequired`, `contains`/`minContains`. None of those are legal in an OpenAPI 3.0
+Schema Object; all can appear in OpenAPI 3.1, which is JSON Schema 2020-12.
+
+Silent ignoring means an invalid response passes. That is the false-green failure mode this
+design exists to prevent, so it is not left silent: **bundling scans every schema for keywords
+the validator cannot evaluate and reports them per operation in the coverage report.** Under-
+validation becomes visible under-validation.
+
+This is the whole mitigation. A second validator is not shipped — the only .NET library that
+handles all seven correctly is `JsonSchema.Net`, which carries a maintenance fee for commercial
+users, and InTest being open source does not exempt the commercial teams consuming it. If the
+v0 survey shows meaningful OpenAPI 3.1 usage, the decision reopens with data (§17).
+
+*Measured:* response schemas arrive from the parser as `OpenApiSchemaReference` and serialize
+to `{"$ref":"#/components/schemas/Order"}`, so the bundle-and-rewrite step is unavoidable
+regardless of validator choice.
+
+One useful property of Microsoft.OpenApi 3.x, discovered by measurement: serializing a 3.0
+schema through `SerializeAsV31` normalizes `nullable: true` into `"type": ["null","string"]`,
+valid JSON Schema 2020-12. NJsonSchema handles both forms directly so this is not required —
+but it is available if a future validator needs strict 2020-12 input, and it only works
+through the object model, never the raw document text.
+
+### Contract tests
+
+One `[TestMethod]` per operation. Valid input, no variation. `TestCategory("Contract")`.
+Asserts expected status code, schema conformance, and well-formedness.
+
+#### Operations with no response schema are still tested
+
+Rev 3 originally skipped these. That was wrong, and inconsistent with the paragraph above about
+inline schemas: if a contract test silently degrading to a status-code check is bad enough to
+justify synthesized bundle keys, then a status-code check plainly has value — so throwing it
+away by skipping the operation destroys value rather than protecting it.
+
+Worse, it deleted correct tests. **204, 205 and 304 carry no body by definition**, so a
+schema-less response is not a spec defect there; it is the specification. Skipping meant
+every `DELETE` returning 204 vanished from the suite.
+
+The rule:
+
+| Case | Behaviour |
+|---|---|
+| Response schema declared (named or inline) | Full contract test — status + schema + well-formedness |
+| No schema, status is 204/205/304 | **Status-only contract test.** Additionally asserts the body is empty. Not reported as a gap — this is correct |
+| No schema, any other status | **Status-only contract test**, plus a coverage **note** so the missing schema is visible and fixable in the spec |
+
+Nothing is skipped for lack of a schema.
+
+```csharp
+public partial class OrdersTests : OrdersTestBase
+{
+    [TestMethod, TestCategory("Contract")]
+    public async Task GetOrderById_Contract()
+    {
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            InTestUrl.Build("orders/{id}", TestData.Get("getOrderById", "id")));
+
+        using var response = await Client.SendAsync(request, TestContext.CancellationToken);
+
+        await ApiResponseAssertions.ShouldMatchContractAsync(
+            response, expectedStatus: 200, schema: Schemas.Order, TestId);
+    }
+}
+```
+
+**Latency is recorded, not asserted.** Cold start, JIT, shared agent and noisy neighbour are
+exactly the flake class readiness gating removes; asserting a latency budget in the gate
+contradicts §13's reason for existing. Elapsed time appears in the failure message and the
+`.trx`. If a bound is genuinely wanted, MSTest's global `TestTimeout` covers it.
+
+**This is the post-deployment gate.**
+
+### Declared-error contract tests
+
+Where the spec declares a 404 or 400 response, generate a test for it. Deterministic, needs no
+fixture, safe in a gate, and catches routing and middleware breakage.
+
+### Auth contract tests
+
+Where the spec declares `security` on an operation. Deterministic, fixture-free, gate-safe, and
+it catches the accidental-`[AllowAnonymous]` class of bug that reaches production.
+
+**These split by what the shipped token provider can actually do**, because §13 ships a
+static-token provider only — one token, one identity:
+
+| Test | Needs | Shipped behaviour |
+|---|---|---|
+| no token → 401 | Nothing. Send no `Authorization` header | **Always generated, always runs** |
+| wrong scope → 403 | A second identity | Generated, but **gated** |
+| wrong tenant → 403 | A second identity | Generated, but **gated** |
+
+The gate is framework-native, the same mechanism §9 already uses for variations:
+
+```csharp
+[TestMethod, TestCategory("Contract")]
+[MemberCondition(typeof(InTestConditions), nameof(InTestConditions.MultiIdentityAvailable))]
+public async Task GetOrderById_WrongScope_Returns403() { … }
+```
+
+`InTestConditions.MultiIdentityAvailable` is `ITestTokenProvider.Identities.Count > 1` — a
+declared capability, not a probe (§13). The shipped static provider returns one identity, so
+these tests gate off by construction. When they are gated they **skip with a stated reason**
+rather than failing for a reason unrelated to the API: a generated suite must not be red on
+day one because of a capability InTest chose not to ship. The count also appears in the
+coverage report, so gated-off auth tests are visible rather than quietly absent:
+
+```
+Notes:
+  auth tests gated             12   (no multi-identity ITestTokenProvider registered)
+```
+
+**The cost is now entirely the team's** — rev 2 costed this as "a multi-identity token
+provider" that InTest would ship; rev 3 ships none, so the 401 half is free and the 403 half
+costs the team an `ITestTokenProvider` implementation. **Gate on the v0 survey** — if
+`security` is widely declared, the free half alone is worth it.
+
+### Variation tests
+
+Boundary and negative input, data-driven. `TestCategory("Variation")`.
+
+**These must not run against a post-deploy prod gate** — hundreds of malformed payloads per
+deploy is noise, can trip WAF or rate limiting, and says nothing about deployment health.
+
+```bash
+dotnet test --filter "TestCategory=Contract"                          # gate
+dotnet test --filter "TestCategory=Contract|TestCategory=Variation"   # lower envs
+```
+
+A category filter does not survive someone running bare `dotnet test`. Belt and braces via
+`MemberCondition` (stable in 4.3):
+
+```csharp
+[TestMethod, TestCategory("Variation")]
+[MemberCondition(typeof(InTestConditions), nameof(InTestConditions.VariationsEnabled))]
+public async Task CreateOrder_Quantity_Negative() { … }
+```
+
+`InTestConditions.VariationsEnabled` reads the profile flag. Framework-native, no custom skip
+logic.
+
+### DataRow vs. DynamicData
+
+| Data shape | Attribute |
+|---|---|
+| Scalar constants (`-1`, `0`, `""`, `" "`) | `[DataRow]` with generated `DisplayName` |
+| Objects, mutated bodies, fixture-loaded | `[DynamicData]` with `DynamicDataDisplayName` |
+
+**Display names are mandatory**, and in rev 3 they are load-bearing rather than cosmetic —
+`TestId` derives from `TestContext.TestDisplayName` (§14).
+
+```csharp
+[DataRow(-1, 400, DisplayName = "quantity = -1 → 400")]
+[DataRow(0,  400, DisplayName = "quantity = 0 → 400")]
+[DataRow(2,  200, DisplayName = "quantity = 2 → 200")]
+```
+
+Derive display names from **property name and literal value**, never positional index.
+
+### Variation strategy: one-at-a-time
+
+Hold a known-valid baseline payload; vary a **single property per case**. Linear in property
+count, unambiguous failures. Full combinatorial is opt-in per operation.
+
+### String variation catalog
+
+String handling at an HTTP boundary crosses layers a unit test never touches: model binding,
+JSON deserialization, URL encoding, charset, middleware/WAF, and the DB column at the far end.
+
+| Case | Catches |
+|---|---|
+| `null` vs. omitted vs. `""` | Three distinct requests a DTO-level unit test cannot distinguish. Highest yield |
+| Leading/trailing whitespace | Trimming behaviour, which differs by binding position |
+| `maxLength` + 1 | Truncation, DB overflow, 500 instead of 400 |
+| Unicode — emoji, combining chars, RTL | Encoding, `.Length` vs. grapheme count, collation |
+| Percent-encoding — `/ ? # % +`, space | Route and query handling |
+
+**Position changes meaning.** The catalog is per-position, not global:
+
+| Position | Notes |
+|---|---|
+| Route segment | Empty string doesn't route → 404 from routing, not 400 from validation. Excluded by default |
+| Query param | `?name=` vs. `?name` bind differently |
+| Body property | Only place `null` vs. omitted is expressible |
+| Header | Empty headers often dropped before reaching app code |
+
+**Security payloads** are an opt-in `security` category, **off by default.** They trip WAFs,
+can get the agent IP blocked, and generate alerts someone must triage.
+
+### Expected-outcome policy
+
+For most variations the spec does not say what should happen. A guessed `Assert 400` produces
+a wall of wrong failures that get bulk-ignored.
+
+**Default: assert what is true regardless.** No unhandled 5xx, well-formed response. Config
+**promotes** specific cases once a human decides:
+
+```jsonc
+"operations": {
+  "createOrder": {
+    "variations": {
+      "notes.emptyString": { "expect": 200 },
+      "quantity.negative": { "expect": 400 }
+    }
+  }
+}
+```
+
+The suite ratchets stricter as knowledge accumulates.
+
+---
+
+## 10. Fixtures
+
+The hardest part of the system, and where every hand-edit originates.
+
+### Source precedence
+
+| Tier | Source |
+|---|---|
+| 1 | Request body media-type `example` / `examples` — used verbatim |
+| 2 | Composed from per-property `example` values |
+| 3 | `default` values |
+| 4 | Schema-derived shape with `TODO:` sentinels |
+
+Tier recorded in each fixture's `$meta`.
+
+### Fail loudly, don't flag
+
+There is **no review flag.** A tier-4 fixture contains obvious sentinels and the test fails.
+
+**Fail on the fixture, in a pre-flight check before the request** — not on the response.
+Otherwise "bad data fails loudly" degrades into "everything returns 400 and nobody knows why."
+
+Validation is **aggregated at assembly init**, not per test:
+
+```
+Fixture validation failed (3 fixtures, 5 problems):
+  create-order.json    customerId  → "TODO:customerId"
+  create-order.json    items[0].sku → "TODO:sku"
+  update-order.json    {{fixture:seededTenant.id}} — key not published
+                       available: seededCustomer.id, seededRegion.code
+```
+
+This works because generation happens in a branch: developer regenerates, tests fail on the
+PR, fixtures get fixed, PR merges. **The gate never sees red.**
+
+Plausible-but-fake values (`"string"`, `0`) are the genuinely dangerous alternative —
+schema-valid, so a permissive endpoint returns 200 and the suite asserts nothing while looking
+healthy.
+
+### Runtime tokens
+
+**Referential integrity is the real problem** — `CreateOrder` needs a `customerId` that exists
+in *this* environment.
+
+```jsonc
+{
+  "customerId":    "{{fixture:seededCustomer.id}}",
+  "apiKey":        "{{config:Orders:ApiKey}}",
+  "correlationId": "{{runId}}",
+  "requestedAt":   "{{utcNow}}"
+}
+```
+
+**Resolution timing is part of the contract:**
+
+| Token | Resolved | Cached |
+|---|---|---|
+| `{{runId}}` | Once per assembly run | Yes |
+| `{{config:…}}` / `{{secret:…}}` | Once per assembly run, after configuration build | Yes |
+| `{{fixture:…}}` | After all `IAssemblyFixture` implementations complete | Yes |
+| `{{utcNow}}` | Per request | No |
+
+`{{config:}}` and `{{secret:}}` are **how credentials stay out of committed fixtures.**
+Generation warns on any literal value matching credential heuristics.
+
+### Environment overlays
+
+`fixtures/create-order.json` deep-merged with `fixtures/{profile}/create-order.json`;
+environment wins.
+
+### Drift detection — reports, does not mutate
+
+- **`intest generate`** validates fixtures against the current schema, **reports drift, and exits
+  non-zero.** Writes nothing under `fixtures/`.
+- **`intest fixtures repair`** mutates — adds missing required properties as `TODO:` sentinels,
+  flags removed ones.
+
+```
+Fixture drift (2):
+  create-order.json   missing required property 'shippingMethod' (added in spec)
+  update-order.json   property 'legacyRef' no longer in schema
+Run `intest fixtures repair` to add sentinels.
+```
+
+Keeping `generate` read-only under `fixtures/` is what makes `--check` coherent.
+
+### Promotion — emits, does not write
+
+`spec.source` points at a build artifact, which the next `dotnet build` overwrites. Writing
+examples there would silently discard them.
+
+**`intest fixtures promote` produces a paste-ready snippet and names the target file. It writes
+nothing.**
+
+| Producer | Snippet target |
+|---|---|
+| Swashbuckle | `ISchemaFilter` / `IOperationFilter`, XML `<example>`, annotations |
+| Built-in | `AddOpenApiOperationTransformer` / schema transformer |
+| NSwag | `SwaggerOperation` attributes, XML comments |
+
+**Do not emit `WithOpenApi`** — deprecated in .NET 10 as `ASPDEPR002`, replaced by
+`AddOpenApiOperationTransformer`.
+
+Note a moving target for the built-in template: **.NET 10's `Microsoft.AspNetCore.OpenApi`
+depends on Microsoft.OpenApi 2.x while ASP.NET Core 11 moves to 3.x**, where several formerly
+concrete types became interfaces. The transformer snippets will need a version split within
+v1's lifetime.
+
+Every run reports the number, because visibility is what turns "we should add examples" into
+practice:
+
+```
+Spec examples: 62 of 148 operations (42%)
+```
+
+**Response examples get the same treatment** — they give value assertions, not just schema
+conformance.
+
+---
+
+## 11. Parallelization — consumer-owned
+
+InTest does not own this and does not model it in `intest.json`. MSTest already exposes it properly.
+
+### What InTest emits
+
+**`AssemblyInfo.cs` is the single authoritative place**, scaffolded once at init, never
+regenerated, team-owned:
+
+```csharp
+[assembly: DoNotParallelize]
+```
+
+Sequential matches **MSTest's actual runtime default** with no attribute present, and is the
+safe start against a shared deployed environment. Teams change it by editing one line they
+own.
+
+The generated `.csproj` sets **neither** `MSTestParallelizeScope` nor
+`MSTestParallelizeWorkers`. Those MSBuild properties (MSTest 4.3+) *generate* the assembly
+attribute, so combining them with a hand-written one is a build break. *Measured:*
+
+```
+error CS0579: Duplicate 'Microsoft.VisualStudio.TestTools.UnitTesting.DoNotParallelize' attribute
+```
+
+pointing into generated `obj/…/AssemblyInfo.cs`. To convert that into something actionable,
+the generated `.csproj` carries a guard target. *Measured working:*
+
+```xml
+<Target Name="InTestGuardParallelizeProperties" BeforeTargets="BeforeBuild"
+        Condition="'$(MSTestParallelizeScope)' != '' or '$(MSTestParallelizeWorkers)' != ''">
+  <Error Code="INTEST0001"
+         Text="Parallelization intent is declared in AssemblyInfo.cs. Remove
+               MSTestParallelizeScope/MSTestParallelizeWorkers from the project file and edit
+               [assembly: Parallelize] or [assembly: DoNotParallelize] in AssemblyInfo.cs instead." />
+</Target>
+```
+
+**Per operation**, where `mutates: true` (defaulted from verb — POST/PUT/PATCH/DELETE — and
+overridable), emit `[DoNotParallelize]` on that test. Harmless while the assembly is
+sequential; protective the moment someone enables parallelism. This is the slot
+`[ResourceLock]` fills when 4.4 ships stable.
+
+### What rev 2 got wrong here
+
+Rev 2 argued that MSTEST0001 forces explicit intent, so "silence isn't an option." *Measured
+on 4.3.3:* a project with a test class, no attribute and no property builds with **0
+warnings**. MSTEST0030 fires as a warning in the same build, so analyzers are loaded —
+MSTEST0001 simply is not surfaced at its default severity, and appears only when raised via
+`.globalconfig`. It is not a forcing function and the design does not lean on it.
+
+Rev 2's `.editorconfig` line `mstest_parallel_safety_mode = always` is removed — MSTEST0076
+ships in 4.4.
+
+Rev 2's keyed `SemaphoreSlim` map in `InTest.Runtime` stays cut. Hand-building a permanent
+substitute for `[ResourceLock]` is waste.
+
+### What the README documents
+
+- Parallel tests collide on shared data unless each creates its own entities tagged with run
+  ID + test name.
+- **`Workers` is deliberately not set by InTest.** `[assembly: Parallelize(Scope =
+  ExecutionScope.MethodLevel)]` with no `Workers` defaults to the agent's **logical processor
+  count**. The day a team enables parallelism, concurrency against the shared environment is
+  whatever hardware the pool hands them, and it changes when the pool changes. `Workers` is
+  the dial if a gateway starts returning 429.
+- **Cross-process is unsolvable at this layer.** Two concurrent PR pipelines against DQV do
+  not coordinate regardless of any in-assembly setting.
+
+---
+
+## 12. Coverage report
+
+Everything InTest did not cover, or covered less thoroughly than a full contract test, in one
+report per run — human- and machine-readable.
+
+```
+Operations in spec: 148
+Generated:          113
+Skipped:             35
+  multipart/form-data          8   (not supported in v1)
+  application/xml              3   (not supported in v1)
+  operator-skipped            24   (intest.json operations.*.skip)
+Notes:
+  untagged operations          4   (→ DefaultTests)
+  synthesized operationIds    31   (spec has no operationId)
+  inline response schemas     19   (bundled under synthesized keys)
+  status-only contract tests   6   (no response schema declared — see §9)
+  bodiless statuses           11   (204/205/304 — status-only by design, not a gap)
+  auth tests gated            12   (no multi-identity ITestTokenProvider registered)
+  multiple version prefixes        /v1 (49 operations), /v2 (64 operations)
+  unevaluatable keywords       2   (const ×1, if/then ×1 — see §9)
+```
+
+**Skips remove tests. Notes do not.** The distinction matters, because rev 3 originally had
+`no response schema` under *Skipped*, which silently deleted every bodiless-204 operation from
+the suite. Only two things cause a skip in v1: an unsupported content type, and an operator
+writing `operations.*.skip`. Everything else is generated and noted.
+
+Each note closes a silent-omission path:
+
+- **`operator-skipped`** — `intest.json`'s `operations.*.skip`. Deliberately-skipped operations
+  are precisely the ones that get forgotten, so they are reported like any other gap.
+- **`inline response schemas`** — §9. Those operations *are* tested; the note makes the
+  synthesized keys discoverable.
+- **`status-only contract tests`** — §9. Generated and running, but asserting less than a full
+  contract test. Fixable by adding a schema to the spec.
+- **`bodiless statuses`** — §9. Listed for completeness and explicitly *not* a gap; 204/205/304
+  have no body by definition.
+- **`auth tests gated`** — §9. Present in the assembly but skipped for want of a multi-identity
+  `ITestTokenProvider`. Without this line, gated tests would be indistinguishable from tests
+  that were never generated.
+- **`unevaluatable keywords`** — §9. The only remaining route to a false green, made visible.
+
+The JSON form lets CI assert coverage has not silently dropped. It is also the v2 backlog,
+derived from real specs rather than guessed at.
+
+**There is no version selection in v1.** Rev 2 carried a `spec.version` field defaulting to
+`"latest"` while simultaneously arguing that inferring "latest" from route prefixes was too
+ambiguous to leave implicit — the default required exactly the inference the same paragraph
+forbade. Both are removed.
+
+v1 generates a test for **every operation in the document**. Where a document contains several
+versions, their paths differ, so they produce distinct operations and distinct tests already;
+nothing needs selecting. If InTest detects more than one version-looking path prefix it emits a
+**note** in the coverage report — visibility without inference:
+
+```
+Notes:
+  multiple version prefixes   /v1 (24 operations), /v2 (31 operations)
+```
+
+Selecting or splitting versions is a v2 feature, and it will require an explicit rule stated at
+that time rather than a default that guesses.
+
+---
+
+## 13. Lifecycle
+
+### Assembly scope
+
+```csharp
+[TestClass]
+public static class TestHost
+{
+    [AssemblyInitialize]
+    public static async Task AssemblyInit(TestContext ctx)
+    {
+        Configuration = BuildConfiguration(profile);
+        RunId         = InTest.RunId.Create(Configuration);
+        Root          = BuildServiceProvider();          // TestStartup registrations
+        Schemas       = await LoadSchemaBundleAsync();   // spec.json beside the DLL
+        await AwaitReadinessAsync(ctx);
+        await RunFixturesAsync(ctx);
+        await ValidateFixturesAsync();                   // aggregated — §10
+    }
+
+    [AssemblyCleanup]
+    public static async Task AssemblyCleanup(TestContext ctx)
+        => await DrainCleanupAsync();
+}
+```
+
+Signatures must satisfy MSTEST0012/MSTEST0013. `TestContext` on `[AssemblyCleanup]` requires
+3.8+, satisfied by the 4.3 floor.
+
+**MSTest v4 throws when `TestContext.TestName` or `FullyQualifiedTestClassName` is read in
+`AssemblyInitialize` or `ClassInitialize`.** Generated code does not, but this belongs in the
+`IAssemblyFixture` docs — a team fixture reaching for it gets an exception that fails every
+test with a message that does not say "setup broke."
+
+### `IAssemblyFixture`
+
+```csharp
+public interface IAssemblyFixture
+{
+    Type[] DependsOn { get; }        // topologically sorted — NOT an int Order
+    string[] AppliesTo { get; }      // profiles; empty = all
+    Task InitializeAsync(FixtureContext ctx, CancellationToken ct);
+}
+```
+
+Integer ordering is the thing everyone regrets — someone always needs to slot between 15 and
+20.
+
+**Cleanup is registration-based, not a symmetric second method.** Teardown is written next to
+the thing that created it and drained in reverse:
+
+```csharp
+var tenant = await _api.CreateTenantAsync(ct);
+ctx.Publish("seededTenant.id", tenant.Id);       // available to {{fixture:…}}
+ctx.OnCleanup(() => _api.DeleteTenantAsync(tenant.Id));
+```
+
+Wrap fixture execution so failures surface clearly.
+
+### Readiness
+
+Post-deploy cold start is the single largest source of flaky gates.
+
+- **`consecutiveSuccesses`** (default 2). During slot swaps and rolling deploys, a single 200
+  can come from the old instance.
+- **`expectVersion`** — assert the deployed build, not just liveness. Sourced from a pipeline
+  variable via config.
+
+Fails with `Service did not become ready within 120s (last response: 503)` — not 200 confusing
+test failures. Opt-out per profile. Falls back to a configured lightweight GET where no health
+endpoint exists.
+
+**Readiness gating, not per-test retries.** `RetryAttribute` exists (3.8+) and InTest does not
+emit it — retries hide real flakiness, and Microsoft's own guidance is to address the root
+cause.
+
+### Class scope
+
+`[ClassInitialize]` / `[ClassCleanup]` generated per test class, delegating to an optional
+team-implemented `IControllerFixture`. Not required for most classes.
+
+- Base-class class-scope hooks need explicit
+  `[ClassInitialize(InheritanceBehavior.BeforeEachDerivedClass)]` — class-scope hooks are not
+  inherited by default the way test-scope ones are.
+- **Do not specify `ClassCleanupBehavior`.** The enum is removed in MSTest v4; end-of-class is
+  the only behaviour.
+
+### Base class
+
+Lives in `InTest.Runtime` — fixes ship by bumping a package, not regenerating.
+
+```csharp
+public abstract class ApiTestBase
+{
+    private IServiceScope _scope = null!;
+
+    public TestContext TestContext { get; set; } = null!;
+
+    protected IConfiguration Config      => TestHost.Configuration;
+    protected IServiceProvider Services  => _scope.ServiceProvider;   // per-test SCOPE
+    protected string RunId               => TestHost.RunId;
+    protected string TestId              => InTestId.ForTest(TestHost.RunId, TestContext.TestDisplayName);
+    protected HttpClient Client { get; private set; } = null!;
+
+    [TestInitialize]
+    public void ApiTestInitialize()
+    {
+        _scope = TestHost.Root.CreateScope();
+        InTestAmbient.TestId.Value = TestId;                             // read by RunIdHandler
+        Client = _scope.ServiceProvider
+                       .GetRequiredService<IHttpClientFactory>()
+                       .CreateClient(InTestClients.Api);
+    }
+
+    [TestCleanup]
+    public void ApiTestCleanup() => _scope.Dispose();
+}
+```
+
+- **`IServiceProvider`, not `IServiceCollection`.** The collection is registration-time and
+  belongs in `TestStartup.cs`.
+- **Per-test scope**, not the root provider — root-resolved scoped services become captive
+  dependencies that surface under parallelism.
+- `[TestInitialize]` **is** inherited (base first, then derived), so teams add their own
+  without touching generated code.
+- Keep `ApiTestBase` **abstract and free of `[TestMethod]`s** — base-class test methods get
+  reflection-discovered and cause duplicate-discovery problems.
+
+Teams insert their own layer via `project.testBaseClass`; it derives from `ApiTestBase`.
+Scaffolded as a stub at init.
+
+**Caution:** base classes in test projects become dumping grounds. `ApiTestBase` = **ambient
+context only** (config, services, client, IDs, scope lifecycle). Domain helpers go in the
+team's base class or extension methods.
+
+### `ITestTokenProvider`
+
+```csharp
+public interface ITestTokenProvider
+{
+    /// Identities this provider can issue tokens for. Empty or single-element gates the
+    /// 403/wrong-tenant auth tests off (§9). Also the source of the coverage-report count.
+    IReadOnlyCollection<string> Identities { get; }
+
+    Task<string> GetTokenAsync(string audience, string? identity = null, CancellationToken ct = default);
+}
+```
+
+The `identity` parameter is what the auth contract tests (§9) need — wrong scope, wrong tenant.
+(The no-token case sends no `Authorization` header at all and never reaches the provider.)
+
+**`Identities` exists so the 403 gate is a property, not a probe.** Without it the only way to
+discover whether a provider supports a second identity is to call `GetTokenAsync` with an
+invented one and interpret the result — which would either throw, return the default token, or
+succeed misleadingly, none of which is a reliable signal, and all of which are worse than the
+day-one failure the gate exists to prevent. `InTestConditions.MultiIdentityAvailable` is
+`Identities.Count > 1`, and the coverage-report count of gated tests falls out of the same
+property.
+
+**InTest ships exactly one implementation: a static-token provider**, whose `Identities`
+returns a single-element collection. The 403 tests therefore gate off by construction — no
+special case in the condition, no null check, no shipped-provider carve-out. Any team that
+implements a second identity turns them on by returning more than one.
+
+Auth is otherwise entirely the team's, and InTest takes no dependency on any identity library.
+Rev 2 listed `DefaultAzureCredential`, which would have pulled `Azure.Identity` — an undeclared
+dependency absent from §4's pinned table — into every consumer of `InTest.Runtime`, in a
+project that must not assume Azure at all. Client-credentials, managed identity, mTLS and
+everything else are documented samples in the README, not shipped code and not a fourth
+package.
+
+Consumed by `AuthHandler`.
+
+---
+
+## 14. Run identity and data hygiene
+
+### Format
+
+```
+{prefix}-{yyyyMMddTHHmmss}Z-{8 hex}
+tjay-20260816T142233Z-a3f91c2e
+ci4471-20260816T090114Z-77b0de54
+```
+
+**Timestamp is UTC**, explicitly — the sweeper derives age from the ID alone, so no
+`created_at` column is required on every seeded entity. Also sorts lexicographically and is
+human-readable.
+
+### `TestId` — corrected
+
+Rev 2 defined `TestId = $"{RunId}-{TestContext.TestName}"`. *Measured:* `TestContext.TestName`
+returns the **bare method name for every `[DataRow]` row** — two rows of the same method both
+reported `TestName='NameUnderDataRow'`. Every variation of an operation would therefore share
+one `TestId`, and `X-Test-Run-Id` could not locate a single failing row in App Insights, which
+§14 calls the thing that "alone justifies the scheme."
+
+**`TestContext.TestDisplayName`** returns the row's `DisplayName` (measured: `"row one"`), and
+`TestContext.TestData` carries the row arguments if a stable key is preferred over the display
+string. `TestId` derives from `TestDisplayName`.
+
+This makes §9's "display names are mandatory" rule load-bearing. It is a deliberate, narrow
+exception to §5's "anything volatile goes in display, never identity": the display name is
+volatile in the *test-history* sense but stable within a run, which is all a correlation
+header needs.
+
+#### `TestId` has different constraints from `RunId`
+
+These are two identifiers with two jobs, and rev 2 conflated them.
+
+| | `RunId` | `TestId` |
+|---|---|---|
+| Goes into | Seeded entity names, email local-parts, external reference IDs | The `X-Test-Run-Id` header and failure messages only |
+| Length cap | 40 (external `maxLength` limits) | 120 |
+| Charset | lowercase alphanumeric + hyphen | **ASCII, mandatory** |
+
+The ASCII rule is not stylistic. *Measured:* `HttpClient` **throws** on a non-ASCII header
+value —
+
+```
+HttpRequestException: Request headers must contain only ASCII characters.
+```
+
+— so it fails loudly rather than corrupting, but it fails on *every request in that test*
+with a message that says nothing about run IDs. And the default templates trigger it: §9's own
+display-name example is `quantity = -1 → 400`, containing U+2192, and the string variation
+catalog mandates emoji, RTL and combining-character cases by design.
+
+`InTestId.ForTest(runId, displayName)` therefore:
+
+1. Transliterates the display name to a lowercase ASCII slug; anything outside
+   `[a-z0-9-]` collapses to a hyphen.
+2. **Appends a short stable hash of the full original display name whenever the slug is lossy.**
+   Without this, `notes = "😀"` and `notes = "אב"` both reduce to the same token and the
+   correlation header stops distinguishing the very cases the catalog exists to test.
+3. Truncates the slug, never the hash, to the length cap.
+
+```
+tjay-20260816T142233Z-a3f91c2e-quantity-1-400          (lossless)
+tjay-20260816T142233Z-a3f91c2e-notes-h7f2a9            (lossy → hashed)
+```
+
+§14 calls the correlation header "the thing that alone justifies the scheme." Collision-freedom
+is what makes that true.
+
+### Prefix derivation
+
+Automatic, with config override:
+
+1. `TF_BUILD` set → Azure DevOps. Prefix from `BUILD_BUILDID`.
+   *(`Build.BuildNumber` is a display string and can repeat — `v1.0.0`. `Build.BuildId` is the
+   unique one.)*
+2. `GITHUB_ACTIONS` set → GitHub Actions. Prefix from `GITHUB_RUN_ID`.
+   *(Required because the project is public; without it a CI run looks like a developer run.)*
+3. Generic `CI` env var set → prefix `ci`.
+4. Otherwise → local. Prefix from OS username.
+5. Config prefix overrides all of the above.
+
+If the prefix is *required* rather than derived, half the teams leave the template default and
+nothing is traceable.
+
+### Constraints
+
+- Cap total length (default 40) — run IDs land in entity names, email local-parts and external
+  reference IDs with `maxLength` limits.
+- Prefix charset: lowercase alphanumeric and hyphen only.
+- Document the remaining budget for fixture authors.
+
+### Propagation
+
+- `X-Test-Run-Id: {TestId}` on every request via `RunIdHandler`.
+- Written to `TestContext` in `AssemblyInitialize` → lands in `.trx` and the AzDO summary.
+- Included in every contract-assertion failure message.
+
+### Cleanup guarantees
+
+`AssemblyCleanup` does not run on process crash, pipeline cancellation, or agent timeout. Plan
+for leakage:
+
+- Every cleanup action **idempotent** — deleting an already-deleted entity is a no-op.
+- Everything created tagged with the run ID.
+- **An out-of-band sweeper** removes anything older than a day.
+
+**Non-prod only.** Integration tests target DQV, QA and UAT. A team that points this at
+production owns the consequences.
+
+---
+
+## 15. Interfaces and assertions
+
+The rule: **interface where you expect someone else to write an implementation you'll never
+see. Template where you're choosing among implementations you ship.**
+
+| Concern | Mechanism | Rationale |
+|---|---|---|
+| Auth token | `ITestTokenProvider` | Varies per environment and service |
+| Test data | `ITestDataProvider` | Files, seeded DB, factory service — unpredictable |
+| Assembly setup | `IAssemblyFixture` | Team-specific seeding |
+| Class setup | `IControllerFixture` | Optional, per test class |
+| HTTP invocation | **Template set** | A facade makes generated code read poorly |
+| Assertions | **Template set** | See below |
+| Contract assertions | Shared `ApiResponseAssertions` | Justified by message quality |
+| Base URL / env | Config | It's string lookup |
+| Schema validation | Shared `SchemaBundle` | One right way to do it |
+| Parallelization | **Neither — consumer-owned** | §11 |
+
+### The two assertion sets, and why they differ
+
+Shouldly builds messages by **reading source text at runtime**. MSTest v4's `Assert` uses
+**`[CallerArgumentExpression]`**, baked into the IL at compile time. *Measured*, same binary,
+run with the source file present and then renamed away:
+
+```
+                             SOURCE PRESENT                     SOURCE ABSENT
+MSTest  Assert.IsTrue        Assert.IsTrue(Map["boo"] > 5)      Assert.IsTrue(Map["boo"] > 5)
+Shouldly block-bodied        Map["boo"] should be 2 but was 1   1 should be 2 but was not
+Shouldly expression-bodied   public void Shouldly_Expression…   1 should be 2 but was not
+                             BodiedMap["boo"] should be 2   ← garbled
+```
+
+Three consequences.
+
+1. **`<DebugType>full</DebugType>` is not required and is not emitted.** Rev 2 set it on the
+   authority of Shouldly's documentation. Portable PDBs — the SDK default — produced the
+   correct Shouldly message on `net10.0`. The variable is source-file presence, not PDB type,
+   and forcing `full` is a liability on Linux agents for no gain.
+2. **Generated tests are always block-bodied with the assertion on its own line.** Shouldly on
+   an expression-bodied method does not degrade — it produces an actively wrong message by
+   splicing the method signature. This is a hard template rule, not a style preference.
+3. **Shouldly is primary; MSTest `Assert` is the second set.** Shouldly gives better messages
+   in the normal case (local runs, and CI that builds and tests in one job). MSTest `Assert`
+   survives published-artifact runs unchanged. `project.assertions` is an array, defaulting
+   to `["shouldly"]`; `intest assertions add` appends, never swaps, because hand-written
+   assertions are never migrated.
+
+**Why assertions are not behind an interface:** Shouldly reads the code before the `ShouldBe`
+statement. Behind `IResponseAsserter.StatusShouldBe(...)`, the expression read is the
+*wrapper's*, so you pay for Shouldly and get generic messages.
+
+`ApiResponseAssertions` is justified on different grounds — contract checks need *custom*
+messages no library provides, built from NJsonSchema's `Kind` and `Path`:
+
+```
+GET /api/orders/{id} → expected 200, got 503 (1,204ms)
+Run:  tjay-20260816T142233Z-a3f91c2e-GetOrderById_Contract
+Body: {"error":"upstream timeout"}
+```
+
+Because these messages are constructed rather than read from source, they are unaffected by
+the source-presence problem above.
+
+---
+
+## 16. Testing InTest
+
+1. **Golden-file tests.** Reference specs in, expected output byte-compared.
+2. **Compile verification.** Every golden output must build. The real signal.
+3. **Producer matrix.** The same API surface as produced by Swashbuckle, the built-in package
+   and NSwag — covering absent, synthesized and `{Controller}_{Action}` operationIds.
+4. **Round-trip on representative specs.** The project is public, so the organisation's real
+   specs cannot live in this repo. Two jobs: a public job over sanitised, checked-in specs
+   covering the shapes that matter, and an internal pipeline running the same assertions
+   against real org specs.
+5. **Determinism.** Generate twice, assert identical output. Catches ordinal-dependent naming
+   and dictionary-ordering bugs. `RandomizeTestOrder` (4.3) is useful here.
+6. **Frozen-axis tests.** Attempting a frozen change fails with the expected message.
+7. **Orphan detection tests.** Rename an operation, assert config and fixture orphans are
+   reported.
+8. **Assertion-formatting test.** Assert that generated methods are block-bodied and that a
+   Shouldly failure message contains the asserted expression. This guards the rule in §15 that
+   is otherwise invisible until a failure message goes wrong in production.
+9. **`TestId` ASCII and collision tests.** Feed the string variation catalog's own emoji, RTL
+   and combining-character cases through `InTestId.ForTest` and assert every result is ASCII
+   and every pair distinct. Then send one as a real header and assert no throw. Without this,
+   §14's correlation guarantee is an untested claim.
+10. **Schema-keyword report test.** A spec using each of the seven unevaluatable keywords must
+    produce a coverage-report entry for each. This is the only thing standing between a 3.1
+    spec and a false green.
+11. **URL joining test.** Base URLs with and without a trailing slash, paths with and without
+    a leading slash, asserting the resolved absolute URI. Cheap, and it guards a silent-wrong
+    -route failure (§7).
+
+---
+
+## 17. Delivery
+
+### v0 — internal milestone, not a release
+
+Contract tests only. HttpClient only. JSON only. Fixture tiers 1 and 4 only. No latency
+assertion. Pointed at one real API in a real pipeline. Two to three weeks. Throwaway quality
+is fine.
+
+**The spec survey decides large parts of v1 before any of it is built.** One parse pass across
+real org specs:
+
+| Measure | Decides |
+|---|---|
+| % with `operationId` | §6 — whether a `CustomOperationIds` rollout is a prerequisite |
+| Producer mix | Promotion snippet priority |
+| YAML vs. JSON | Whether `YamlReader` is needed day one |
+| Tags: single / multiple / none | §8 mapping defaults |
+| % with response schemas | Whether contract assertions have anything to assert |
+| % with `security` declared | §9 auth tests — go or no-go |
+| % with request `example` | How much fixture tooling v1 needs |
+| % of schemas using `allOf` / `oneOf` / `discriminator` | Whether NJsonSchema's polymorphism handling needs exercising early |
+| **% of specs that are OpenAPI 3.1 rather than 3.0** | §9 — whether NJsonSchema's seven unevaluatable keywords can ever occur. If this is zero, the gap is theoretical |
+| **Census of 2019-09/2020-12 keywords actually used** | §9 — how many operations the keyword report would flag in practice. Non-trivial numbers reopen the validator decision, and with it the `JsonSchema.Net` fee question |
+| **% of response schemas that are inline rather than `components.schemas`** | §9 — how much of the bundle runs on synthesized keys |
+
+Rev 2's check B (Shouldly message survival) is **resolved** — see §15. Rev 2's open question
+about `TestContext.TestName` under `DataRow` is **resolved** — see §14.
+
+Also to answer in v0:
+
+- Does the two-stage `TestPlan` boundary hold, or do templates need things the plan doesn't
+  carry?
+- Does partial-class regeneration survive a real spec change?
+- What does readiness actually look like against a DQV deploy — and does `consecutiveSuccesses`
+  matter there?
+- How large is the bundled schema document for the biggest real spec, and how long does
+  `AssemblyInitialize` bundling take?
+
+### v1 — ships
+
+Everything in §2. v1 must land before anything ships externally.
+
+### v2 backlog
+
+**Flurl HTTP pack** (second pack; requires resolving how `ApiTestBase.Client` is typed —
+generic base, third package, or no client on the base) · **version selection** (explicit rule,
+never inferred) · WCF/SOAP (client provided, not generated) · non-JSON content types ·
+multi-version projects ·
+scenario-per-class layout · `[ResourceLock]` and `[DependsOn]` when 4.4 ships stable ·
+Shouldly 5 when GA · Microsoft.OpenApi transformer snippets for ASP.NET Core 11.
+
+---
+
+## 18. Verification record
+
+*Measured* = established by running code on .NET SDK 10.0.303, not by reading docs.
+
+### Corrected from rev 2
+
+| Rev 2 claim | Rev 3 |
+|---|---|
+| Pin `Microsoft.OpenApi` 2.3.x | **Wrong.** All 2.x stable versions are deprecated with a vulnerability advisory, as are 3.0.0–3.5.3. Floor 3.5.4; use 3.10.0 |
+| MSTEST0001 forces explicit parallelization intent | **Wrong.** *Measured:* silent at default severity on 4.3.3; only appears when raised via `.globalconfig` |
+| `.editorconfig` `mstest_parallel_safety_mode = always` | **Wrong for 4.3.3.** MSTEST0073–0077 ship in 4.4 |
+| Pin `ClassCleanupBehavior.EndOfClass` | **Wrong.** Enum removed in MSTest v4 |
+| Shouldly requires `<DebugType>full</DebugType>` | **Wrong.** *Measured:* portable PDBs produce correct messages; source-file presence is the variable |
+| `TestId` from `TestContext.TestName` | **Wrong for data-driven tests.** *Measured:* returns the bare method name for every `DataRow`. Use `TestDisplayName` |
+| Scaffold `[assembly: DoNotParallelize]` *and* recommend the MSBuild property | **Build break.** *Measured:* `error CS0579: Duplicate 'DoNotParallelize' attribute`. AssemblyInfo.cs is authoritative; `INTEST0001` guards the property |
+| Flurl primary, HttpClient may lag; two packs | **One pack.** `ApiTestBase.Client` cannot be typed for both from one package; shipping one removes the constraint. Flurl deferred to v2 — its last commit is 2025-01-01, last release 2024-01-17 |
+| `spec.version` defaulting to `"latest"` | **Deleted.** The default required the route-prefix inference the same section forbade |
+| `spec.hash` | **Deleted.** No stated writer, no stated failure mode, and undefined against a build artifact that changes every build |
+| Shipped `DefaultAzureCredential` token provider | **Deleted.** Would pull an undeclared `Azure.Identity` dependency into every consumer. Static provider only; auth is the team's |
+| Scaffolded runsettings declaring `profile` | **Commented out.** `<RunSettingsFilePath>` loads it unconditionally, which made `INTEST_PROFILE` unreachable |
+| `--check` costs "one prerequisite, not two" | **Three.** API build (cross-repo: clone + build), pinned tool version, and a tool-version match check |
+| Bundle only `components.schemas` | **Every response schema.** Inline schemas get synthesized `op:{id}:{status}:{mediaType}` keys, or contract tests silently degrade to status-code checks |
+| Skip operations with no response schema | **Status-only contract test instead.** Skipping deleted every bodiless 204/205/304 operation from the suite, and discarded the status check that the inline-schema argument says has value |
+| Auth tests cost "a multi-identity token provider (§13)" | **The cost is the team's.** InTest ships a static provider, so 401 tests always run and 403 tests are `MemberCondition`-gated with a coverage note — never red on day one for a capability InTest chose not to ship |
+| `intest upgrade` referenced but undefined; no CLI inventory anywhere | **§5 command surface** — every command, what it writes, what it never writes, exit codes, and a stated exit-code convention |
+| `ITestTokenProvider` had no way to advertise identities | **`Identities` property added.** `MultiIdentityAvailable` is `Identities.Count > 1` — a declared capability, not a probe. The shipped static provider returns one, so 403 tests gate off by construction |
+| "only three commands write outside `Generated/`" | **False, and the wrong invariant.** `generate` writes `coverage-report.json`; `assertions add` edits `intest.json`. Restated as ownership: `generate` never writes `fixtures/` or a team-owned file |
+| `--check` compared `Generated/` only | **Also compares `coverage-report.json`**, the one generated artefact tracking spec *shape* rather than templates |
+| No exit code for tool failure | **`2` reserved.** Unparseable spec, missing `spec.source`, malformed `intest.json`, unhandled exception — so CI can tell a crash from fixture drift |
+| .NET 10 LTS to 10 November 2028 | **14 November 2028** |
+| "InTest does not run in the pipeline" alongside `--check` in CI | **Contradiction resolved** — generation never *writes* in the pipeline |
+| Schema validation library | **Was unspecified.** NJsonSchema 11.6.1 |
+| `Microsoft.NET.Test.Sdk` | **Was missing** from the dependency table |
+| Assertion library additive in v2 | **Both ship in v1** — exercises the template seam instead of carrying it speculatively |
+
+### Previously unverified, now resolved
+
+| Claim | Verdict |
+|---|---|
+| `[ResourceLock]` lands in 4.4 | **Confirmed** — docs state planned for 4.4, preview-only until 4.4.0 |
+| Bare `[assembly: Parallelize]` defaults to `ClassLevel` | **Confirmed** in the MSTEST0001 documentation |
+| Stable `Microsoft.OpenApi` v3 exists | **Confirmed** — 3.10.0, released 2026-08-12, MIT, net8.0/netstandard2.0 |
+| `TestContext.TestName` behaviour with `DataRow` | **Resolved** — see above |
+| MSTEST0013 requires `[TestClass]` on the declaring class | Still unverified; `TestHost` carries it regardless |
+
+### Still confirmed from rev 2
+
+Swashbuckle omits `operationId` by default (deliberate since 4.0) · built-in package requires
+`[EndpointName]` / `WithName` · NSwag auto-derives `{Controller}_{Action}` and ignores route
+`Name` · `Microsoft.OpenApi.YamlReader` is a separate package · MSTEST0001 is not
+inline-suppressible (reported at compilation level) · MSTest's runtime default is sequential ·
+parallelization configurable via runsettings / testconfig.json / MSBuild properties · global
+`TestTimeout` via runsettings · `MemberCondition` in 4.3 and 4.3.3 is stable · `TestContext` on
+`AssemblyCleanup` from 3.8 · Shouldly 5 is preview · FluentAssertions v8 is commercial, 7.x
+Apache-2.0 · .NET 8 and 9 EOL 10 November 2026 · `WithOpenApi` deprecated in .NET 10
+(ASPDEPR002) · built-in package does not yet support YAML at build time.
+
+### New findings
+
+| Finding | Source |
+|---|---|
+| `[DependsOn]` also ships in MSTest 4.4 — a real test-ordering model | MSTest docs |
+| MSTest v4 changed `TestCase.Id`, affecting AzDO failure-tracking | v3→v4 migration guide |
+| MSTest v4 throws when `TestName` is read in `AssemblyInitialize`/`ClassInitialize` | v3→v4 migration guide |
+| `TestContext.Properties` is now `IDictionary<string, object>` | v3→v4 migration guide |
+| `dotnet test` on the .NET 10 SDK still defaults to VSTest mode | .NET CLI docs, *measured* |
+| `JsonSchema.Net` is MIT under an Open Source Maintenance Fee (≥US$10k revenue) | Package licence |
+| **NJsonSchema evaluates 27/27 OpenAPI 3.0 Schema Object keywords correctly**, `format: date-time` and `uuid` included | *Measured* |
+| **NJsonSchema silently ignores 7 keywords** — `const`, `if`/`then`/`else`, `prefixItems`, `unevaluatedProperties`, `dependentSchemas`, `dependentRequired`, `contains`/`minContains`. All are 2019-09/2020-12, none legal in OpenAPI 3.0 | *Measured* |
+| `JsonSchema.Net` rejects all 12 of the same bad instances | *Measured* |
+| Corvus.Json is a build-time source generator — cannot validate a schema read at runtime | Package description |
+| Newtonsoft.Json.Schema is commercially licensed above a free threshold; latest is `4.0.2-beta2` (prerelease) | nuget.org |
+| Manatee.Json (the pre-`JsonSchema.Net` alternative) last published 2021-01-21 | nuget.org |
+| **`HttpClient` throws on non-ASCII header values** — `Request headers must contain only ASCII characters` | *Measured* |
+| `new Uri(base, rel)` drops a base path segment in 3 of 4 forms | *Measured* |
+| Factory-created `DelegatingHandler`s are not DI-scoped; `AsyncLocal` is required | *Measured* |
+| Response schemas parse as `OpenApiSchemaReference`; must be bundled, not inlined | *Measured* |
+| `SerializeAsV31` normalizes OpenAPI 3.0 `nullable: true` to `"type": ["null","string"]` | *Measured* |
+| Shouldly produces a **garbled** message on expression-bodied test methods | *Measured* |
+| MSTest v4 `Assert` messages are source-independent (`CallerArgumentExpression`) | *Measured* |
+| MSBuild `Content` + `Link` + `CopyToOutputDirectory` survives `dotnet publish`; missing source is `MSB3030` | *Measured* |
+| Swashbuckle 10.x requires Microsoft.OpenApi 2.3.0+ and still emits OpenAPI 3.0 by default | Swashbuckle v10 migration guide |
+| Rev 2's provisional name `Jig` is taken on nuget.org (0.2.0–0.3.1) | nuget.org |
+| `InTest`, `InTest.Cli`, `InTest.Runtime`, `InTest.Core` are all free on nuget.org; zero search hits | nuget.org, *measured* |
+| GitHub org `intest` is **not** free — held by a personal account | GitHub API |
+
+---
+
+## 19. Deliberately not built
+
+- **Name-stability map in config.** A section growing one entry per operation, forever. Moving
+  status out of identifiers (§5) captures most of the churn for zero config.
+- **A `sharedSingleton` flag.** Speculative. `mutates` plus the documented cross-process limit
+  covers what's real.
+- **Schema abstraction in TestPlan for SOAP.** More abstraction on speculation about a v2 that
+  may not happen.
+- **`ISweepTarget` in v1.** Real burden on consumers. v1 documents the leakage risk instead.
+- **A public template-set format.** No third-party authors exist. `--emit-plan` covers the
+  debugging need.
+- **Per-test retries.** Hide real flakiness. Readiness gating addresses the actual cause.
+- **A keyed lock map in `InTest.Runtime`.** `[ResourceLock]` ships in 4.4.
+- **A InTest-owned parallelization control surface.** MSTest already exposes one.
+- **Committing or embedding the spec.** MSBuild copies it to the output directory (§9).
+
+---
+
+## 20. Open items
+
+1. **Reserve the NuGet IDs.** `InTest`, `InTest.Cli`, `InTest.Runtime` and `InTest.Core` were
+   free on 2026-08-16 but are not reserved. Publish placeholder versions, or apply for the
+   `InTest.` ID prefix, before announcing anything. Also decide which GitHub organisation
+   hosts the repo, since `github.com/intest` is held by a personal account.
+2. **Fixture ownership.** The tier-4 backlog burns down only if someone owns it.
+   *Recommendation:* the team owning the API owns its fixtures, and the spec-example
+   percentage goes in their regular health review. Needs a decision.
+3. **Sweeper implementation.** Scheduled pipeline vs. service — depends on what the seeded
+   systems are.
+4. **Tool ↔ `InTest.Runtime` compatibility matrix.** Not "how current must teams stay" —
+   generated code is the coupling, so the real question is which tool versions may emit code
+   that which runtime versions accept, in both directions. A team can upgrade the runtime
+   package without regenerating, and can regenerate without upgrading the package. Both need a
+   stated support window, and `--check`'s version comparison (§8) needs to know which
+   mismatches are errors and which are tolerated.
+5. **Open-source licence for InTest itself.** MIT is the obvious default and matches every
+   dependency; needs confirming.
+6. **Where the internal round-trip job lives** (§16 item 4), given real org specs cannot enter
+   a public repo.
+
+---
+
+## Appendix — decisions and rationale
+
+| Decision | Rationale |
+|---|---|
+| Own generator, not openapi-generator templates | Full output control; no JVM on agents; org-specific assertions |
+| `net10.0`, no preview packages | .NET 8/9 EOL Nov 2026; preview churn is not worth the features |
+| `Microsoft.OpenApi` 3.10.0, not 2.3.x | All 2.x stable versions are deprecated with a vulnerability advisory |
+| One HTTP pack in v1: HttpClient via `IHttpClientFactory` | `ApiTestBase.Client` cannot be typed for two packs from one package. Shipping one removes the constraint rather than working around it, and drops a template set plus two test dimensions |
+| NJsonSchema despite 7 unevaluatable 2020-12 keywords | Measured 27/27 on the OpenAPI 3.0 vocabulary; all 7 gaps are illegal in 3.0. The only complete .NET alternative charges commercial users, and this project cannot require a paid licence. The keyword report makes the residual gap visible rather than silent |
+| No shipped identity implementation | Auth is the team's. Shipping `DefaultAzureCredential` would add an undeclared dependency and an Azure assumption to a tool that must not have one |
+| `TestId` ASCII-enforced and hash-disambiguated | `HttpClient` throws on non-ASCII headers, and the string variation catalog mandates emoji and RTL cases that would otherwise collide |
+| NJsonSchema over JsonSchema.Net | Plain MIT with no licence surface; handles both OpenAPI dialects; instance-based, no global registry |
+| Shouldly primary, MSTest `Assert` second | Shouldly reads source (better messages, fragile); MSTest uses `CallerArgumentExpression` (robust). Both ship, so the template seam is proven not speculative |
+| No `<DebugType>full</DebugType>` | Measured unnecessary; source-file presence is the real variable |
+| Generated tests block-bodied, assertion on its own line | Shouldly garbles messages on expression-bodied methods |
+| Spec copied to output by MSBuild | Travels with `dotnet publish` into the gate stage; no committed second copy; no giant generated file |
+| Schemas bundled with `definitions`, never inlined | Self-referential schemas; circular-reference resolution is the defect that deprecated Microsoft.OpenApi 2.x |
+| `AssemblyInfo.cs` authoritative for parallelization | Team-owned, one place; MSBuild properties would duplicate the generated attribute and break the build |
+| Sequential default | Matches MSTest's actual runtime default; shared deployed environment; rate limits are real |
+| InTest does not set `Workers` | It is a throughput dial against someone else's quota; the team owns that call |
+| Generated code committed | Spec changes reviewable as a PR diff |
+| Generation never writes in the pipeline | Failures land on the PR where they're fixable |
+| No fixture review flag | Bad data should fail; PR-time generation means the gate never sees it |
+| `generate` never writes fixtures | Keeps `--check` coherent |
+| `promote` emits, never writes | `spec.source` is a build artifact |
+| Latency recorded, not asserted | Contradicts readiness gating otherwise |
+| Status out of identifiers | Freezing the template doesn't freeze the rendered name |
+| `TestId` from `TestDisplayName` | `TestName` is identical across every `DataRow` row |
+| Weak-but-true default assertions | Guessed strict assertions get bulk-ignored |
+| Base class in `InTest.Runtime` | Fixes ship without regeneration |
+| Two packages, not three | `Cli`/`Core` split had no consumer |

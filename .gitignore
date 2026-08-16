@@ -1,0 +1,65 @@
+## Build output
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+artifacts/
+
+## Visual Studio / Rider / VS Code
+.vs/
+.idea/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+!.vscode/launch.json
+!.vscode/tasks.json
+
+## Test results
+[Tt]est[Rr]esult*/
+*.trx
+*.coverage
+*.coveragexml
+coverage.json
+coverage.cobertura.xml
+coverage.opencover.xml
+coverage.info
+# NOT ignored: coverage-report.json — InTest's own report is committed and --check'd (§8, §12)
+BenchmarkDotNet.Artifacts/
+
+## NuGet
+*.nupkg
+*.snupkg
+**/[Pp]ackages/*
+!**/[Pp]ackages/build/
+.nuget/
+
+## Local configuration and secrets — never commit
+appsettings.local.json
+appsettings.*.local.json
+*.local.json
+secrets.json
+*.pfx
+*.snk
+
+## OS
+.DS_Store
+Thumbs.db
+
+## Misc
+*.tmp
+*.bak
+*.swp
+
+## Agent instruction files — local tooling, deliberately not published.
+## Kept on disk, untracked. See the note in CONTRIBUTING before re-adding any of these.
+AGENTS.md
+caveman.*
+.clinerules/
+.cursor/
+.opencode/
+.windsurf/
+.github/copilot-instructions.md
