@@ -71,6 +71,10 @@ Once code exists:
 - Follow the existing style; do not reformat unrelated code.
 - Update the spec in the same PR when a change alters documented behaviour. The spec is the
   source of truth, not an afterthought.
+- Update [`docs/getting-started.md`](docs/getting-started.md) when a change alters the adoption
+  path. It is deliberately a full end-to-end trace rather than a summary, because walking it is
+  what catches gaps — reading it top to bottom is how the unowned initial-fixture creation was
+  found, after the design had already been through several review rounds.
 
 ## Releases
 

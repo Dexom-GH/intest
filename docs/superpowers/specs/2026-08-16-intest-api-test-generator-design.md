@@ -1838,6 +1838,7 @@ any code.
 | Artefact | Must state |
 |---|---|
 | `README.md` | What InTest is for, what it is **not** for, and §2's adoption requirements — so an evaluation ends in five minutes when it is the wrong fit |
+| `docs/getting-started.md` | The end-to-end adoption path, from an existing API to a gate: survey, spec wiring, `init`, configuration, `generate`, fixtures, run, commit, CI. **Kept in step with this spec** — tracing it end to end is what exposed the unowned initial-fixture creation (§10), and it is the cheapest way to find the next gap of that kind |
 | `CONTRIBUTING.md` | The dependency policy (§4), the semver contract (§3), and the rule that no capability is gated on any one spec population (§17) |
 | `SECURITY.md` | Private reporting route, supported versions, and what is deliberate rather than a vulnerability — untrusted specs, real HTTP to configured hosts, `security` payloads off by default, best-effort cleanup |
 | Issue and PR templates | A spec-issue template especially, since at design stage a careful reading is worth more than a patch |

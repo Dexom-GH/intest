@@ -87,7 +87,10 @@ intest generate --check
 
 Generated code lands in `Generated/` and is regenerated wholesale. Your code lives in
 same-named partial classes outside it, and InTest never touches those. Test data lives in
-`fixtures/`, which `generate` never writes to.
+`fixtures/`, which only `fixtures repair` writes to.
+
+**Full walkthrough:** [docs/getting-started.md](docs/getting-started.md) — from an existing API
+to a suite running as a post-deployment gate, including CI wiring and the things that bite.
 
 ## Design principles
 
