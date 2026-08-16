@@ -69,7 +69,8 @@ mostly red and there is real work to do. Two things make that manageable:
 
 ```bash
 # See what InTest would make of your specs, before committing to anything
-intest survey "specs/**/*.json"
+intest survey "specs/**/*.json"                 # a glob over local specs...
+intest survey "https://host/swagger/v1/swagger.json"   # ...or a URL
 
 # Scaffold a test project
 intest init

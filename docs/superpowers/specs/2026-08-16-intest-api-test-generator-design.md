@@ -112,7 +112,7 @@ minutes rather than after a day of scaffolding.
 ### Deferred to v2
 
 - **xUnit and NUnit template sets.** The single largest constraint on reach: MSTest is roughly
-  a fifth of .NET test projects by download volume. v1 does not ship them, but §3 requires the
+  21.7% of test-framework downloads (§18). v1 does not ship them, but §3 requires the
   architecture to keep them additive rather than a rewrite — the neutral layers must not name
   an MSTest type. Highest-priority v2 item.
 - **A second HTTP pack (Flurl).** See §3 — `ApiTestBase.Client` cannot be typed for two packs
@@ -189,9 +189,9 @@ bug fix does not require every team to regenerate.
 
 ### Framework portability — designed for three, ships one
 
-v1 ships MSTest. But MSTest addresses roughly a fifth of .NET test projects by NuGet download
-volume — xUnit and NUnit together are the larger share — so a design that bakes MSTest into its
-lower layers caps the tool's reach permanently. **The architecture must make xUnit and NUnit
+v1 ships MSTest. But MSTest is **21.7%** of test-framework downloads against xUnit's 47.4% and
+NUnit's 30.9% (§18 records the figures and their limits) — so a design that bakes MSTest into
+its lower layers caps the tool's reach permanently. **The architecture must make xUnit and NUnit
 additive rather than a rewrite**, on the same reasoning that made the assertion seam pay off:
 that seam existed before a second assertion set did, and adding one cost nothing as a result.
 
@@ -459,7 +459,7 @@ Rev 2 and earlier drafts of rev 3 scattered commands across seven sections, and 
 | `intest generate --emit-plan` | `TestPlan` JSON to stdout | Everything | 0 ok |
 | `intest fixtures repair` | `fixtures/` — **creates missing fixtures** by tier precedence, adds `TODO:` sentinels for newly-required properties, flags removed ones. Never overwrites an existing value | `Generated/`, team-owned files | 0 ok, including nothing to repair |
 | `intest fixtures promote` | Nothing — prints a paste-ready snippet and names the target file | Everything, `spec.source` especially (§10) | 0 ok |
-| `intest survey <spec-glob>` | Nothing — prints a spec-population report (§17) | Everything | 0 ok · 2 no spec matched or unparseable |
+| `intest survey <spec-glob\|url>` | Nothing — prints a spec-population report (§17) | Everything | 0 ok · 2 no spec matched or unparseable |
 | `intest upgrade` | `intestVersion` in `intest.json`, the version in `.config/dotnet-tools.json`, then re-runs `generate` | `fixtures/`, team-owned files | 0 ok · 1 regeneration failed |
 | `intest assertions add <name>` | Appends to `project.assertions`, then re-runs `generate` | Existing assertions in hand-written or generated code | 0 ok · 3 already present |
 
@@ -1790,8 +1790,11 @@ The survey is worth keeping, so it ships as a command any adopter can run agains
 specs before committing to InTest:
 
 ```
-intest survey <spec-glob>
+intest survey <spec-glob|url>
 ```
+
+It accepts the same inputs as `spec.source` — a glob over local files, or a URL — because an
+adopter evaluating InTest often has only a Swagger endpoint and no checked-out spec.
 
 **It measures; it never gates.** Every capability in §2 exists regardless of what any survey
 returns. What the numbers change is *prioritisation* for maintainers, and *expectations* for
@@ -1848,12 +1851,23 @@ v1 must land before anything ships externally.
 
 ### v2 backlog
 
-**Flurl HTTP pack** (second pack; requires resolving how `ApiTestBase.Client` is typed —
-generic base, third package, or no client on the base) · **version selection** (explicit rule,
-never inferred) · WCF/SOAP (client provided, not generated) · non-JSON content types ·
-multi-version projects ·
-scenario-per-class layout · `[ResourceLock]` and `[DependsOn]` when 4.4 ships stable ·
-Shouldly 5 when GA · Microsoft.OpenApi transformer snippets for ASP.NET Core 11.
+Ordered. The first item is first everywhere else in this document and belongs at the top of the
+one list that exists to be the backlog.
+
+1. **xUnit and NUnit template sets.** The largest constraint on reach — MSTest is 21.7% of
+   framework downloads (§18). §3's portability boundary exists to keep this additive rather
+   than a rewrite; the sharpest coupling to break is `TestId` from `TestContext.TestDisplayName`.
+2. **Flurl HTTP pack.** Requires first resolving how `ApiTestBase.Client` is typed — generic
+   base, third package, or no client on the base (§3).
+3. **Version selection.** An explicit rule, never inferred (§12).
+4. **`[ResourceLock]` and `[DependsOn]`** when MSTest 4.4 ships stable. `[DependsOn]` also
+   reopens the stateful-flow non-goal (§2).
+5. **Non-JSON content types** — `multipart/form-data`, `x-www-form-urlencoded`, XML, binary.
+6. **Multi-version projects** and **scenario-per-class layout**.
+7. **Shouldly 5** when GA — removes the source-reading dependency entirely (§15).
+8. **Microsoft.OpenApi transformer snippets for ASP.NET Core 11**, which moves to
+   Microsoft.OpenApi 3.x while .NET 10 stays on 2.x (§10).
+9. **WCF/SOAP**, client provided rather than generated.
 
 ---
 
@@ -1884,7 +1898,7 @@ Shouldly 5 when GA · Microsoft.OpenApi transformer snippets for ASP.NET Core 11
 | `intest upgrade` referenced but undefined; no CLI inventory anywhere | **§5 command surface** — every command, what it writes, what it never writes, exit codes, and a stated exit-code convention |
 | No command created the **initial** fixtures — `generate` is read-only under `fixtures/` and `repair` only amended existing files | **Resolved.** `repair` owns creation too; a missing fixture is reported as drift, and the first run of a project is a deliberate `generate` then `repair` (§10) |
 | §2 claimed URL input, but every downstream mechanism assumed a local build artifact — MSBuild cannot copy from `https://` | **Resolved.** A URL source is snapshotted to a committed, generator-owned `spec.json` at generation time; `--check` compares the snapshot and never re-fetches (§9) |
-| Architecture free to bake in MSTest | **Constrained.** MSTest is ~a fifth of .NET test projects by download volume, so §3 requires the neutral layers to name no MSTest type, with the MSTest-specific surface enumerated. v1 still ships MSTest only |
+| Architecture free to bake in MSTest | **Constrained.** MSTest is 21.7% of test-framework downloads (§18), so §3 requires the neutral layers to name no MSTest type, with the MSTest-specific surface enumerated. v1 still ships MSTest only |
 | `ITestTokenProvider` had no way to advertise identities | **`Identities` property added.** `MultiIdentityAvailable` is `Identities.Count > 1` — a declared capability, not a probe. The shipped static provider returns one, so 403 tests gate off by construction |
 | "only three commands write outside `Generated/`" | **False, and the wrong invariant.** `generate` writes `coverage-report.json`; `assertions add` edits `intest.json`. Restated as ownership: `generate` never writes `fixtures/` or a team-owned file |
 | `--check` compared `Generated/` only | **Also compares `coverage-report.json`**, the one generated artefact tracking spec *shape* rather than templates |
@@ -1934,6 +1948,8 @@ Apache-2.0 · .NET 8 and 9 EOL 10 November 2026 · `WithOpenApi` deprecated in .
 | Newtonsoft.Json.Schema is commercially licensed above a free threshold; latest is `4.0.2-beta2` (prerelease) | nuget.org |
 | Manatee.Json (the pre-`JsonSchema.Net` alternative) last published 2021-01-21 | nuget.org |
 | **`HttpClient` throws on non-ASCII header values** — `Request headers must contain only ASCII characters` | *Measured* |
+| **MSTest is 21.7% of test-framework downloads.** nuget.org totals on 2026-08-17: xunit 1,004,273,473 + xunit.v3 38,574,301 = 1,042,847,774 (47.4%) · NUnit 678,971,792 (30.9%) · MSTest.TestFramework 478,384,347 (**21.7%**). Downloads count restores rather than projects and inflate all three alike, so this is directional, not a project census — but it is the basis for §3's portability constraint and should not be asserted without it | *Measured* |
+| **Microsoft.OpenApi 3.10.0 parses Swagger 2.0, OpenAPI 3.0, 3.1 and 3.2**, each detected correctly with zero diagnostics; `OpenApiSpecVersion` has exactly those four members | *Measured* |
 | `new Uri(base, rel)` drops a base path segment in 3 of 4 forms | *Measured* |
 | Factory-created `DelegatingHandler`s are not DI-scoped; `AsyncLocal` is required | *Measured* |
 | Response schemas parse as `OpenApiSchemaReference`; must be bundled, not inlined | *Measured* |
@@ -2018,7 +2034,7 @@ answers it will never receive.
 | Own generator, not openapi-generator templates | Full output control; no JVM on agents; org-specific assertions |
 | `net10.0`, no preview packages | .NET 8/9 EOL Nov 2026; preview churn is not worth the features |
 | `Microsoft.OpenApi` 3.10.0, not 2.3.x | All 2.x stable versions are deprecated with a vulnerability advisory |
-| Design for MSTest, xUnit and NUnit; ship MSTest | MSTest is roughly a fifth of .NET test projects by download volume, so baking it into the neutral layers would cap reach permanently. The assertion seam proved the pattern: build the boundary before the second implementation, and adding one costs nothing |
+| Design for MSTest, xUnit and NUnit; ship MSTest | MSTest is 21.7% of test-framework downloads (§18), so baking it into the neutral layers would cap reach permanently. The assertion seam proved the pattern: build the boundary before the second implementation, and adding one costs nothing |
 | Fixture sentinels keep failing, despite the adoption cost | A green suite asserting nothing is unrecoverable — nobody investigates a passing test. Aggregated messages, `intest survey`, and a fixture-free day-one subset make it navigable without weakening it |
 | URL specs snapshotted, not fetched at build or check time | MSBuild cannot copy from a URL; a committed snapshot also gives a URL source the reviewable diff it otherwise lacks, and keeps `--check` hermetic |
 | One HTTP pack in v1: HttpClient via `IHttpClientFactory` | `ApiTestBase.Client` cannot be typed for two packs from one package. Shipping one removes the constraint rather than working around it, and drops a template set plus two test dimensions |

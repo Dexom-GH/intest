@@ -35,7 +35,9 @@ dotnet tool install -g InTest.Cli
 intest survey "https://orders-staging.example.com/swagger/v1/swagger.json"
 ```
 
-`survey` reads specs and reports; it writes nothing. What it tells you and why you care:
+`survey` takes the same inputs as `spec.source` — a glob over local files, or a URL — because
+when you are still deciding whether to adopt, a Swagger endpoint is often all you have. It
+reads specs and reports; it writes nothing. What it tells you and why you care:
 
 | Measure | What it means for you |
 |---|---|
@@ -251,9 +253,15 @@ telemetry down to the individual test.
 | `fixtures/`, `intest.json` | user-secrets |
 | `appsettings*.json` (non-local), `*.runsettings` | anything with a credential in it |
 | `.config/dotnet-tools.json` | |
+| **`spec.json`** — only when `spec.source` is a URL | `spec.json` is **not** created for a local `spec.source`; the build copies that file instead |
 
 Generated code is committed so a spec change arrives as a reviewable diff on the pull request,
 where someone can see that an endpoint's contract moved.
+
+**If you took the URL path in Phase 1, `spec.json` must be committed.** It is the snapshot
+`generate` took, it is what `--check` compares against in Phase 8, and it is the only thing
+that gives a URL-sourced spec a reviewable diff at all. Leave it uncommitted and Phase 8 fails
+against a file that is not in the repository.
 
 ---
 
