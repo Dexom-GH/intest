@@ -1,0 +1,18 @@
+<Project>
+  <ItemGroup>
+    <PackageVersion Include="Microsoft.OpenApi" Version="3.10.0" />
+    <PackageVersion Include="Microsoft.OpenApi.YamlReader" Version="3.10.0" />
+    <PackageVersion Include="NJsonSchema" Version="11.6.1" />
+    <PackageVersion Include="Scriban" Version="7.2.6" />
+    <PackageVersion Include="System.CommandLine" Version="2.0.11" />
+    <PackageVersion Include="Microsoft.Extensions.Http" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration.Json" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration.EnvironmentVariables" Version="10.0.11" />
+    <PackageVersion Include="MSTest.TestFramework" Version="4.3.3" />
+    <PackageVersion Include="MSTest.TestAdapter" Version="4.3.3" />
+    <PackageVersion Include="MSTest.Analyzers" Version="4.3.3" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.9.0" />
+    <PackageVersion Include="Shouldly" Version="4.3.0" />
+  </ItemGroup>
+</Project>
