@@ -764,7 +764,7 @@ an exit-2 stack trace.
 - Modify: `src/InTest.Cli/Planning/TestPlanBuilder.cs`
 - Test: `tests/InTest.Cli.Tests/TestPlanBuilderTests.cs` (extend), `tests/InTest.Cli.Tests/CoverageReportTests.cs` (extend)
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```csharp
 [TestMethod]
@@ -823,7 +823,7 @@ public void CarriesAnUnusableOperationIdSkip()
 }
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 ```bash
 dotnet test tests/InTest.Cli.Tests --filter "FullyQualifiedName~TestPlanBuilderTests|FullyQualifiedName~CoverageReportTests"
@@ -833,30 +833,43 @@ Expected: FAIL — the two new plan tests, because nothing yet consults `TryVali
 `CarriesAnUnusableOperationIdSkip` may already pass, since `CoverageReport.ToJson` serialises
 `plan.Skipped` generically. Assert it rather than assume it.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 In `TestPlanBuilder.Build`, after resolving the operation key and before building the case:
 
 ```csharp
-var needsFixture =
-    operation.RequestBody?.Content?.ContainsKey(JsonMediaType) is true ||
-    (operation.Parameters ?? []).Any(p =>
-        // Same predicate as Task 2's composer — a path parameter is required whether or not
-        // the document says so, because it cannot be omitted from the URL.
-        p.In is ParameterLocation.Path || (p.Required && p.In is ParameterLocation.Query));
-
-if (needsFixture && !FixtureDocument.TryValidateOperationKey(key.Value, out var reason))
+if (FixtureComposer.NeedsFixture(operation) &&
+    !FixtureDocument.TryValidateOperationKey(key.Value, out var reason))
 {
     skipped.Add(new SkippedOperation(key.Value, reason));
     continue;
 }
 ```
 
-Skipping only when a fixture is actually needed keeps §12's discipline: an operation with no
-body and no required parameter never loads a fixture, so its filename never matters and removing
-it would cost coverage for nothing.
+Skipping only when a fixture is actually needed keeps §12's discipline: an operation that never
+loads a fixture never needs its filename, so removing it would cost coverage for nothing.
 
-- [ ] **Step 4: Run tests to verify they pass, then commit**
+**Ask the composer; do not restate its predicate here.** An earlier draft of this task inlined
+`p.In is ParameterLocation.Path || (p.Required && p.In is ParameterLocation.Query)` and called it
+"the same predicate as Task 2's composer". It is not, and the difference is a live defect rather
+than a stylistic one. That expression is only the composer's *always-sentinelled* branch;
+`ParameterValue` also emits a real value for an **optional** query parameter carrying an `example`
+or a `default`, and `Compose` writes it into `$parameters`. An operation whose only fixture surface
+is such a parameter therefore gets a non-empty fixture while the inlined predicate reports it needs
+none — so its operationId is never validated, and `FixtureDocument.FileNameFor` (which *throws*)
+is reached later from `fixtures repair`, aborting the run. That is exactly the blast radius this
+task exists to prevent, reintroduced by the check meant to prevent it.
+
+The same trap has a second mouth: a `requestBody` declaring `application/json` with **no schema**
+is valid OpenAPI, and `Compose` produces no body for it. Any restatement of "does this operation
+have a JSON body" has to carry that condition too.
+
+Both are avoided by having exactly one owner for the question. `FixtureComposer.NeedsFixture` is
+that owner — it is true if and only if `Compose` would produce a body or a non-empty
+`$parameters`, and `FixtureComposerTests` asserts that equivalence directly so the two cannot
+drift again.
+
+- [x] **Step 4: Run tests to verify they pass, then commit**
 
 ```bash
 dotnet test tests/InTest.Cli.Tests
