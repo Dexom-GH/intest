@@ -88,7 +88,8 @@ number — decision 3.
 `.config/dotnet-tools.json`); Task 4a makes all three read one source, so a fixture cannot
 claim a version the tool does not have.
 
-Filenames are the operation key, sanitised (Task 1).
+Filenames are the operation key verbatim. A key that cannot be a filename is **rejected**, not
+mangled — see Task 1.
 
 ## File structure
 
@@ -180,25 +181,38 @@ public class FixtureDocumentTests
     }
 
     [TestMethod]
-    [DataRow("post_api_products", "post_api_products.json", DisplayName = "synthesized key")]
-    [DataRow("Stock_GetBySku", "Stock_GetBySku.json", DisplayName = "NSwag key")]
-    [DataRow("Orders/Create", "Orders_Create.json", DisplayName = "slash is not a path separator here")]
-    [DataRow("get order?", "get_order_.json", DisplayName = "characters illegal in a filename")]
-    [DataRow("CON", "CON_.json", DisplayName = "Windows reserved device name")]
-    public void FileNameIsSanitisedFromTheOperationKey(string key, string expected)
+    [DataRow("post_api_products", DisplayName = "synthesized key")]
+    [DataRow("Stock_GetBySku", DisplayName = "NSwag {Controller}_{Action} key")]
+    [DataRow("getOrderById", DisplayName = "hand-written camelCase operationId")]
+    public void AcceptsAnOperationKeyThatIsAlreadyFileNameSafe(string key)
     {
-        // OpenAPI permits any string as an operationId and InTest uses a declared one verbatim
-        // (OperationKey.Resolve only trims). Synthesized keys are safe by construction; declared
-        // ones are not.
-        FixtureDocument.FileNameFor(key).ShouldBe(expected);
+        FixtureDocument.FileNameFor(key).ShouldBe(key + ".json");
     }
 
     [TestMethod]
-    public void DistinctKeysProduceDistinctFileNames()
+    [DataRow("Orders/Create", "/", DisplayName = "path separator")]
+    [DataRow("Orders?Create", "?", DisplayName = "wildcard character")]
+    [DataRow("orders:create", ":", DisplayName = "stream separator")]
+    public void RejectsAnOperationKeyThatCannotBeAFileName(string key, string offending)
     {
-        FixtureDocument.FileNameFor("Orders/Create")
-                       .ShouldNotBe(FixtureDocument.FileNameFor("Orders?Create"));
+        // Fail loudly rather than mangle. Sanitising needs a collision story — Orders/Create and
+        // Orders?Create would otherwise both become Orders_Create.json — and a declared
+        // operationId containing these is something the API owner can fix in their own spec,
+        // where it also improves their generated clients.
+        var ex = Should.Throw<FixtureFormatException>(() => FixtureDocument.FileNameFor(key));
+
+        ex.Message.ShouldContain(key);
+        ex.Message.ShouldContain(offending);
+        ex.Message.ShouldContain("operationId");
     }
+
+    [TestMethod]
+    public void RejectsAWindowsReservedDeviceName()
+    {
+        Should.Throw<FixtureFormatException>(() => FixtureDocument.FileNameFor("CON"))
+              .Message.ShouldContain("reserved");
+    }
+
 }
 ```
 
@@ -242,21 +256,35 @@ public sealed class FixtureDocument
          "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"];
 
     /// <summary>
-    /// Operation keys become filenames. Synthesized keys are safe by construction, but a
-    /// declared operationId is used verbatim and OpenAPI permits any string — including path
-    /// separators and Windows device names. Collisions are avoided by appending a short hash
-    /// whenever sanitisation changed anything.
+    /// Operation keys become fixture filenames. Synthesized keys are safe by construction, but
+    /// a declared operationId is used verbatim and OpenAPI permits any string.
+    /// <para>
+    /// Unsafe keys are rejected rather than mangled. Sanitising would need a collision story —
+    /// <c>Orders/Create</c> and <c>Orders?Create</c> both reduce to the same name — and a
+    /// declared operationId containing a path separator is something the API owner can fix in
+    /// their own spec, where it also improves any generated client.
+    /// </para>
     /// </summary>
     public static string FileNameFor(string operationKey)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(operationKey);
 
-        var invalid = Path.GetInvalidFileNameChars().Concat(['/', '\', '?', '*', ':']).ToHashSet();
-        var sanitised = new string(operationKey.Select(c => invalid.Contains(c) ? '_' : c).ToArray());
+        var invalid = Path.GetInvalidFileNameChars().Concat(['/', '?', '*', ':', '"', '<', '>', '|']).ToHashSet();
+        var offending = operationKey.Where(invalid.Contains).Distinct().ToArray();
 
-        if (ReservedNames.Contains(sanitised, StringComparer.OrdinalIgnoreCase)) sanitised += "_";
+        if (offending.Length > 0)
+            throw new FixtureFormatException(
+                $"operationId '{operationKey}' cannot be used as a fixture filename: it contains " +
+                $"{string.Join(", ", offending.Select(c => $"'{c}'"))}. " +
+                "Change the operationId in the OpenAPI document — it is also used for generated " +
+                "client method names, so a filename-safe value is worth having anyway.");
 
-        return sanitised + ".json";
+        if (ReservedNames.Contains(operationKey, StringComparer.OrdinalIgnoreCase))
+            throw new FixtureFormatException(
+                $"operationId '{operationKey}' is a reserved device name on Windows and cannot be " +
+                "a filename. Change the operationId in the OpenAPI document.");
+
+        return operationKey + ".json";
     }
 
     public string ToJson()
@@ -324,7 +352,7 @@ git add src/InTest.Cli/Fixtures/FixtureDocument.cs tests/InTest.Cli.Tests/Fixtur
 git commit -m "feat(cli): fixture document model"
 ```
 
-Expected: `Passed! - Failed: 0, Passed: 5`.
+Expected: `Passed! - Failed: 0, Passed: 11` — 7 test methods, two of which carry 3 `DataRow`s each, so 5 plain results plus 6 rows.
 
 ---
 
@@ -617,7 +645,7 @@ git add src/InTest.Cli/Fixtures/FixtureComposer.cs tests/InTest.Cli.Tests/Fixtur
 git commit -m "feat(cli): four-tier fixture composition"
 ```
 
-Expected: `Passed! - Failed: 0, Passed: 8`.
+Expected: `Passed! - Failed: 0, Passed: 9`.
 
 ---
 
@@ -728,17 +756,15 @@ public class FixturesRepairCommandTests
         document.Body!["legacyRef"] = "kept-by-hand";
         File.WriteAllText(FixturePath, document.ToJson());
 
-        var console = new StringWriter();
-        Console.SetOut(console);
-        try { await FixturesRepairCommand.RunAsync(_root, CancellationToken.None); }
-        finally { Console.SetOut(new StreamWriter(Console.OpenStandardOutput()) { AutoFlush = true }); }
+        var report = new StringWriter();
+        await FixturesRepairCommand.RunAsync(_root, CancellationToken.None, report);
 
         // §10 requires both halves: not deleted, and reported. Silent retention is how a
         // property nobody meant to keep survives three refactors.
         FixtureDocument.Parse(File.ReadAllText(FixturePath)).Body!["legacyRef"].ShouldNotBeNull(
             "never silently deleted — it may be deliberate");
-        console.ToString().ShouldContain("legacyRef");
-        console.ToString().ShouldContain("no longer in schema");
+        report.ToString().ShouldContain("legacyRef");
+        report.ToString().ShouldContain("no longer in schema");
     }
 
     [TestMethod]
@@ -801,6 +827,11 @@ which operations exist — including skips for non-JSON request bodies and opera
 response. Iterating anything else makes `repair` and `generate`'s drift check disagree about the
 operation set, and creates fixtures for operations no generated test will ever load.
 
+`RunAsync(projectRoot, cancellationToken, TextWriter? report = null)` — the optional writer
+defaults to `Console.Out`. Tests pass a `StringWriter` and assert the drift report directly,
+rather than capturing `Console` globally in a test assembly where that is shared process state.
+`GenerateCommand` gains the same parameter for the same reason (Task 4).
+
 Exit codes per §5: `0` including nothing to repair, `2` on a tool error.
 
 - [ ] **Step 4: Wire into `Program.cs`, run tests, commit**
@@ -821,7 +852,7 @@ git add src/InTest.Cli/Fixtures src/InTest.Cli/Commands src/InTest.Cli/Program.c
 git commit -m "feat(cli): fixtures repair owning creation, sentinels and stale flagging"
 ```
 
-Expected: `Passed! - Failed: 0, Passed: 6`.
+Expected: `Passed! - Failed: 0, Passed: 7`.
 
 ---
 
@@ -854,7 +885,7 @@ updated in this task, not discovered later:
 
 | Test | Why it breaks | Reconciliation |
 |---|---|---|
-| `CompileVerificationTests.cs:65` — `ShouldBe(0)` | Its spec `Specs/orders.json` has `GET /orders/{id}` with a **required** path parameter, so under decision 1 that operation needs a fixture | Call `FixturesRepairCommand` in the test's setup, between `init` and `generate`. That is what a real adopter does, and it keeps the test asserting what it is named for — that generated code compiles |
+| `CompileVerificationTests.cs:65` — `ShouldBe(0)` | Its spec `Specs/orders.json` has `GET /orders/{id}` with a **required** path parameter, so under decision 1 that operation needs a fixture | Call `FixturesRepairCommand.RunAsync` in the test's setup, before `GenerateCommand`. Note this test never calls `init` — it hand-writes `intest.json` and the `.csproj` (`CompileVerificationTests.cs:24-46`) — and `repair` needs only `intest.json` plus the spec, so calling it directly works. Keeps the test asserting what it is named for: that generated code compiles |
 | `GeneratedSuiteExecutionTests.cs:98,118` | Its spec is a bare `GET` with no body and no parameters, so it survives — **but** it has no `fixtures/` directory at all | Add the same `repair` call for realism, and add the `FixtureStore` case in Task 5 below so an absent directory is proven harmless rather than assumed so |
 
 - [ ] **Step 3: Run to verify failure, implement, re-run, commit**
@@ -906,9 +937,37 @@ public void TestStartupDoesNotReferenceTheDeletedTestDataType()
 }
 ```
 
-Extend `GeneratedSuiteExecutionTests.ScaffoldedConfigurationTravelsToTheOutputDirectory` to
-require a fixture file in the output directory too, so this is proven by execution and not only
-by inspecting the csproj.
+**The execution test's spec must first be given an operation that needs a fixture.**
+`GeneratedSuiteExecutionTests` currently uses a single `GET /api/status` — no body, no
+parameters — so under decision 1 it composes no fixture at all and there would be nothing to
+assert. Asserting the csproj contains a content item proves only that a string is present.
+
+Add a second operation to that spec:
+
+```json
+"/api/status/{id}": {
+  "get": {
+    "operationId": "getStatusById",
+    "tags": ["Status"],
+    "parameters": [
+      { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+    ],
+    "responses": {
+      "200": { "description": "ok",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Status" } } } }
+    }
+  }
+}
+```
+
+and serve `/api/status/{anything}` from the stub. Then the only test that runs a generated suite
+also becomes the test that proves a fixture reaches the output directory, is loaded, has its
+sentinel filled, and produces a request that succeeds live — the whole chain, in the one place
+that executes rather than compiles.
+
+`GeneratedSuiteExecutionTests` setup gains an `intest fixtures repair` call between `generate`
+and `build`, plus a step that replaces `TODO:id` with a value the stub accepts. That mirrors
+exactly what an adopter does, and it means the F1 class of defect cannot recur silently.
 
 - [ ] **Step 2: Run to verify failure, then implement**
 
@@ -976,6 +1035,12 @@ public void OverlayMergesPerPropertyRatherThanReplacingTheObject()
     body["nested"]!["y"]!.GetValue<int>().ShouldBe(99, "the environment wins");
 }
 ```
+
+**`FixtureStore.Load(root, profile)` takes the directory that *contains* `fixtures/`, not
+`fixtures/` itself** — so base fixtures are `{root}/fixtures/*.json` and overlays are
+`{root}/fixtures/{profile}/*.json`. `TestHost` passes `AppContext.BaseDirectory`, which is why
+Task 4a must copy `fixtures/**` there. Stating it here because "root" could mean either and the
+wrong reading fails at runtime with an empty store rather than at compile time.
 
 - [ ] **Step 2–4: Run, implement, re-run, commit**
 
@@ -1097,8 +1162,45 @@ git commit -m "feat(runtime): aggregated fixture validation with per-operation b
 
 **Files:**
 - Modify: `src/InTest.Cli/Rendering/Templates/mstest-class.scriban`, `src/InTest.Cli/Rendering/TemplateRenderer.cs`
+- Modify: `src/InTest.Runtime/Neutral/InTestUrl.cs` — **add `BuildQuery`**, which does not exist yet
 - Delete: `src/InTest.Runtime/Neutral/TestData.cs`
-- Test: `tests/InTest.Cli.Tests/TemplateRendererTests.cs` (extend), `tests/InTest.Golden.Tests/` (regenerate golden)
+- Test: `tests/InTest.Cli.Tests/TemplateRendererTests.cs` (extend), `tests/InTest.Runtime.Tests/InTestUrlTests.cs` (extend), `tests/InTest.Golden.Tests/` (regenerate golden)
+
+- [ ] **Step 0: Add `InTestUrl.BuildQuery` with its own tests**
+
+`InTestUrl` currently has `NormalizeBase`, `Build` and `EnsureNoPrefixDuplication`. The template
+below emits a call to `BuildQuery`, so it must exist first. Percent-encoding is where this goes
+wrong, and `Build` already has tests covering that concern for path segments — match them.
+
+```csharp
+[TestMethod]
+public void BuildQuery_ReturnsEmptyForNoParameters()
+{
+    InTestUrl.BuildQuery(new Dictionary<string, string>()).ShouldBe(string.Empty);
+}
+
+[TestMethod]
+public void BuildQuery_PrefixesWithQuestionMarkAndJoinsWithAmpersand()
+{
+    InTestUrl.BuildQuery(new Dictionary<string, string> { ["page"] = "2", ["sort"] = "name" })
+             .ShouldBe("?page=2&sort=name");
+}
+
+[TestMethod]
+public void BuildQuery_EscapesNamesAndValues()
+{
+    InTestUrl.BuildQuery(new Dictionary<string, string> { ["q"] = "a b&c=d" })
+             .ShouldBe("?q=a%20b%26c%3Dd");
+}
+
+[TestMethod]
+public void BuildQuery_IsOrderIndependentSoGeneratedUrlsAreStable()
+{
+    var forward = InTestUrl.BuildQuery(new Dictionary<string, string> { ["b"] = "1", ["a"] = "2" });
+    var reverse = InTestUrl.BuildQuery(new Dictionary<string, string> { ["a"] = "2", ["b"] = "1" });
+    forward.ShouldBe(reverse);
+}
+```
 
 - [ ] **Step 1: Extend the renderer tests**
 
