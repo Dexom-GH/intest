@@ -49,6 +49,9 @@ secrets.json
 .DS_Store
 Thumbs.db
 
+## Git worktrees — isolated workspaces, never repository content
+.worktrees/
+
 ## Misc
 *.tmp
 *.bak
