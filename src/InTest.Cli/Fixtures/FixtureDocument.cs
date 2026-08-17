@@ -27,6 +27,15 @@ public sealed class FixtureDocument
          "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"];
 
     /// <summary>
+    /// Explicit, not <see cref="Path.GetInvalidFileNameChars"/> alone: that call returns 41
+    /// characters on Windows but only NUL and '/' on Unix, so a Windows dev box or CI agent
+    /// cannot observe this list shrinking — only a direct assertion on the list itself can.
+    /// Internal and exposed to InTest.Cli.Tests via InternalsVisibleTo for exactly that reason.
+    /// </summary>
+    internal static readonly char[] InvalidOperationKeyCharacters =
+        ['/', '\\', '?', '*', ':', '"', '<', '>', '|'];
+
+    /// <summary>
     /// Operation keys become fixture filenames. Synthesized keys are safe by construction, but
     /// a declared operationId is used verbatim and OpenAPI permits any string.
     /// <para>
@@ -43,11 +52,7 @@ public sealed class FixtureDocument
             return false;
         }
 
-        // Explicit, not Path.GetInvalidFileNameChars(): that returns 41 characters on Windows
-        // but only NUL and '/' on Unix, so trusting it would make generation depend on the
-        // developer's operating system.
-        char[] separators = ['/', '\\', '?', '*', ':', '"', '<', '>', '|'];
-        var invalid = separators.Concat(Path.GetInvalidFileNameChars()).ToHashSet();
+        var invalid = InvalidOperationKeyCharacters.Concat(Path.GetInvalidFileNameChars()).ToHashSet();
 
         var offending = operationKey.Where(invalid.Contains).Distinct().ToArray();
         if (offending.Length > 0)

@@ -94,6 +94,16 @@ public class FixtureDocumentTests
     }
 
     [TestMethod]
+    public void TheExplicitSeparatorListCarriesEveryCharacterUnixWouldOtherwiseAllow()
+    {
+        // Path.GetInvalidFileNameChars() returns 41 characters on Windows but only NUL and
+        // '/' on Unix. Asserting through TryValidateOperationKey would pass on Windows even
+        // if this list were empty, because the framework list masks it — so assert the list.
+        FixtureDocument.InvalidOperationKeyCharacters.ShouldBe(
+            new[] { '/', '\\', '?', '*', ':', '"', '<', '>', '|' }, ignoreOrder: true);
+    }
+
+    [TestMethod]
     public void ReportsAWindowsReservedDeviceName()
     {
         FixtureDocument.TryValidateOperationKey("CON", out var reason).ShouldBeFalse();
