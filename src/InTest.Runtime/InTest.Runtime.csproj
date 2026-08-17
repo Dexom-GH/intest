@@ -8,6 +8,10 @@
     <PackageReference Include="NJsonSchema" />
     <PackageReference Include="Microsoft.Extensions.Http" />
     <PackageReference Include="Microsoft.Extensions.Configuration" />
+    <!-- TestHost.BuildConfiguration calls SetBasePath/AddJsonFile (Json, which brings
+         FileExtensions transitively) and AddEnvironmentVariables. -->
+    <PackageReference Include="Microsoft.Extensions.Configuration.Json" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.EnvironmentVariables" />
     <PackageReference Include="MSTest.TestFramework" />
   </ItemGroup>
 </Project>
