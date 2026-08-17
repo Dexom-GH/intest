@@ -15,6 +15,12 @@ public sealed record TestCasePlan(
     IReadOnlyList<string> PathParameterNames,
     int ExpectedStatus,
     string? SchemaKey,
-    string Category);
+    string Category,
+    // Carries FixtureComposer.NeedsFixture's verdict for this operation so that no other caller
+    // (fixtures repair, chiefly) ever has to recompute or restate it — a divergence between a
+    // second copy of this logic and the composer's own is a defect this branch already fixed
+    // twice. Defaults to true so call sites outside fixture handling, which never asked for a
+    // NeedsFixture opinion, are unaffected.
+    bool NeedsFixture = true);
 
 public sealed record SkippedOperation(string OperationKey, string Reason);

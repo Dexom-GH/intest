@@ -53,12 +53,17 @@ public static class FixturesRepairCommand
 
             var created = 0;
             var updated = 0;
+            var failed = 0;
 
             foreach (var testCase in plan.Classes.SelectMany(c => c.Cases)
+                                                  .Where(c => c.NeedsFixture)
                                                   .OrderBy(c => c.OperationKey, StringComparer.Ordinal))
             {
-                var composed = FixtureComposer.Compose(
-                    spec.Document, testCase.PathTemplate, testCase.HttpMethod, testCase.OperationKey, generatedBy);
+                // NeedsFixture is FixtureComposer's own verdict, carried on the plan by
+                // TestPlanBuilder — restating that decision here (e.g. inspecting Compose's
+                // output for emptiness) is exactly the second copy that has drifted from the
+                // composer twice before. An operation that doesn't need one is left alone
+                // entirely, whether or not a fixture already happens to exist for it.
 
                 // Every key reaching here already passed FixtureDocument.TryValidateOperationKey
                 // inside TestPlanBuilder (an operation with an unusable key is recorded as skipped
@@ -66,46 +71,61 @@ public static class FixturesRepairCommand
                 // invariant broke — a bug to surface, not a condition to defensively swallow.
                 var fixturePath = Path.Combine(fixturesDir, FixtureDocument.FileNameFor(testCase.OperationKey));
 
-                if (!File.Exists(fixturePath))
+                try
                 {
-                    Directory.CreateDirectory(fixturesDir);
-                    await File.WriteAllTextAsync(fixturePath, composed.ToJson(), cancellationToken).ConfigureAwait(false);
-                    created++;
-                    continue;
+                    var composed = FixtureComposer.Compose(
+                        spec.Document, testCase.PathTemplate, testCase.HttpMethod, testCase.OperationKey, generatedBy);
+
+                    if (!File.Exists(fixturePath))
+                    {
+                        Directory.CreateDirectory(fixturesDir);
+                        await File.WriteAllTextAsync(fixturePath, composed.ToJson(), cancellationToken).ConfigureAwait(false);
+                        created++;
+                        continue;
+                    }
+
+                    var existingText = await File.ReadAllTextAsync(fixturePath, cancellationToken).ConfigureAwait(false);
+                    var existing = FixtureDocument.Parse(existingText);
+                    var drift = FixtureDrift.Compare(existing, composed);
+
+                    var changed = false;
+
+                    if (drift.MissingProperties.Count > 0)
+                    {
+                        var body = existing.Body as JsonObject ?? new JsonObject();
+                        var composedBody = (JsonObject)composed.Body!;
+                        foreach (var name in drift.MissingProperties)
+                            body[name] = composedBody[name]?.DeepClone();
+                        existing.Body = body;
+                        changed = true;
+                    }
+
+                    foreach (var name in drift.MissingParameters)
+                    {
+                        existing.Parameters[name] = composed.Parameters[name];
+                        changed = true;
+                    }
+
+                    // Stale properties are reported, never deleted (§10) — a property no longer in
+                    // the schema may be deliberate, and silent deletion is how that intent is lost.
+                    foreach (var name in drift.StaleProperties)
+                        report.WriteLine(
+                            $"{testCase.OperationKey}: '{name}' is no longer in schema (kept — remove by hand if it was not intentional).");
+
+                    if (changed)
+                    {
+                        await File.WriteAllTextAsync(fixturePath, existing.ToJson(), cancellationToken).ConfigureAwait(false);
+                        updated++;
+                    }
                 }
-
-                var existingText = await File.ReadAllTextAsync(fixturePath, cancellationToken).ConfigureAwait(false);
-                var existing = FixtureDocument.Parse(existingText);
-                var drift = FixtureDrift.Compare(existing, composed);
-
-                var changed = false;
-
-                if (drift.MissingProperties.Count > 0)
+                catch (FixtureFormatException ex)
                 {
-                    var body = existing.Body as JsonObject ?? new JsonObject();
-                    var composedBody = (JsonObject)composed.Body!;
-                    foreach (var name in drift.MissingProperties)
-                        body[name] = composedBody[name]?.DeepClone();
-                    existing.Body = body;
-                    changed = true;
-                }
-
-                foreach (var name in drift.MissingParameters)
-                {
-                    existing.Parameters[name] = composed.Parameters[name];
-                    changed = true;
-                }
-
-                // Stale properties are reported, never deleted (§10) — a property no longer in the
-                // schema may be deliberate, and silent deletion is how that intent gets lost.
-                foreach (var name in drift.StaleProperties)
-                    report.WriteLine(
-                        $"{testCase.OperationKey}: '{name}' is no longer in schema (kept — remove by hand if it was not intentional).");
-
-                if (changed)
-                {
-                    await File.WriteAllTextAsync(fixturePath, existing.ToJson(), cancellationToken).ConfigureAwait(false);
-                    updated++;
+                    // One bad committed fixture is that operation's problem, not the whole run's:
+                    // every other operation's legitimate repair — creation or sentinel addition —
+                    // must still happen. The run as a whole still reports a tool error (below),
+                    // since the malformed fixture itself is unresolved.
+                    failed++;
+                    report.WriteLine($"{testCase.OperationKey}: {ex.Message}");
                 }
             }
 
@@ -113,7 +133,7 @@ public static class FixturesRepairCommand
                 ? "Nothing to repair."
                 : $"Created {created} fixture(s), updated {updated} fixture(s).");
 
-            return ExitOk;
+            return failed == 0 ? ExitOk : ExitToolError;
         }
         catch (SpecLoadException ex)
         {

@@ -145,4 +145,82 @@ public class FixturesRepairCommandTests
         foreach (var (file, written) in before)
             File.GetLastWriteTimeUtc(file).ShouldBe(written, $"{Path.GetFileName(file)} must not be touched");
     }
+
+    [TestMethod]
+    public async Task DoesNotCreateFixturesForOperationsThatDoNotNeedOne()
+    {
+        // FixtureComposer.NeedsFixture is the sole authority on whether an operation gets a
+        // fixture. A parameterless GET and a GET whose only parameter is optional with no
+        // example or default both compose to an empty body/$parameters — repair must not turn
+        // that into a junk fixture file just because the test plan covers the operation.
+        const string withNoFixtureNeeded = """
+        {
+          "openapi":"3.0.3","info":{"title":"T","version":"1"},
+          "paths":{
+            "/api/products":{"post":{"operationId":"createProduct",
+              "requestBody":{"content":{"application/json":{"schema":{"type":"object",
+                "required":["sku"],"properties":{"sku":{"type":"string"}}}}}},
+              "responses":{"201":{"description":"ok"}}}},
+            "/api/health":{"get":{"operationId":"getHealth",
+              "responses":{"200":{"description":"ok"}}}},
+            "/api/items":{"get":{"operationId":"listItems",
+              "parameters":[{"name":"sort","in":"query","required":false,
+                "schema":{"type":"string"}}],
+              "responses":{"200":{"description":"ok"}}}}}
+        }
+        """;
+
+        File.WriteAllText(Path.Combine(_root, "spec.json"), withNoFixtureNeeded);
+        (await FixturesRepairCommand.RunAsync(_root, CancellationToken.None)).ShouldBe(0);
+
+        File.Exists(Path.Combine(_root, "fixtures", "createProduct.json")).ShouldBeTrue(
+            "this operation needs a fixture and must still get one");
+        File.Exists(Path.Combine(_root, "fixtures", "getHealth.json")).ShouldBeFalse(
+            "a parameterless GET needs no fixture — NeedsFixture is false");
+        File.Exists(Path.Combine(_root, "fixtures", "listItems.json")).ShouldBeFalse(
+            "an all-optional query parameter with no example or default needs no fixture");
+    }
+
+    [TestMethod]
+    public async Task AppliesLegitimateRepairsEvenWhenAnotherFixtureIsMalformed()
+    {
+        // Alphabetically, createProduct sorts before createWidget — the loop reaches the
+        // corrupted fixture first. One bad committed fixture must not stop repair from adding a
+        // sentinel to an unrelated operation that legitimately needs one.
+        const string twoOperations = """
+        {
+          "openapi":"3.0.3","info":{"title":"T","version":"1"},
+          "paths":{
+            "/api/products":{"post":{"operationId":"createProduct",
+              "requestBody":{"content":{"application/json":{"schema":{"type":"object",
+                "required":["sku"],"properties":{"sku":{"type":"string"}}}}}},
+              "responses":{"201":{"description":"ok"}}}},
+            "/api/widgets":{"post":{"operationId":"createWidget",
+              "requestBody":{"content":{"application/json":{"schema":{"type":"object",
+                "required":["name"],"properties":{"name":{"type":"string"}}}}}},
+              "responses":{"201":{"description":"ok"}}}}}
+        }
+        """;
+
+        File.WriteAllText(Path.Combine(_root, "spec.json"), twoOperations);
+        await FixturesRepairCommand.RunAsync(_root, CancellationToken.None);
+
+        var productPath = Path.Combine(_root, "fixtures", "createProduct.json");
+        var widgetPath = Path.Combine(_root, "fixtures", "createWidget.json");
+        File.WriteAllText(productPath, "{ not valid json");
+
+        File.WriteAllText(Path.Combine(_root, "spec.json"), twoOperations.Replace(
+            """"required":["name"],"properties":{"name":{"type":"string"}}"""",
+            """"required":["name","color"],"properties":{"name":{"type":"string"},"color":{"type":"string"}}""""));
+
+        var report = new StringWriter();
+        var exitCode = await FixturesRepairCommand.RunAsync(_root, CancellationToken.None, report);
+
+        exitCode.ShouldBe(FixturesRepairCommand.ExitToolError,
+            "a malformed committed fixture is a real tool error and must be reflected in the exit code");
+        FixtureDocument.Parse(File.ReadAllText(widgetPath)).Body!["color"]!.GetValue<string>()
+            .ShouldBe("TODO:color", "the unrelated, legitimate repair must still be applied");
+        // The report should say which operation's fixture could not be read.
+        report.ToString().ShouldContain("createProduct");
+    }
 }

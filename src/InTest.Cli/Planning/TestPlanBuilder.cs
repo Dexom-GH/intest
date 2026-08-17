@@ -76,7 +76,8 @@ public static class TestPlanBuilder
                     PathParameterNames: PathParameters(path),
                     ExpectedStatus: status,
                     SchemaKey: schemaKey,
-                    Category: ContractCategory)));
+                    Category: ContractCategory,
+                    NeedsFixture: needsFixture)));
             }
         }
 
