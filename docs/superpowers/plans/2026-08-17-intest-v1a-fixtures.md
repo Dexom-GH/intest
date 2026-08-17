@@ -1661,7 +1661,7 @@ Three specific places, all currently false once this plan lands:
 
 `survey`, `--check` and YAML stay on the not-yet-built list — this plan does not deliver them.
 
-- [x] **Step 4: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
 git commit -m "docs: fixtures are built; validation blocks operations rather than the run"
