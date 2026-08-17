@@ -53,4 +53,22 @@ public abstract class ApiTestBase
     /// </summary>
     protected static void RequireFixture(string operationKey) =>
         TestHost.FixtureValidationReport.ThrowIfBlocked(operationKey);
+
+    /// <summary>
+    /// The fixture's resolved request body as a compact JSON string, or null when it carries
+    /// none. Generated mutating methods call this after <see cref="RequireFixture"/> has already
+    /// guaranteed nothing in it is unresolved.
+    /// </summary>
+    protected static string? FixtureBody(string operationKey) =>
+        TestHost.Fixtures.ResolvedBody(operationKey, TestHost.FixtureTokens)?.ToJsonString();
+
+    /// <summary>A single resolved path parameter value, sourced from the fixture rather than
+    /// the deleted <c>TestData</c> (decision 1).</summary>
+    protected static string FixtureParameter(string operationKey, string name) =>
+        TestHost.Fixtures.ResolvedParameter(operationKey, name, TestHost.FixtureTokens);
+
+    /// <summary>Resolved values for whichever of <paramref name="names"/> the fixture actually
+    /// supplies — an optional query parameter with no value is simply absent (decision 1).</summary>
+    protected static IReadOnlyDictionary<string, string> FixtureQueryParameters(string operationKey, params string[] names) =>
+        TestHost.Fixtures.ResolvedQueryParameters(operationKey, names, TestHost.FixtureTokens);
 }

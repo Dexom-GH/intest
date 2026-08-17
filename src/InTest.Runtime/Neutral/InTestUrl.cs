@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Text;
 
 namespace InTest.Runtime;
@@ -72,7 +73,7 @@ public static class InTestUrl
     /// <para>
     /// InTest ignores the spec's <c>servers[]</c> block, so the configured base URL takes its
     /// place and operation paths are appended to it. A base of <c>https://host/api/</c> against
-    /// paths beginning <c>/api/</c> therefore produces <c>/api/api/…</c>. Every request 404s
+    /// paths beginning <c>/api/</c> therefore produces <c>/api/api/â€¦</c>. Every request 404s
     /// against configuration that looks entirely correct, which is why this is detected rather
     /// than documented.
     /// </para>
@@ -102,8 +103,26 @@ public static class InTestUrl
             $"Base URL '{baseAddress}' and the spec's operation paths both start with '/{duplicated}', " +
             $"so every request would resolve to '/{duplicated}/{duplicated}/...' and return 404." + Environment.NewLine +
             "The base URL substitutes for the spec's servers[0].url, and operation paths are appended " +
-            "to it — so it must not repeat a prefix the paths already carry." + Environment.NewLine +
+            "to it â€” so it must not repeat a prefix the paths already carry." + Environment.NewLine +
             $"Set Api:BaseUrl to '{baseAddress.GetLeftPart(UriPartial.Authority)}/' instead.");
+    }
+
+    /// <summary>
+    /// Builds a query string from name/value pairs, or the empty string when there are none.
+    /// Keys are sorted so the same parameters always render in the same order regardless of
+    /// dictionary enumeration order, keeping generated URLs stable across runs.
+    /// </summary>
+    public static string BuildQuery(IReadOnlyDictionary<string, string> parameters)
+    {
+        ArgumentNullException.ThrowIfNull(parameters);
+
+        if (parameters.Count == 0) return string.Empty;
+
+        var pairs = parameters
+            .OrderBy(kvp => kvp.Key, StringComparer.Ordinal)
+            .Select(kvp => $"{Uri.EscapeDataString(kvp.Key)}={Uri.EscapeDataString(kvp.Value)}");
+
+        return "?" + string.Join("&", pairs);
     }
 
     private static string[] Segments(string path)

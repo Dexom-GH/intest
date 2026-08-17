@@ -4,6 +4,7 @@
 // </auto-generated>
 #nullable enable
 using System.Diagnostics;
+using System.Text;
 using InTest.Runtime;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
@@ -16,9 +17,11 @@ public partial class OrdersTests : Orders.ApiTests.OrdersTestBase
     [Description("Given Orders, when getOrderById, then 200")]
     public async Task GetOrderById_Contract()
     {
+        RequireFixture("getOrderById");
+
         using var request = new HttpRequestMessage(
             HttpMethod.Get,
-            InTestUrl.Build("/orders/{id}", TestData.Require("getOrderById", "id")));
+            InTestUrl.Build("/orders/{id}", FixtureParameter("getOrderById", "id")));
 
         var stopwatch = Stopwatch.StartNew();
         using var response = await Client.SendAsync(request, TestContext.CancellationToken);
@@ -33,6 +36,8 @@ public partial class OrdersTests : Orders.ApiTests.OrdersTestBase
     [Description("Given Orders, when listOrders, then 200")]
     public async Task ListOrders_Contract()
     {
+        RequireFixture("listOrders");
+
         using var request = new HttpRequestMessage(
             HttpMethod.Get,
             InTestUrl.Build("/orders"));

@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Net;
 using System.Text;
+using System.Xml.Linq;
 using InTest.Cli.Commands;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Shouldly;
@@ -28,6 +29,69 @@ public class GeneratedSuiteExecutionTests
           "get": {
             "operationId": "getStatus",
             "tags": ["Status"],
+            "responses": {
+              "200": {
+                "description": "ok",
+                "content": {
+                  "application/json": {
+                    "schema": { "$ref": "#/components/schemas/Status" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "components": {
+        "schemas": {
+          "Status": {
+            "type": "object",
+            "required": ["state"],
+            "properties": { "state": { "type": "string" } }
+          }
+        }
+      }
+    }
+    """;
+
+    /// <summary>
+    /// <see cref="Spec"/> plus a path-parameter operation, used only by
+    /// <see cref="FixtureParameterReachesALiveRequestEndToEnd"/>. This is the F1 live proof Task
+    /// 4a deferred here (its report, lines 1176-1196): a bare GET with no parameters composes no
+    /// fixture at all (decision 1), so it can never prove a fixture is loaded and consumed by a
+    /// running test — only an operation with a required parameter can. Kept as a separate spec
+    /// rather than folded into <see cref="Spec"/> so the two existing tests below, which build
+    /// and run the suite without ever touching <c>fixtures/getStatusById.json</c>, are unaffected
+    /// by this addition.
+    /// </summary>
+    private const string SpecWithPathParameter = """
+    {
+      "openapi": "3.0.3",
+      "info": { "title": "Stub", "version": "1.0" },
+      "paths": {
+        "/api/status": {
+          "get": {
+            "operationId": "getStatus",
+            "tags": ["Status"],
+            "responses": {
+              "200": {
+                "description": "ok",
+                "content": {
+                  "application/json": {
+                    "schema": { "$ref": "#/components/schemas/Status" }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "/api/status/{id}": {
+          "get": {
+            "operationId": "getStatusById",
+            "tags": ["Status"],
+            "parameters": [
+              { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+            ],
             "responses": {
               "200": {
                 "description": "ok",
@@ -98,10 +162,9 @@ public class GeneratedSuiteExecutionTests
         // This spec's only operation is a bare GET with no body and no parameters, so today it
         // composes no fixture at all (decision 1) and this call is a no-op — but it mirrors what
         // an adopter actually runs, and it is what keeps this test realistic if the spec ever
-        // grows an operation that does need one. (Deliberately not done here — see Task 4a's
-        // final report: the generated template still emits TestData.Require for every path
-        // parameter until Task 8 rewires it to consume fixtures, so a fixture-needing operation
-        // added to this spec today would fail at `dotnet test`, not prove the fixture pipeline.)
+        // grows an operation that does need one. The fixture pipeline itself — a required
+        // parameter actually loaded from a fixture and sent on a live request — is proved by
+        // FixtureParameterReachesALiveRequestEndToEnd below, against SpecWithPathParameter.
         (await FixturesRepairCommand.RunAsync(_root, CancellationToken.None)).ShouldBe(0);
 
         (await GenerateCommand.RunAsync(_root, CancellationToken.None)).ShouldBe(0);
@@ -132,6 +195,83 @@ public class GeneratedSuiteExecutionTests
         var output = Path.Combine(_root, "bin", "Debug", "net10.0");
         foreach (var required in new[] { "appsettings.json", "spec-schemas.json", "spec-paths.json" })
             File.Exists(Path.Combine(output, required)).ShouldBeTrue($"{required} did not reach the output directory.");
+    }
+
+    /// <summary>
+    /// The F1 live proof (plan Task 8, Step 2a). Everything else in this file proves a generated
+    /// suite builds and runs; nothing yet proves a fixture is actually <i>loaded and used</i> by
+    /// a running test rather than merely declared for copying (Task 4a proved only the latter).
+    /// Runs exactly the sequence an adopter does — generate, repair, hand-fill the sentinel,
+    /// build, run — against an operation whose only way to succeed is a fixture value reaching a
+    /// live HTTP request.
+    /// </summary>
+    [TestMethod]
+    public async Task FixtureParameterReachesALiveRequestEndToEnd()
+    {
+        File.WriteAllText(Path.Combine(_root, "spec.json"), SpecWithPathParameter);
+
+        InitCommand.Run(_root, "Stub.ApiTests", "spec.json").ShouldBe(0);
+        UseProjectReferenceInsteadOfPackage();
+        PointAtStub();
+
+        // `generate` is read-only under fixtures/ and refuses to run at all while one is
+        // missing (it exits with "no fixture found", the drift check working as intended) — so
+        // `repair` must create the fixture first, exactly as it does in the two tests above.
+        (await FixturesRepairCommand.RunAsync(_root, CancellationToken.None)).ShouldBe(0);
+        (await GenerateCommand.RunAsync(_root, CancellationToken.None)).ShouldBe(0);
+
+        // Guard against the generated suite silently missing the operation entirely (the plan's
+        // second failure mode) as early as possible: if getStatusById were never generated, the
+        // fixture `repair` just created for it would be orphaned and this assertion would catch
+        // it directly, rather than only inferring it later from a shorter trx.
+        var generatedFile = Directory.GetFiles(_root, "StatusTests.g.cs", SearchOption.AllDirectories)
+            .ShouldHaveSingleItem("generate should have produced exactly one StatusTests.g.cs");
+        File.ReadAllText(generatedFile).ShouldContain("GetStatusById_Contract",
+            customMessage: "the operation this test exists to prove must actually be generated");
+
+        var fixturePath = Path.Combine(_root, "fixtures", "getStatusById.json");
+        File.Exists(fixturePath).ShouldBeTrue("`fixtures repair` should have composed one fixture for the required path parameter");
+        var beforeReplace = File.ReadAllText(fixturePath);
+        beforeReplace.ShouldContain("\"TODO:id\"", customMessage: "a required path parameter always gets a sentinel (decision 1)");
+
+        // The step a human adopter performs by hand: fill in the sentinel with a value the
+        // service actually accepts.
+        File.WriteAllText(fixturePath, beforeReplace.Replace("\"TODO:id\"", "\"42\"", StringComparison.Ordinal));
+
+        // Guard against the first failure mode directly, rather than only inferring it from the
+        // live request's outcome below: re-reads the file from disk (not the in-memory string
+        // just written) so a no-op caused by the wrong path, the wrong key, or writing to the
+        // wrong file is caught here rather than only by RequireFixture further down.
+        File.ReadAllText(fixturePath).ShouldNotContain("TODO:id",
+            customMessage: "the sentinel replacement must actually take effect on disk");
+
+        var build = await RunAsync("dotnet", $"build \"{_root}\" --nologo -v q");
+        build.ExitCode.ShouldBe(0, $"generated project failed to build:{Environment.NewLine}{build.Output}");
+
+        var resultsDir = Path.Combine(_root, "TestResults");
+        var test = await RunAsync("dotnet",
+            $"test \"{_root}\" --no-build --nologo --logger \"trx;LogFileName=results.trx\" --results-directory \"{resultsDir}\"");
+
+        var trxPath = Directory.GetFiles(resultsDir, "results.trx", SearchOption.AllDirectories)
+            .ShouldHaveSingleItem($"expected exactly one results.trx under {resultsDir}:{Environment.NewLine}{test.Output}");
+
+        var trx = XDocument.Load(trxPath);
+        var statusByIdResult = trx.Descendants()
+            .Where(e => e.Name.LocalName == "UnitTestResult")
+            .SingleOrDefault(e => (e.Attribute("testName")?.Value ?? "").Contains("GetStatusById_Contract", StringComparison.Ordinal));
+
+        // The assertion that closes the F1 loop: the specific test this fixture exists for was
+        // both present (guards the second failure mode — the suite cannot quietly pass one test
+        // short with nothing noticing) and passed (guards the first — an unresolved sentinel
+        // makes RequireFixture throw before any request is built, and the stub itself rejects
+        // the literal sentinel too, so a no-op replace fails here even if the direct on-disk
+        // check above were somehow fooled).
+        statusByIdResult.ShouldNotBeNull(
+            $"GetStatusById_Contract did not appear in the trx at all — the suite ran one test short and nothing noticed:{Environment.NewLine}{test.Output}");
+        statusByIdResult!.Attribute("outcome")?.Value.ShouldBe("Passed",
+            $"GetStatusById_Contract ran but did not pass — the fixture value likely never reached the live request:{Environment.NewLine}{test.Output}");
+
+        test.ExitCode.ShouldBe(0, test.Output);
     }
 
     private void PointAtStub()
@@ -171,6 +311,14 @@ public class GeneratedSuiteExecutionTests
             {
                 "/health/ready" => (200, """{"status":"ready"}"""),
                 "/api/status" => (200, """{"state":"ok"}"""),
+                // Belt-and-braces, not the primary catch: RequireFixture already throws before a
+                // request carrying an unresolved sentinel is ever built (confirmed by sabotaging
+                // the replace step below — the failure surfaces as FixtureUnresolvedException,
+                // not a live 400). This exists so the live proof still fails loudly, rather than
+                // hanging on a request that never reaches the stub, if that call were ever
+                // removed from the template without the Step 1 unit test catching it first.
+                "/api/status/TODO:id" => (400, """{"error":"unresolved fixture sentinel"}"""),
+                _ when path.StartsWith("/api/status/", StringComparison.Ordinal) => (200, """{"state":"ok"}"""),
                 _ => (404, """{"error":"not found"}""")
             };
 

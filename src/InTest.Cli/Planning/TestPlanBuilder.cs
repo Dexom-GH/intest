@@ -77,7 +77,9 @@ public static class TestPlanBuilder
                     ExpectedStatus: status,
                     SchemaKey: schemaKey,
                     Category: ContractCategory,
-                    NeedsFixture: needsFixture)));
+                    NeedsFixture: needsFixture,
+                    QueryParameterNames: QueryParameters(operation),
+                    HasRequestBody: FixtureComposer.HasJsonBodyToCompose(operation))));
             }
         }
 
@@ -126,6 +128,18 @@ public static class TestPlanBuilder
             ? id
             : $"op:{operationKey}:{status}:{JsonMediaType}";
     }
+
+    /// <summary>
+    /// All declared <c>in: query</c> parameter names, required or not. This is a presence check
+    /// only — it must not replicate <see cref="FixtureComposer"/>'s tiered precedence for which
+    /// of them actually get a fixture entry (decision 1); the template only needs to know whether
+    /// to look any query parameters up at runtime at all.
+    /// </summary>
+    private static IReadOnlyList<string> QueryParameters(OpenApiOperation operation)
+        => (operation.Parameters ?? [])
+            .Where(p => p.In == ParameterLocation.Query)
+            .Select(p => p.Name!)
+            .ToList();
 
     private static IReadOnlyList<string> PathParameters(string path)
     {

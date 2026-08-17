@@ -24,6 +24,15 @@ public static class TestHost
     /// </summary>
     public static FixtureValidation.Report FixtureValidationReport { get; private set; } = null!;
 
+    /// <summary>
+    /// The token resolver built once here and reused by every generated request via
+    /// <c>ApiTestBase</c>'s fixture helpers — the same instance <see cref="FixtureValidationReport"/>
+    /// was built from, so <c>{{config:}}</c>/<c>{{secret:}}</c> are read once per run (Task 6's
+    /// resolution-timing table) while <c>{{utcNow}}</c> still varies per call, because
+    /// <c>TokenResolver</c> invokes the clock itself on every <c>Resolve</c> rather than caching it.
+    /// </summary>
+    public static TokenResolver FixtureTokens { get; private set; } = null!;
+
     /// <summary>Registration hook. The generated project's TestStartup assigns this before
     /// InitializeAsync runs, so team registrations compose with InTest's.</summary>
     public static Action<IServiceCollection, IConfiguration>? ConfigureServices { get; set; }
@@ -38,7 +47,8 @@ public static class TestHost
         context.WriteLine($"InTest run id: {RunIdValue} (profile '{Profile}')");
 
         Fixtures = FixtureStore.Load(AppContext.BaseDirectory, Profile);
-        FixtureValidationReport = FixtureValidation.Build(Fixtures, new TokenResolver(Configuration, RunIdValue));
+        FixtureTokens = new TokenResolver(Configuration, RunIdValue);
+        FixtureValidationReport = FixtureValidation.Build(Fixtures, FixtureTokens);
         // Written once here so every problem across every fixture lands in the .trx and the CI
         // summary, even though only the operations actually blocked go on to fail (decision 2).
         context.WriteLine(FixtureValidationReport.Message);

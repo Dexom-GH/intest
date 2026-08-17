@@ -4,6 +4,7 @@
 // </auto-generated>
 #nullable enable
 using System.Diagnostics;
+using System.Text;
 using InTest.Runtime;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
@@ -20,9 +21,14 @@ public partial class {{ class_name }} : {{ base_class }}
 {{~ end ~}}
     public async Task {{ tc.method_name }}()
     {
+        RequireFixture("{{ tc.operation_key }}");
+
         using var request = new HttpRequestMessage(
             HttpMethod.{{ tc.http_method_pascal }},
-            InTestUrl.Build("{{ tc.path_template }}"{{ tc.path_argument_list }}));
+            InTestUrl.Build("{{ tc.path_template }}"{{ tc.path_argument_list }}){{ tc.query_expression }});
+{{~ if tc.has_body ~}}
+        request.Content = new StringContent(FixtureBody("{{ tc.operation_key }}")!, Encoding.UTF8, "application/json");
+{{~ end ~}}
 
         var stopwatch = Stopwatch.StartNew();
         using var response = await Client.SendAsync(request, TestContext.CancellationToken);

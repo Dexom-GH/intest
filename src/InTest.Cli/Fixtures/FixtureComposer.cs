@@ -100,8 +100,11 @@ public static class FixtureComposer
     /// all (valid OpenAPI) — there is nothing to compose a value from, so that counts as no body,
     /// the same as no <c>application/json</c> entry existing in the first place. Shared by
     /// <see cref="Compose"/> and <see cref="NeedsFixture"/> so the two can never disagree on it.
+    /// Also <c>internal</c> so <c>TestPlanBuilder</c> can set <c>TestCasePlan.HasRequestBody</c>
+    /// from this exact check rather than re-deriving it — the same reasoning as
+    /// <see cref="NeedsFixture"/> being the sole authority on whether an operation gets a fixture.
     /// </summary>
-    private static bool HasJsonBodyToCompose(OpenApiOperation operation) =>
+    internal static bool HasJsonBodyToCompose(OpenApiOperation operation) =>
         operation.RequestBody?.Content?.TryGetValue(JsonMediaType, out var media) is true && media.Schema is not null;
 
     private static string ParameterScalarToString(JsonNode node) =>

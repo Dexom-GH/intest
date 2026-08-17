@@ -84,6 +84,88 @@ public sealed class FixtureStore
             $"No fixture is defined for operation '{key}'. Run `intest fixtures repair` to generate one.");
     }
 
+    /// <summary>
+    /// The fixture's body with every <c>{{...}}</c> token resolved — a fresh <see cref="JsonNode"/>
+    /// on every call, per Task 6's pinned interface, so <c>{{utcNow}}</c> differs between requests
+    /// rather than being resolved once and reused. Null when the operation's fixture carries no
+    /// body at all, which is the normal shape for an operation with no request body.
+    /// </summary>
+    public JsonNode? ResolvedBody(string key, TokenResolver resolver)
+    {
+        ArgumentNullException.ThrowIfNull(resolver);
+
+        var body = Get(key).Body;
+        return body is null ? null : ResolveNode(body, key + ".json", resolver);
+    }
+
+    /// <summary>
+    /// A single resolved parameter value. Every caller of this overload is a path parameter —
+    /// decision 1 makes those unconditionally required — so a name absent from
+    /// <c>$parameters</c> is a bug to surface loudly rather than send a literal unsubstituted
+    /// path segment.
+    /// </summary>
+    public string ResolvedParameter(string key, string name, TokenResolver resolver)
+    {
+        ArgumentNullException.ThrowIfNull(resolver);
+
+        var fixture = Get(key);
+        if (!fixture.Parameters.TryGetValue(name, out var raw))
+            throw new FixtureNotFoundException(
+                $"Fixture 'fixtures/{key}.json' has no '$parameters.{name}'. " +
+                "Run `intest fixtures repair` to generate one.");
+
+        return resolver.Resolve(raw, key + ".json");
+    }
+
+    /// <summary>
+    /// Resolved values for whichever of <paramref name="names"/> the fixture actually supplies.
+    /// A name absent from <c>$parameters</c> — an optional query parameter the spec gave no
+    /// example or default, decision 1's fourth row — is silently omitted rather than treated as
+    /// an error, and an operation with no fixture at all yields an empty result the same way: a
+    /// query-only operation whose parameters are all optional-with-no-value never needs a fixture
+    /// file to exist at all.
+    /// </summary>
+    public IReadOnlyDictionary<string, string> ResolvedQueryParameters(
+        string key, IReadOnlyCollection<string> names, TokenResolver resolver)
+    {
+        ArgumentNullException.ThrowIfNull(names);
+        ArgumentNullException.ThrowIfNull(resolver);
+
+        var result = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (names.Count == 0 || !_fixtures.TryGetValue(key, out var fixture)) return result;
+
+        var fileName = key + ".json";
+        foreach (var name in names)
+            if (fixture.Parameters.TryGetValue(name, out var raw))
+                result[name] = resolver.Resolve(raw, fileName);
+
+        return result;
+    }
+
+    private static JsonNode ResolveNode(JsonNode node, string fileName, TokenResolver resolver)
+    {
+        switch (node)
+        {
+            case JsonObject obj:
+                var newObj = new JsonObject();
+                foreach (var (name, child) in obj)
+                    newObj[name] = child is null ? null : ResolveNode(child, fileName, resolver);
+                return newObj;
+
+            case JsonArray array:
+                var newArray = new JsonArray();
+                foreach (var element in array)
+                    newArray.Add(element is null ? null : ResolveNode(element, fileName, resolver));
+                return newArray;
+
+            case JsonValue value when value.TryGetValue<string>(out var text):
+                return JsonValue.Create(resolver.Resolve(text, fileName));
+
+            default:
+                return node.DeepClone();
+        }
+    }
+
     private static string KeyOf(string path) => Path.GetFileNameWithoutExtension(path);
 
     private static Fixture ParseFile(string path)

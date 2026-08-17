@@ -13,6 +13,36 @@ public class TemplateRendererTests
         [new TestCasePlan("GetOrderById_Contract", "Given Orders, when getOrderById, then 200",
             "getOrderById", false, httpMethod, "/orders/{id}", ["id"], 200, schemaKey, "Contract")]);
 
+    private static TestClassPlan PlanWithQueryParameters(params string[] queryParameterNames) => new(
+        "OrdersTests", "Orders",
+        [new TestCasePlan(
+            MethodName: "GetOrderById_Contract",
+            DisplayName: "Given Orders, when getOrderById, then 200",
+            OperationKey: "getOrderById",
+            OperationKeySynthesized: false,
+            HttpMethod: "GET",
+            PathTemplate: "/orders/{id}",
+            PathParameterNames: ["id"],
+            ExpectedStatus: 200,
+            SchemaKey: "Order",
+            Category: "Contract",
+            QueryParameterNames: queryParameterNames)]);
+
+    private static TestClassPlan PlanWithBody() => new(
+        "OrdersTests", "Orders",
+        [new TestCasePlan(
+            MethodName: "CreateOrder_Contract",
+            DisplayName: "Given Orders, when createOrder, then 201",
+            OperationKey: "createOrder",
+            OperationKeySynthesized: false,
+            HttpMethod: "POST",
+            PathTemplate: "/orders",
+            PathParameterNames: [],
+            ExpectedStatus: 201,
+            SchemaKey: "Order",
+            Category: "Contract",
+            HasRequestBody: true)]);
+
     private static string Render(TestClassPlan plan)
         => new TemplateRenderer().RenderClass(plan, "Orders.ApiTests", "Orders.ApiTests.OrdersTestBase");
 
@@ -75,5 +105,72 @@ public class TemplateRendererTests
     public void IsDeterministic()
     {
         Render(Plan()).ShouldBe(Render(Plan()));
+    }
+
+    [TestMethod]
+    public void RendersAStringContentBodyFromTheFixture()
+    {
+        var rendered = Render(PlanWithBody());
+
+        rendered.ShouldContain("FixtureBody(\"createOrder\")");
+        rendered.ShouldContain("new StringContent(");
+        rendered.ShouldContain("application/json");
+    }
+
+    [TestMethod]
+    public void SubstitutesAPathParameterFromTheFixtureRatherThanTestData()
+    {
+        var rendered = Render(Plan());
+
+        rendered.ShouldContain("FixtureParameter(\"getOrderById\", \"id\")");
+        rendered.ShouldNotContain("TestData");
+    }
+
+    [TestMethod]
+    public void AppendsOnlyTheQueryParametersTheFixtureSupplies()
+    {
+        var rendered = Render(PlanWithQueryParameters("page", "sort"));
+
+        rendered.ShouldContain("InTestUrl.BuildQuery(");
+        rendered.ShouldNotContain("?page=", customMessage: "values come from the fixture at runtime, not the template");
+    }
+
+    [TestMethod]
+    public void EmitsNoQueryStringWhenThereAreNoQueryParameters()
+    {
+        Render(Plan()).ShouldNotContain("BuildQuery");
+    }
+
+    [TestMethod]
+    public void CallsRequireFixtureBeforeBuildingTheRequest()
+    {
+        var rendered = Render(Plan());
+
+        rendered.ShouldContain("RequireFixture(\"getOrderById\")");
+        rendered.IndexOf("RequireFixture(", StringComparison.Ordinal)
+            .ShouldBeLessThan(rendered.IndexOf("new HttpRequestMessage(", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
+    public void NeverReferencesTestData()
+    {
+        Render(PlanWithBody()).ShouldNotContain("TestData");
+        Render(PlanWithQueryParameters("page")).ShouldNotContain("TestData");
+    }
+
+    [TestMethod]
+    public void EmitsNoStrayBlankLinesWithABodyOrQueryParameters()
+    {
+        // EmitsNoStrayBlankLines above only exercises the mutates/[DoNotParallelize] branch.
+        // The has_body and query_expression conditionals are newer still (Task 8) and are
+        // exactly where Scriban whitespace control breaks (unclosed '~}}' leaks a blank line
+        // per tag), so they get their own guard rather than trusting the older test to cover them.
+        var withBody = Render(PlanWithBody());
+        withBody.ShouldNotContain("\n\n\n");
+        withBody.ShouldNotContain("\n\n    }");
+
+        var withQuery = Render(PlanWithQueryParameters("page", "sort"));
+        withQuery.ShouldNotContain("\n\n\n");
+        withQuery.ShouldNotContain("\n\n    }");
     }
 }

@@ -39,4 +39,32 @@ public class InTestUrlTests
     {
         Should.Throw<ArgumentException>(() => InTestUrl.Build("/orders/{id}/items/{sku}", "7"));
     }
+
+    [TestMethod]
+    public void BuildQuery_ReturnsEmptyForNoParameters()
+    {
+        InTestUrl.BuildQuery(new Dictionary<string, string>()).ShouldBe(string.Empty);
+    }
+
+    [TestMethod]
+    public void BuildQuery_PrefixesWithQuestionMarkAndJoinsWithAmpersand()
+    {
+        InTestUrl.BuildQuery(new Dictionary<string, string> { ["page"] = "2", ["sort"] = "name" })
+                 .ShouldBe("?page=2&sort=name");
+    }
+
+    [TestMethod]
+    public void BuildQuery_EscapesNamesAndValues()
+    {
+        InTestUrl.BuildQuery(new Dictionary<string, string> { ["q"] = "a b&c=d" })
+                 .ShouldBe("?q=a%20b%26c%3Dd");
+    }
+
+    [TestMethod]
+    public void BuildQuery_IsOrderIndependentSoGeneratedUrlsAreStable()
+    {
+        var forward = InTestUrl.BuildQuery(new Dictionary<string, string> { ["b"] = "1", ["a"] = "2" });
+        var reverse = InTestUrl.BuildQuery(new Dictionary<string, string> { ["a"] = "2", ["b"] = "1" });
+        forward.ShouldBe(reverse);
+    }
 }
