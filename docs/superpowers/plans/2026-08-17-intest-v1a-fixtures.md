@@ -1398,6 +1398,22 @@ explicit about which it wants:
 | `FixtureStore.ResolvedParameter(key, name)` | A resolved `string`, per call | Generated tests building the path and query string |
 
 Cached tokens are resolved once at startup and reused; only `{{utcNow}}` is evaluated per call.
+
+> **Measured after implementation — this sentence overstates what ships, deliberately left as-is
+> above so the intent is still readable.** Instrumenting `IConfiguration` with a counting wrapper
+> and calling `ResolvedBody` twice on one `TokenResolver` showed `{{config:}}` and `{{secret:}}`
+> are re-read on *every* call, exactly like `{{utcNow}}` — not resolved once and reused. The only
+> token genuinely fixed for the resolver's lifetime is `{{runId}}`, bound in the constructor.
+>
+> Accepted rather than fixed. The concern the split exists to serve is met: validation still reads
+> raw, unresolved values through `Get`, so it never resolves `{{config:}}` before configuration
+> exists. The other half — "every request would re-read configuration" — costs nothing in practice,
+> because `IConfiguration` serves an in-memory dictionary after its providers are built. Adding a
+> cache would buy no measurable time and would introduce a staleness question nothing needs.
+>
+> Recorded because this plan's standing rule is that code and document must not drift silently. If
+> a future provider makes configuration reads expensive (a remote secret store, say), this is the
+> line to revisit.
 Without this split, either validation would resolve `{{config:}}` before configuration exists,
 or every request would re-read configuration.
 
@@ -1508,7 +1524,7 @@ git commit -m "feat(runtime): aggregated fixture validation with per-operation b
 - Delete: `src/InTest.Runtime/Neutral/TestData.cs`
 - Test: `tests/InTest.Cli.Tests/TemplateRendererTests.cs` (extend), `tests/InTest.Runtime.Tests/InTestUrlTests.cs` (extend), `tests/InTest.Golden.Tests/` (regenerate golden)
 
-- [ ] **Step 0: Add `InTestUrl.BuildQuery` with its own tests**
+- [x] **Step 0: Add `InTestUrl.BuildQuery` with its own tests**
 
 `InTestUrl` currently has `NormalizeBase`, `Build` and `EnsureNoPrefixDuplication`. The template
 below emits a call to `BuildQuery`, so it must exist first. Percent-encoding is where this goes
@@ -1544,7 +1560,7 @@ public void BuildQuery_IsOrderIndependentSoGeneratedUrlsAreStable()
 }
 ```
 
-- [ ] **Step 1: Extend the renderer tests**
+- [x] **Step 1: Extend the renderer tests**
 
 A POST operation must render a `StringContent` body from the fixture with `application/json`;
 a GET with a **path** parameter must substitute it into the path template from the fixture
@@ -1574,7 +1590,7 @@ public void EmitsNoQueryStringWhenThereAreNoQueryParameters()
 This closes the other half of decision 1: sentinelling a parameter the generated code never
 sends would block an operation for a value that could not have mattered.
 
-- [ ] **Step 2: Update the template, delete `TestData`, regenerate the golden file**
+- [x] **Step 2: Update the template, delete `TestData`, regenerate the golden file**
 
 ```bash
 INTEST_UPDATE_GOLDEN=1 dotnet test tests/InTest.Golden.Tests --filter "FullyQualifiedName~GoldenFileTests"
@@ -1583,7 +1599,7 @@ dotnet test tests/InTest.Golden.Tests --filter "FullyQualifiedName~GoldenFileTes
 
 Read the regenerated golden file before committing. It locks in whatever it is handed.
 
-- [ ] **Step 2a: Close the F1 loop Task 4a had to defer — the live proof**
+- [x] **Step 2a: Close the F1 loop Task 4a had to defer — the live proof**
 
 **This is the step that makes F1 unable to recur silently, and it is the one most likely to be
 skipped, because everything is green without it.** Task 4a proved a fixture is *declared* for
@@ -1609,11 +1625,11 @@ nothing:
 - If `getStatusById` is never generated at all, the suite passes with one fewer test and nothing
   notices. Assert the generated suite contains and runs that specific test.
 
-- [ ] **Step 3: Verify no stray blank lines survived the template change**
+- [x] **Step 3: Verify no stray blank lines survived the template change**
 
 `EmitsNoStrayBlankLines` already guards this and must still pass — the template now has more conditional blocks, which is exactly where whitespace control breaks.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git commit -m "feat(cli): emit request bodies and fixture-sourced parameters"
@@ -1645,7 +1661,7 @@ Three specific places, all currently false once this plan lands:
 
 `survey`, `--check` and YAML stay on the not-yet-built list — this plan does not deliver them.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git commit -m "docs: fixtures are built; validation blocks operations rather than the run"
