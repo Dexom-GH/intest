@@ -29,12 +29,11 @@ public static class TestPlanBuilder
             {
                 var key = OperationKey.Resolve(operation.OperationId, method.Method, path);
 
-                var needsFixture =
-                    operation.RequestBody?.Content?.ContainsKey(JsonMediaType) is true ||
-                    (operation.Parameters ?? []).Any(p =>
-                        // Same predicate as Task 2's composer — a path parameter is required whether or not
-                        // the document says so, because it cannot be omitted from the URL.
-                        p.In is ParameterLocation.Path || (p.Required && p.In is ParameterLocation.Query));
+                // Delegated to the composer rather than reproduced here: it alone knows which
+                // parameters it actually emits a value for (an optional query parameter with an
+                // example or default still produces one), so it is the only place that can answer
+                // this without risking drift from what a fixture write would really do.
+                var needsFixture = FixtureComposer.NeedsFixture(operation);
 
                 if (needsFixture && !FixtureDocument.TryValidateOperationKey(key.Value, out var reason))
                 {

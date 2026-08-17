@@ -133,4 +133,67 @@ public class TestPlanBuilderTests
         plan.Skipped.ShouldBeEmpty();
         plan.Classes.SelectMany(c => c.Cases).Count().ShouldBe(1);
     }
+
+    [TestMethod]
+    public async Task SkipsAnUnusableIdWhenAnOptionalQueryParameterCarriesAnExample()
+    {
+        // No body and no required parameter, but the composer still surfaces a real value for
+        // this optional query parameter (tier 2) — so a fixture IS written, and the unusable
+        // operationId must be caught before that write is attempted.
+        const string spec = """
+        {
+          "openapi":"3.0.3","info":{"title":"T","version":"1"},
+          "paths":{"/a":{"get":{"operationId":"Orders/List",
+            "parameters":[{"name":"page","in":"query","required":false,"schema":{"type":"integer","example":2}}],
+            "responses":{"200":{"description":"ok"}}}}}
+        }
+        """;
+
+        var plan = TestPlanBuilder.Build((await SpecLoader.LoadFromTextAsync(spec)).Document);
+
+        plan.Skipped.ShouldContain(sk => sk.OperationKey == "Orders/List" && sk.Reason.Contains("'/'"));
+        plan.Classes.SelectMany(c => c.Cases).ShouldNotContain(c => c.OperationKey == "Orders/List");
+    }
+
+    [TestMethod]
+    public async Task SkipsAnUnusableIdWhenAnOptionalQueryParameterCarriesADefault()
+    {
+        // Same shape as above but tier 3 (a declared default) rather than tier 2 (an example) —
+        // the composer still emits a real value, so the same skip must fire.
+        const string spec = """
+        {
+          "openapi":"3.0.3","info":{"title":"T","version":"1"},
+          "paths":{"/a":{"get":{"operationId":"Orders/List",
+            "parameters":[{"name":"page","in":"query","required":false,"schema":{"type":"integer","default":2}}],
+            "responses":{"200":{"description":"ok"}}}}}
+        }
+        """;
+
+        var plan = TestPlanBuilder.Build((await SpecLoader.LoadFromTextAsync(spec)).Document);
+
+        plan.Skipped.ShouldContain(sk => sk.OperationKey == "Orders/List" && sk.Reason.Contains("'/'"));
+        plan.Classes.SelectMany(c => c.Cases).ShouldNotContain(c => c.OperationKey == "Orders/List");
+    }
+
+    [TestMethod]
+    public async Task DoesNotSkipAnUnusableIdWhenTheOptionalQueryParameterHasNeitherExampleNorDefault()
+    {
+        // Extends DoesNotSkipAnUnusableIdWhenTheOperationNeedsNoFixture (which covers the
+        // no-parameters case) to an optional parameter that carries no example and no default:
+        // the composer emits nothing for it either, so no fixture file is ever written and the
+        // unusable operationId still never matters.
+        const string spec = """
+        {
+          "openapi":"3.0.3","info":{"title":"T","version":"1"},
+          "paths":{"/a":{"get":{"operationId":"Orders/List",
+            "parameters":[{"name":"page","in":"query","required":false,"schema":{"type":"integer"}}],
+            "responses":{"200":{"description":"ok"}}}}}
+        }
+        """;
+
+        var plan = TestPlanBuilder.Build((await SpecLoader.LoadFromTextAsync(spec)).Document);
+
+        plan.Skipped.ShouldBeEmpty();
+        plan.Classes.SelectMany(c => c.Cases).Count().ShouldBe(1);
+    }
 }

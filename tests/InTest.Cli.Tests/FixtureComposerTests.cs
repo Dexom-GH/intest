@@ -199,4 +199,49 @@ public class FixtureComposerTests
         fixture.Body!["name"]!.GetValue<string>().ShouldBe("TODO:name");
         fixture.Body["child"].ShouldBeNull("a repeated reference emits null and stops");
     }
+
+    private const string NeedsFixtureSpec = """
+    {
+      "openapi":"3.0.3","info":{"title":"T","version":"1"},
+      "paths":{
+        "/body":{"post":{
+          "requestBody":{"content":{"application/json":{"schema":{"type":"object"}}}},
+          "responses":{"201":{"description":"ok"}}}},
+        "/path/{id}":{"get":{
+          "parameters":[{"name":"id","in":"path","required":true,"schema":{"type":"string"}}],
+          "responses":{"200":{"description":"ok"}}}},
+        "/query":{"get":{
+          "parameters":[{"name":"page","in":"query","required":false,"schema":{"type":"integer","example":2}}],
+          "responses":{"200":{"description":"ok"}}}},
+        "/nothing":{"get":{"responses":{"200":{"description":"ok"}}}}
+      }
+    }
+    """;
+
+    [TestMethod]
+    public async Task NeedsFixtureAgreesExactlyWithWhatComposeActuallyProduces()
+    {
+        // Pins the two sides together: NeedsFixture must say yes precisely when Compose would
+        // write something a caller could observe (a body, or a non-empty $parameters block) —
+        // never a hardcoded true/false per case, since the point is the equivalence itself.
+        var loaded = await SpecLoader.LoadFromTextAsync(NeedsFixtureSpec);
+        var document = loaded.Document;
+
+        var cases = new (string Path, string Method)[]
+        {
+            ("/body", "POST"),
+            ("/path/{id}", "GET"),
+            ("/query", "GET"),
+            ("/nothing", "GET"),
+        };
+
+        foreach (var (path, method) in cases)
+        {
+            var operation = document.Paths[path].Operations![new HttpMethod(method)];
+            var fixture = FixtureComposer.Compose(document, path, method, "op_key", "intest 0.2.0");
+            var composeProducesSomething = fixture.Body is not null || fixture.Parameters.Count > 0;
+
+            FixtureComposer.NeedsFixture(operation).ShouldBe(composeProducesSomething, $"{method} {path}");
+        }
+    }
 }

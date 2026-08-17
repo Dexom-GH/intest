@@ -14,6 +14,23 @@ public static class FixtureComposer
 {
     private const string JsonMediaType = "application/json";
 
+    /// <summary>
+    /// Whether composing this operation would produce a fixture at all — a JSON request body, or
+    /// at least one path/query parameter <see cref="ParameterValue"/> actually emits a value for.
+    /// The sole authority for that question, so a caller deciding whether a fixture file will
+    /// exist (and therefore whether its filename needs to be usable) never drifts from what
+    /// <see cref="Compose"/> itself does.
+    /// </summary>
+    public static bool NeedsFixture(OpenApiOperation operation)
+    {
+        ArgumentNullException.ThrowIfNull(operation);
+
+        if (operation.RequestBody?.Content?.ContainsKey(JsonMediaType) is true) return true;
+
+        return (operation.Parameters ?? []).Any(p =>
+            p.In is (ParameterLocation.Path or ParameterLocation.Query) && ParameterValue(p, null) is not null);
+    }
+
     public static FixtureDocument Compose(
         OpenApiDocument document, string path, string httpMethod, string operationKey, string generatedBy)
     {
@@ -50,26 +67,26 @@ public static class FixtureComposer
     /// value (an <c>example</c> or a <c>default</c>), and is omitted (returns <see langword="null"/>)
     /// otherwise so it is never sent.
     /// </summary>
-    private static string? ParameterValue(IOpenApiParameter parameter, TierTracker tier)
+    private static string? ParameterValue(IOpenApiParameter parameter, TierTracker? tier)
     {
         var alwaysSentinelled = parameter.In is ParameterLocation.Path
             || (parameter.Required && parameter.In is ParameterLocation.Query);
 
         if (alwaysSentinelled)
         {
-            tier.Record(4);
+            tier?.Record(4);
             return $"TODO:{parameter.Name}";
         }
 
         if (FirstExample(parameter.Schema) is { } example)
         {
-            tier.Record(2);
+            tier?.Record(2);
             return ParameterScalarToString(example);
         }
 
         if (parameter.Schema?.Default is { } defaultValue)
         {
-            tier.Record(3);
+            tier?.Record(3);
             return ParameterScalarToString(defaultValue);
         }
 
