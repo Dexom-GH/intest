@@ -213,7 +213,10 @@ public class FixtureComposerTests
         "/query":{"get":{
           "parameters":[{"name":"page","in":"query","required":false,"schema":{"type":"integer","example":2}}],
           "responses":{"200":{"description":"ok"}}}},
-        "/nothing":{"get":{"responses":{"200":{"description":"ok"}}}}
+        "/nothing":{"get":{"responses":{"200":{"description":"ok"}}}},
+        "/body-no-schema":{"post":{
+          "requestBody":{"content":{"application/json":{}}},
+          "responses":{"201":{"description":"ok"}}}}
       }
     }
     """;
@@ -233,6 +236,7 @@ public class FixtureComposerTests
             ("/path/{id}", "GET"),
             ("/query", "GET"),
             ("/nothing", "GET"),
+            ("/body-no-schema", "POST"),
         };
 
         foreach (var (path, method) in cases)

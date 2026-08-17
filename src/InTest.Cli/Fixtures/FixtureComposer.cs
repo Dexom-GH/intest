@@ -25,7 +25,7 @@ public static class FixtureComposer
     {
         ArgumentNullException.ThrowIfNull(operation);
 
-        if (operation.RequestBody?.Content?.ContainsKey(JsonMediaType) is true) return true;
+        if (HasJsonBodyToCompose(operation)) return true;
 
         return (operation.Parameters ?? []).Any(p =>
             p.In is (ParameterLocation.Path or ParameterLocation.Query) && ParameterValue(p, null) is not null);
@@ -49,8 +49,8 @@ public static class FixtureComposer
         }
 
         JsonNode? body = null;
-        if (operation.RequestBody?.Content?.TryGetValue(JsonMediaType, out var media) is true && media.Schema is not null)
-            body = ComposeBody(media, tier);
+        if (HasJsonBodyToCompose(operation))
+            body = ComposeBody(operation.RequestBody!.Content![JsonMediaType], tier);
 
         return new FixtureDocument
         {
@@ -65,7 +65,9 @@ public static class FixtureComposer
     /// <c>required</c> flag — see decision 1. A query parameter is sentinelled only when it is
     /// genuinely required; an optional one is surfaced solely when the spec gives it a real
     /// value (an <c>example</c> or a <c>default</c>), and is omitted (returns <see langword="null"/>)
-    /// otherwise so it is never sent.
+    /// otherwise so it is never sent. <paramref name="tier"/> is <see langword="null"/> when the
+    /// caller (<see cref="NeedsFixture"/>) only wants to know whether a value would be emitted and
+    /// has no <see cref="TierTracker"/> of its own to record into.
     /// </summary>
     private static string? ParameterValue(IOpenApiParameter parameter, TierTracker? tier)
     {
@@ -92,6 +94,15 @@ public static class FixtureComposer
 
         return null;
     }
+
+    /// <summary>
+    /// A <c>requestBody</c> can declare an <c>application/json</c> entry with no <c>schema</c> at
+    /// all (valid OpenAPI) — there is nothing to compose a value from, so that counts as no body,
+    /// the same as no <c>application/json</c> entry existing in the first place. Shared by
+    /// <see cref="Compose"/> and <see cref="NeedsFixture"/> so the two can never disagree on it.
+    /// </summary>
+    private static bool HasJsonBodyToCompose(OpenApiOperation operation) =>
+        operation.RequestBody?.Content?.TryGetValue(JsonMediaType, out var media) is true && media.Schema is not null;
 
     private static string ParameterScalarToString(JsonNode node) =>
         node is JsonValue value && value.TryGetValue<string>(out var text) ? text : node.ToJsonString();
