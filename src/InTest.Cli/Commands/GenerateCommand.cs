@@ -1,10 +1,12 @@
 using System.Text.Json.Nodes;
 using System.Text.Json;
 using InTest.Cli.Coverage;
+using InTest.Cli.Fixtures;
 using InTest.Cli.Planning;
 using InTest.Cli.Rendering;
 using InTest.Cli.Schemas;
 using InTest.Cli.Spec;
+using Microsoft.OpenApi;
 
 namespace InTest.Cli.Commands;
 
@@ -13,6 +15,12 @@ public static class GenerateCommand
     public const int ExitOk = 0;
     public const int ExitWorkOutstanding = 1;
     public const int ExitToolError = 2;
+
+    // Hardcoded to match InitCommand's current scaffolding and FixturesRepairCommand's own copy
+    // of this constant (both will read one source once Task 4a lands — see "Decisions this plan
+    // encodes" §5's note in the plan document). Used only to compose a comparison fixture in
+    // memory for drift detection below; generate never writes one to disk.
+    private const string CliVersion = "0.1.0";
 
     /// <summary>Longest leading run of path segments shared by every generated operation.</summary>
     internal static string CommonPathPrefix(Planning.TestPlan plan)
@@ -38,8 +46,11 @@ public static class GenerateCommand
         return shared.Count == 0 ? string.Empty : "/" + string.Join("/", shared);
     }
 
-    public static async Task<int> RunAsync(string projectRoot, CancellationToken cancellationToken)
+    public static async Task<int> RunAsync(
+        string projectRoot, CancellationToken cancellationToken, TextWriter? report = null)
     {
+        report ??= Console.Out;
+
         try
         {
             var configPath = Path.Combine(projectRoot, "intest.json");
@@ -59,6 +70,20 @@ public static class GenerateCommand
                                        .ConfigureAwait(false);
 
             var plan = TestPlanBuilder.Build(spec.Document);
+
+            // Drift is checked — and reported — before anything is written. generate never
+            // writes under fixtures/ (that is fixtures repair's job alone, Task 3); it only
+            // compares what each operation needing a fixture would compose today against what
+            // is actually committed, so a spec change that silently invalidates a fixture is
+            // caught here instead of surfacing as a confusing runtime failure in Task 9's suite.
+            var drift = DetectFixtureDrift(spec.Document, plan, projectRoot);
+            if (drift.Count > 0)
+            {
+                foreach (var message in drift) report.WriteLine(message);
+                report.WriteLine("Run 'intest fixtures repair' to create or update the fixture(s) listed above.");
+                return ExitWorkOutstanding;
+            }
+
             var generated = Path.Combine(projectRoot, "Generated");
 
             if (Directory.Exists(generated)) Directory.Delete(generated, recursive: true);
@@ -102,5 +127,47 @@ public static class GenerateCommand
             Console.Error.WriteLine($"intest: unexpected failure: {ex.GetType().Name}: {ex.Message}");
             return ExitToolError;
         }
+    }
+
+    /// <summary>
+    /// One message per operation whose fixture is missing entirely, or missing a property or
+    /// parameter that <see cref="FixtureComposer.Compose"/> would put there today — the same
+    /// comparison <c>fixtures repair</c> uses (<see cref="FixtureDrift"/>), but read-only: nothing
+    /// here is written back. Iterates <paramref name="plan"/> rather than the raw document for the
+    /// same reason repair does — <see cref="TestPlanBuilder"/> is the sole authority on which
+    /// operations exist, so drift here can never disagree with what repair would create.
+    /// </summary>
+    private static List<string> DetectFixtureDrift(OpenApiDocument document, Planning.TestPlan plan, string projectRoot)
+    {
+        var messages = new List<string>();
+        var fixturesDir = Path.Combine(projectRoot, "fixtures");
+        var generatedBy = $"intest {CliVersion}";
+
+        foreach (var testCase in plan.Classes.SelectMany(c => c.Cases)
+                                              .Where(c => c.NeedsFixture)
+                                              .OrderBy(c => c.OperationKey, StringComparer.Ordinal))
+        {
+            var fixturePath = Path.Combine(fixturesDir, FixtureDocument.FileNameFor(testCase.OperationKey));
+
+            if (!File.Exists(fixturePath))
+            {
+                messages.Add($"{testCase.OperationKey}: no fixture found.");
+                continue;
+            }
+
+            var existing = FixtureDocument.Parse(File.ReadAllText(fixturePath));
+            var composed = FixtureComposer.Compose(
+                document, testCase.PathTemplate, testCase.HttpMethod, testCase.OperationKey, generatedBy);
+
+            var comparison = FixtureDrift.Compare(existing, composed);
+            var missing = comparison.MissingProperties.Concat(comparison.MissingParameters)
+                                     .OrderBy(name => name, StringComparer.Ordinal)
+                                     .ToList();
+
+            if (missing.Count > 0)
+                messages.Add($"{testCase.OperationKey}: fixture is missing {string.Join(", ", missing)}.");
+        }
+
+        return messages;
     }
 }

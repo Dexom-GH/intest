@@ -62,6 +62,13 @@ public class CompileVerificationTests
     [TestMethod]
     public async Task GeneratedProjectCompiles()
     {
+        // Specs/orders.json's GET /orders/{id} has a required path parameter, so under decision
+        // 1 that operation needs a fixture. This test never calls `init` — it hand-writes
+        // intest.json above — but repair needs only intest.json plus the spec, so it works
+        // directly here too. Without this, generate now reports drift instead of compiling
+        // anything (Task 4).
+        (await FixturesRepairCommand.RunAsync(_root, CancellationToken.None)).ShouldBe(0);
+
         (await GenerateCommand.RunAsync(_root, CancellationToken.None)).ShouldBe(0);
 
         var process = Process.Start(new ProcessStartInfo("dotnet", $"build \"{_root}\" --nologo -v q")

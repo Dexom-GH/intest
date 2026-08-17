@@ -95,6 +95,12 @@ public class GeneratedSuiteExecutionTests
         UseProjectReferenceInsteadOfPackage();
         PointAtStub();
 
+        // This spec's only operation is a bare GET with no body and no parameters, so today it
+        // composes no fixture at all (decision 1) and this call is a no-op — but it mirrors what
+        // an adopter actually runs, and it is what keeps this test realistic if the spec ever
+        // grows an operation that does need one (see Task 4a).
+        (await FixturesRepairCommand.RunAsync(_root, CancellationToken.None)).ShouldBe(0);
+
         (await GenerateCommand.RunAsync(_root, CancellationToken.None)).ShouldBe(0);
 
         var build = await RunAsync("dotnet", $"build \"{_root}\" --nologo -v q");
@@ -115,6 +121,7 @@ public class GeneratedSuiteExecutionTests
         InitCommand.Run(_root, "Stub.ApiTests", "spec.json").ShouldBe(0);
         UseProjectReferenceInsteadOfPackage();
         PointAtStub();
+        (await FixturesRepairCommand.RunAsync(_root, CancellationToken.None)).ShouldBe(0);
         (await GenerateCommand.RunAsync(_root, CancellationToken.None)).ShouldBe(0);
 
         (await RunAsync("dotnet", $"build \"{_root}\" --nologo -v q")).ExitCode.ShouldBe(0);
