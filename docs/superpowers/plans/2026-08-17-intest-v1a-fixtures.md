@@ -1263,7 +1263,7 @@ malformed field raises a domain exception naming the file and field, never a bar
 because at runtime this runs inside `AssemblyInitialize` where an unhandled crash costs the whole
 suite.
 
-- [ ] **Step 0: Pin the file-format contract with a round-trip test**
+- [x] **Step 0: Pin the file-format contract with a round-trip test**
 
 The one real cost of decision 5 is that two models can drift. This is the mechanism that stops it,
 and it is the pattern `SchemaBundleBuilderTests` already established — `InTest.Cli.Tests`
@@ -1304,7 +1304,7 @@ public void ABodylessFixtureRoundTripsAsBodyless()
 }
 ```
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Cover: loads every `fixtures/*.json`; deep-merges `fixtures/{profile}/x.json` over the base with the environment winning; a nested object merges per property rather than replacing wholesale; an overlay for an operation with no base fixture is an error naming the file; a malformed fixture reports its filename rather than a bare `JsonException`; **and an absent `fixtures/` directory loads to an empty store rather than throwing** — `GeneratedSuiteExecutionTests` has no fixtures at all and must keep working.
 
@@ -1340,13 +1340,20 @@ public void OverlayMergesPerPropertyRatherThanReplacingTheObject()
 }
 ```
 
+> **Transcription defect, found during implementation.** The two `WriteBase`/`WriteOverlay` calls
+> above put content immediately after the opening `"""`. That does not compile: a multi-line C#
+> raw string literal requires a line break straight after the opening quotes. Reformat the JSON
+> onto its own indented block — the style `FixtureComposerTests` already uses — keeping the content
+> identical. Noted rather than silently corrected above, so the next reader knows the shipped tests
+> differ from this transcription for a reason.
+
 **`FixtureStore.Load(root, profile)` takes the directory that *contains* `fixtures/`, not
 `fixtures/` itself** — so base fixtures are `{root}/fixtures/*.json` and overlays are
 `{root}/fixtures/{profile}/*.json`. `TestHost` passes `AppContext.BaseDirectory`, which is why
 Task 4a must copy `fixtures/**` there. Stating it here because "root" could mean either and the
 wrong reading fails at runtime with an empty store rather than at compile time.
 
-- [ ] **Step 2–4: Run, implement, re-run, commit**
+- [x] **Step 2–4: Run, implement, re-run, commit**
 
 ```bash
 git commit -m "feat(runtime): fixture loading with environment overlays"
@@ -1360,7 +1367,7 @@ git commit -m "feat(runtime): fixture loading with environment overlays"
 - Create: `src/InTest.Runtime/Neutral/TokenResolver.cs`
 - Test: `tests/InTest.Runtime.Tests/TokenResolverTests.cs`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Per §10's resolution-timing table. Cover: `{{config:Orders:ApiKey}}` reads configuration; `{{secret:…}}` behaves identically but is never echoed in any message; `{{runId}}` is the run id and is identical across two resolutions; `{{utcNow}}` differs between resolutions (per request, not cached); an unknown token fails naming the token and listing the supported ones; `{{fixture:…}}` fails with "not supported until v1-b" rather than being left as literal text; a missing config key fails naming the key; a value containing no token is returned unchanged.
 
@@ -1394,7 +1401,7 @@ Cached tokens are resolved once at startup and reused; only `{{utcNow}}` is eval
 Without this split, either validation would resolve `{{config:}}` before configuration exists,
 or every request would re-read configuration.
 
-- [ ] **Step 2–4: Run, implement, re-run, commit**
+- [x] **Step 2–4: Run, implement, re-run, commit**
 
 ```bash
 git commit -m "feat(runtime): fixture token resolution"
@@ -1411,7 +1418,7 @@ The decision recorded above: one report, but only affected operations fail.
 - Modify: `src/InTest.Runtime/MSTest/TestHost.cs`, `src/InTest.Runtime/MSTest/ApiTestBase.cs`
 - Test: `tests/InTest.Runtime.Tests/FixtureValidationTests.cs`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```csharp
 [TestMethod]
@@ -1466,7 +1473,7 @@ public void BlockedOperationsFailWithTheirOwnFileAndProperty()
 }
 ```
 
-- [ ] **Step 2: Implement**
+- [x] **Step 2: Implement**
 
 `TestHost` builds the report at `AssemblyInitialize` and writes the full message to `TestContext`
 **once**, so it appears in the `.trx` and the CI summary even though it does not abort.
@@ -1485,7 +1492,7 @@ Delegating to `Get` would collapse the first row into the third, because `Get` t
 unknown key by design (Task 5). That single mistake would fail every operation that legitimately
 needs no fixture, which on the sample corpus is most of them.
 
-- [ ] **Step 3–4: Run, commit**
+- [x] **Step 3–4: Run, commit**
 
 ```bash
 git commit -m "feat(runtime): aggregated fixture validation with per-operation blocking"
