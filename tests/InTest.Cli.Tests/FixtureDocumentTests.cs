@@ -58,6 +58,39 @@ public class FixtureDocumentTests
     }
 
     [TestMethod]
+    [DataRow("""{"$meta":{"tier":"high","operationId":"op","generatedBy":"intest 0.2.0"}}""", "tier",
+        DisplayName = "string where $meta.tier must be a number")]
+    [DataRow("""{"$meta":{"tier":1,"operationId":"op","generatedBy":"intest 0.2.0"},"$parameters":{"id":7}}""", "parameters.id",
+        DisplayName = "number where a $parameters value must be a string")]
+    [DataRow("""{"$meta":{"tier":1,"operationId":"op","generatedBy":"intest 0.2.0"},"$parameters":{"id":{"a":1}}}""", "parameters.id",
+        DisplayName = "object where a $parameters value must be a string")]
+    public void ReportsAMalformedFieldRatherThanCrashingWithAFrameworkException(string json, string fieldFragment)
+    {
+        // Fixtures are committed and hand-edited: an unquoted number or a stray nested object is
+        // a realistic typo, not adversarial input. Left unguarded these throw raw framework
+        // exceptions ("An element of type 'String' cannot be converted to a 'System.Int32'",
+        // "The node must be of type 'JsonValue'") that would crash FixtureStore at runtime over
+        // one malformed fixture — this class's own doc comment says one bad thing must not
+        // abandon the document, and an unhandled crash is the worst version of abandoning it.
+        var exception = Should.Throw<FixtureFormatException>(() => FixtureDocument.Parse(json));
+
+        exception.Message.ShouldContain(fieldFragment);
+        exception.InnerException.ShouldNotBeNull("the framework exception explaining the real cause must not be discarded");
+    }
+
+    [TestMethod]
+    [DataRow("""{"$meta":{"tier":1,"generatedBy":"intest 0.2.0"}}""", DisplayName = "operationId absent")]
+    [DataRow("""{"$meta":{"tier":1,"operationId":"   ","generatedBy":"intest 0.2.0"}}""", DisplayName = "operationId blank")]
+    public void RejectsAFixtureWithNoUsableOperationId(string json)
+    {
+        // operationId is not a defaultable field like tier or generatedBy: `fixtures repair`
+        // needs it to tell "missing, needs fixing" from "present and correct", and it cannot if
+        // Parse quietly turns an absent value into "".
+        var exception = Should.Throw<FixtureFormatException>(() => FixtureDocument.Parse(json));
+        exception.Message.ShouldContain("operationId");
+    }
+
+    [TestMethod]
     [DataRow("post_api_products", DisplayName = "synthesized key")]
     [DataRow("Stock_GetBySku", DisplayName = "NSwag {Controller}_{Action} key")]
     [DataRow("getOrderById", DisplayName = "hand-written camelCase operationId")]
@@ -80,6 +113,32 @@ public class FixtureDocumentTests
 
         reason.ShouldContain(key);
         reason.ShouldContain(offending);
+        reason.ShouldContain("operationId");
+    }
+
+    [TestMethod]
+    public void ReportsAnOperationKeyThatIsTooLongToBeAFileName()
+    {
+        // An operationId past this length passes TryValidateOperationKey today and then fails as
+        // a raw OS path-length error wherever a caller writes the file — outside this class's
+        // error path, for exactly the input this class exists to gate.
+        var key = new string('a', 201);
+
+        FixtureDocument.TryValidateOperationKey(key, out var reason).ShouldBeFalse();
+
+        reason.ShouldContain("201");
+        reason.ShouldContain("200");
+        reason.ShouldContain("exceeds");
+    }
+
+    [TestMethod]
+    public void ReportsAControlCharacterEvenThoughUnixWouldAllowIt()
+    {
+        // Path.GetInvalidFileNameChars() returns only NUL and '/' on Unix, so a literal tab
+        // would otherwise pass validation there and be written into a fixture filename verbatim
+        // — the same gap already hardened for separators, closed the same way.
+        FixtureDocument.TryValidateOperationKey("Orders\tCreate", out var reason).ShouldBeFalse();
+
         reason.ShouldContain("operationId");
     }
 

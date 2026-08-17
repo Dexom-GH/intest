@@ -3,7 +3,7 @@ using System.Text.Json.Nodes;
 
 namespace InTest.Cli.Fixtures;
 
-public sealed class FixtureFormatException(string message) : Exception(message);
+public sealed class FixtureFormatException(string message, Exception? inner = null) : Exception(message, inner);
 
 public sealed class FixtureMeta
 {
@@ -52,9 +52,22 @@ public sealed class FixtureDocument
             return false;
         }
 
+        const int maxLength = 200;
+        if (operationKey.Length > maxLength)
+        {
+            reason = $"operationId '{operationKey}' is {operationKey.Length} characters long, which " +
+                     $"exceeds the {maxLength}-character limit InTest enforces for fixture filenames — " +
+                     "past that length a write can fail with a raw OS path-length error far from this " +
+                     "check. Change the operationId in the OpenAPI document.";
+            return false;
+        }
+
         var invalid = InvalidOperationKeyCharacters.Concat(Path.GetInvalidFileNameChars()).ToHashSet();
 
-        var offending = operationKey.Where(invalid.Contains).Distinct().ToArray();
+        // Control characters: on Unix, Path.GetInvalidFileNameChars() returns only NUL and '/', so a
+        // literal tab or other control character would otherwise pass there — the same gap already
+        // hardened for separators above, closed the same way.
+        var offending = operationKey.Where(c => invalid.Contains(c) || char.IsControl(c)).Distinct().ToArray();
         if (offending.Length > 0)
         {
             reason = $"operationId '{operationKey}' cannot be a fixture filename: it contains " +
@@ -88,6 +101,13 @@ public sealed class FixtureDocument
         return operationKey + ".json";
     }
 
+    /// <summary>
+    /// Serializes '$meta' first, then '$parameters' (sorted, since <see cref="Parameters"/> is a
+    /// <see cref="SortedDictionary{TKey,TValue}"/>), then 'body' — 'body' omitted entirely, not
+    /// emitted as 'null', when the operation takes none. That fixed order and omission is what
+    /// keeps a committed fixture's diff reviewable: two documents with the same content always
+    /// serialize byte-for-byte identically, and a change to one property changes one line.
+    /// </summary>
     public string ToJson()
     {
         var root = new JsonObject
@@ -112,11 +132,28 @@ public sealed class FixtureDocument
         return root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + "\n";
     }
 
+    /// <summary>
+    /// Parses a fixture. Fixtures are committed and hand-edited (see the class doc comment), so a
+    /// malformed field — an unquoted number, a nested object where a string belongs — is a
+    /// realistic typo, not adversarial input, and every failure surfaces as a
+    /// <see cref="FixtureFormatException"/> naming the offending field with its inner exception
+    /// preserved, the same idiom <c>SpecLoader</c> uses for external document parsing. Letting a
+    /// framework exception like <c>InvalidOperationException</c> escape here would turn one
+    /// malformed fixture into an unhandled crash for <c>FixtureStore</c> at runtime — the opposite
+    /// of this file's "skip one bad thing, don't abandon the document" stance.
+    /// <para>
+    /// <c>$meta.tier</c> defaults to 4 (the worst tier) and <c>$meta.generatedBy</c> defaults to
+    /// "unknown" when absent — both are provenance metadata a human can reasonably drop by hand.
+    /// <c>$meta.operationId</c> has no such default: it is the key <c>fixtures repair</c> uses to
+    /// tell "missing, needs fixing" from "present and correct", so an absent or blank value is
+    /// malformed, the same as a missing '$meta' block.
+    /// </para>
+    /// </summary>
     public static FixtureDocument Parse(string json)
     {
         JsonNode? root;
         try { root = JsonNode.Parse(json); }
-        catch (JsonException ex) { throw new FixtureFormatException($"Fixture is not valid JSON: {ex.Message}"); }
+        catch (JsonException ex) { throw new FixtureFormatException($"Fixture is not valid JSON: {ex.Message}", ex); }
 
         if (root is not JsonObject obj) throw new FixtureFormatException("Fixture root must be a JSON object.");
 
@@ -127,9 +164,9 @@ public sealed class FixtureDocument
         {
             Meta = new FixtureMeta
             {
-                Tier = meta["tier"]?.GetValue<int>() ?? 4,
-                OperationId = meta["operationId"]?.GetValue<string>() ?? string.Empty,
-                GeneratedBy = meta["generatedBy"]?.GetValue<string>() ?? "unknown"
+                Tier = ReadMetaInt(meta, "tier", 4),
+                OperationId = ReadOperationId(meta),
+                GeneratedBy = ReadMetaString(meta, "generatedBy", "unknown")
             },
             Body = obj["body"]?.DeepClone()
         };
@@ -137,9 +174,65 @@ public sealed class FixtureDocument
         if (obj["$parameters"] is JsonObject parameters)
         {
             foreach (var (key, value) in parameters)
-                document.Parameters[key] = value?.GetValue<string>() ?? string.Empty;
+            {
+                try
+                {
+                    document.Parameters[key] = value?.GetValue<string>() ?? string.Empty;
+                }
+                catch (Exception ex) when (ex is InvalidOperationException or FormatException)
+                {
+                    throw new FixtureFormatException(
+                        $"Fixture '$parameters.{key}' must be a string, but found '{value}'. " +
+                        "Regenerate it with `intest fixtures repair`.", ex);
+                }
+            }
         }
 
         return document;
+    }
+
+    private static int ReadMetaInt(JsonObject meta, string field, int defaultValue)
+    {
+        var node = meta[field];
+        if (node is null) return defaultValue;
+
+        try
+        {
+            return node.GetValue<int>();
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or FormatException)
+        {
+            throw new FixtureFormatException(
+                $"Fixture '$meta.{field}' must be a number, but found '{node}'. " +
+                "Regenerate it with `intest fixtures repair`.", ex);
+        }
+    }
+
+    private static string ReadMetaString(JsonObject meta, string field, string defaultValue)
+    {
+        var node = meta[field];
+        if (node is null) return defaultValue;
+
+        try
+        {
+            return node.GetValue<string>();
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or FormatException)
+        {
+            throw new FixtureFormatException(
+                $"Fixture '$meta.{field}' must be a string, but found '{node}'. " +
+                "Regenerate it with `intest fixtures repair`.", ex);
+        }
+    }
+
+    private static string ReadOperationId(JsonObject meta)
+    {
+        var value = ReadMetaString(meta, "operationId", string.Empty);
+
+        if (string.IsNullOrWhiteSpace(value))
+            throw new FixtureFormatException(
+                "Fixture is missing '$meta.operationId'. Regenerate it with `intest fixtures repair`.");
+
+        return value;
     }
 }
