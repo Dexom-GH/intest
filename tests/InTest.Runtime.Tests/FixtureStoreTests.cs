@@ -1,4 +1,5 @@
 using InTest.Runtime;
+using Microsoft.Extensions.Configuration;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Shouldly;
 
@@ -8,6 +9,14 @@ namespace InTest.Runtime.Tests;
 public class FixtureStoreTests
 {
     private string _root = null!;
+
+    private static TokenResolver Resolver(params (string Key, string Value)[] configValues)
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(configValues.Select(kv => new KeyValuePair<string, string?>(kv.Key, kv.Value)))
+            .Build();
+        return new TokenResolver(configuration, runId: "run-fixed-1");
+    }
 
     [TestInitialize]
     public void CreateRoot()
@@ -109,5 +118,134 @@ public class FixtureStoreTests
 
         Should.Throw<FixtureFormatException>(() => FixtureStore.Load(_root, profile: null))
               .Message.ShouldContain("broken.json");
+    }
+
+    // --- ResolvedBody -------------------------------------------------------------------
+
+    [TestMethod]
+    public void ResolvedBody_ResolvesTokensThroughNestedObjectsAndArrays()
+    {
+        WriteBase("op", """
+            {"$meta":{"tier":1,"operationId":"op","generatedBy":"t"},
+             "body":{"outer":{"inner":"{{config:X}}"},"list":["{{config:Y}}","plain"]}}
+            """);
+
+        var body = FixtureStore.Load(_root, profile: null)
+            .ResolvedBody("op", Resolver(("X", "resolved-x"), ("Y", "resolved-y")))!;
+
+        body["outer"]!["inner"]!.GetValue<string>().ShouldBe("resolved-x", "tokens inside a nested object must resolve");
+        body["list"]![0]!.GetValue<string>().ShouldBe("resolved-y", "tokens inside an array element must resolve");
+        body["list"]![1]!.GetValue<string>().ShouldBe("plain", "a plain string with no token is unchanged");
+    }
+
+    [TestMethod]
+    public void ResolvedBody_LeavesNonStringLeavesUntouched()
+    {
+        WriteBase("op", """
+            {"$meta":{"tier":1,"operationId":"op","generatedBy":"t"},
+             "body":{"count":42,"price":19.99,"active":true,"tag":null}}
+            """);
+
+        var body = FixtureStore.Load(_root, profile: null).ResolvedBody("op", Resolver())!;
+
+        body["count"]!.GetValue<int>().ShouldBe(42, "a numeric leaf is not a token and must not be stringified");
+        body["price"]!.GetValue<double>().ShouldBe(19.99);
+        body["active"]!.GetValue<bool>().ShouldBe(true);
+        body["tag"].ShouldBeNull();
+    }
+
+    [TestMethod]
+    public void ResolvedBody_ReturnsNullWhenFixtureHasNoBody()
+    {
+        WriteBase("op", """{"$meta":{"tier":1,"operationId":"op","generatedBy":"t"},"$parameters":{"id":"1"}}""");
+
+        FixtureStore.Load(_root, profile: null).ResolvedBody("op", Resolver()).ShouldBeNull();
+    }
+
+    [TestMethod]
+    public void ResolvedBody_ResolvesUtcNowFreshOnEveryCallRatherThanCachingIt()
+    {
+        WriteBase("op", """
+            {"$meta":{"tier":1,"operationId":"op","generatedBy":"t"},
+             "body":{"createdAt":"{{utcNow}}"}}
+            """);
+        var tick = 0;
+        var resolver = new TokenResolver(
+            new ConfigurationBuilder().Build(), "run-1", () => DateTimeOffset.UnixEpoch.AddSeconds(tick++));
+        var store = FixtureStore.Load(_root, profile: null);
+
+        var first = store.ResolvedBody("op", resolver)!["createdAt"]!.GetValue<string>();
+        var second = store.ResolvedBody("op", resolver)!["createdAt"]!.GetValue<string>();
+
+        second.ShouldNotBe(first, "each ResolvedBody call must re-resolve rather than reuse a cached node");
+    }
+
+    // --- ResolvedParameter ---------------------------------------------------------------
+
+    [TestMethod]
+    public void ResolvedParameter_ResolvesATokenInTheStoredValue()
+    {
+        WriteBase("op", """{"$meta":{"tier":1,"operationId":"op","generatedBy":"t"},"$parameters":{"id":"{{runId}}"}}""");
+
+        FixtureStore.Load(_root, profile: null)
+            .ResolvedParameter("op", "id", Resolver())
+            .ShouldBe("run-fixed-1");
+    }
+
+    [TestMethod]
+    public void ResolvedParameter_ThrowsNamingTheMissingParameter()
+    {
+        WriteBase("op", """{"$meta":{"tier":1,"operationId":"op","generatedBy":"t"},"$parameters":{"id":"1"}}""");
+
+        Should.Throw<FixtureNotFoundException>(
+            () => FixtureStore.Load(_root, profile: null).ResolvedParameter("op", "missing", Resolver()))
+              .Message.ShouldContain("missing");
+    }
+
+    // --- ResolvedQueryParameters -----------------------------------------------------------
+
+    [TestMethod]
+    public void ResolvedQueryParameters_OmitsNamesAbsentFromTheFixtureRatherThanErroring()
+    {
+        WriteBase("op", """{"$meta":{"tier":1,"operationId":"op","generatedBy":"t"},"$parameters":{"page":"2"}}""");
+
+        var result = FixtureStore.Load(_root, profile: null)
+            .ResolvedQueryParameters("op", ["page", "sort"], Resolver());
+
+        result.ShouldContainKey("page");
+        result["page"].ShouldBe("2");
+        result.ShouldNotContainKey("sort");
+    }
+
+    [TestMethod]
+    public void ResolvedQueryParameters_ResolvesTokensInTheSuppliedValues()
+    {
+        WriteBase("op", """{"$meta":{"tier":1,"operationId":"op","generatedBy":"t"},"$parameters":{"page":"{{config:Page}}"}}""");
+
+        var result = FixtureStore.Load(_root, profile: null)
+            .ResolvedQueryParameters("op", ["page"], Resolver(("Page", "7")));
+
+        result["page"].ShouldBe("7");
+    }
+
+    [TestMethod]
+    public void ResolvedQueryParameters_ReturnsEmptyWhenNoNamesAreRequested()
+    {
+        WriteBase("op", """{"$meta":{"tier":1,"operationId":"op","generatedBy":"t"},"$parameters":{"page":"2"}}""");
+
+        FixtureStore.Load(_root, profile: null)
+            .ResolvedQueryParameters("op", [], Resolver())
+            .ShouldBeEmpty();
+    }
+
+    [TestMethod]
+    public void ResolvedQueryParameters_ReturnsEmptyWhenTheOperationHasNoFixtureAtAll()
+    {
+        // A query-only operation whose parameters are all optional-with-no-value never needs a
+        // fixture file to exist at all — this must not throw FixtureNotFoundException.
+        var store = FixtureStore.Load(_root, profile: null);
+
+        store.ResolvedQueryParameters("op-with-no-fixture", ["page", "sort"], Resolver())
+             .ShouldBeEmpty();
     }
 }
