@@ -1,0 +1,36 @@
+{
+  "openapi": "3.0.3",
+  "info": { "title": "Orders", "version": "1.0" },
+  "paths": {
+    "/orders": {
+      "get": {
+        "operationId": "listOrders",
+        "tags": ["Orders"],
+        "responses": { "200": { "description": "ok", "content": { "application/json": {
+          "schema": { "type": "array", "items": { "$ref": "#/components/schemas/Order" } } } } } }
+      }
+    },
+    "/orders/{id}": {
+      "get": {
+        "operationId": "getOrderById",
+        "tags": ["Orders"],
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "responses": { "200": { "description": "ok", "content": { "application/json": {
+          "schema": { "$ref": "#/components/schemas/Order" } } } } }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Order": {
+        "type": "object",
+        "required": ["id", "quantity"],
+        "properties": {
+          "id": { "type": "string" },
+          "quantity": { "type": "integer", "minimum": 1 },
+          "notes": { "type": "string", "nullable": true }
+        }
+      }
+    }
+  }
+}

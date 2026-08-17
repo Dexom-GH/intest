@@ -1,0 +1,11 @@
+# Normalize to LF in the repository; let git decide the working-tree ending by platform.
+* text=auto
+
+# Golden files are compared byte-for-byte against renderer output, and TemplateRenderer
+# normalizes to LF. A clone with core.autocrlf=true (the Git-for-Windows default) would
+# otherwise rewrite these to CRLF on checkout and fail the comparison on every line.
+*.g.cs.txt text eol=lf
+
+# Scriban templates are rendered verbatim into the golden output, so their line endings
+# are part of the generated artifact rather than a local editing preference.
+*.scriban text eol=lf
