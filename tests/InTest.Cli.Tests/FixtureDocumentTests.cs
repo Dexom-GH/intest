@@ -79,6 +79,35 @@ public class FixtureDocumentTests
     }
 
     [TestMethod]
+    [DataRow("""{"$meta":{"tier":1,"operationId":"op","generatedBy":"t"},"$parameters":["a","b"]}""",
+        DisplayName = "array where $parameters must be an object")]
+    [DataRow("""{"$meta":{"tier":1,"operationId":"op","generatedBy":"t"},"$parameters":"id=7"}""",
+        DisplayName = "string where $parameters must be an object")]
+    [DataRow("""{"$meta":{"tier":1,"operationId":"op","generatedBy":"t"},"$parameters":7}""",
+        DisplayName = "number where $parameters must be an object")]
+    public void ReportsAMalformedParametersBlockRatherThanSilentlyDroppingIt(string json)
+    {
+        // The container shape, not just the values inside it. A pattern match with no else branch
+        // reads a '$parameters' that is an array or a pasted query string as "this operation takes
+        // no parameters" — the fixture then loads clean, every parameter is silently absent, and
+        // the request goes out malformed. That is the one outcome this class exists to prevent,
+        // and '$meta' three lines above already rejects a wrong container shape.
+        Should.Throw<FixtureFormatException>(() => FixtureDocument.Parse(json))
+              .Message.ShouldContain("$parameters");
+    }
+
+    [TestMethod]
+    public void TreatsAnExplicitlyNullParametersBlockAsAbsent()
+    {
+        // Deliberately not an error, and the same reading 'body' already gets: JSON null is how a
+        // hand-editor writes "there are none". Only a wrong *shape* is malformed.
+        var document = FixtureDocument.Parse(
+            """{"$meta":{"tier":1,"operationId":"op","generatedBy":"t"},"$parameters":null}""");
+
+        document.Parameters.ShouldBeEmpty();
+    }
+
+    [TestMethod]
     [DataRow("""{"$meta":{"tier":1,"generatedBy":"intest 0.2.0"}}""", DisplayName = "operationId absent")]
     [DataRow("""{"$meta":{"tier":1,"operationId":"   ","generatedBy":"intest 0.2.0"}}""", DisplayName = "operationId blank")]
     public void RejectsAFixtureWithNoUsableOperationId(string json)

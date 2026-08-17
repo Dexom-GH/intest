@@ -171,8 +171,17 @@ public sealed class FixtureDocument
             Body = obj["body"]?.DeepClone()
         };
 
-        if (obj["$parameters"] is JsonObject parameters)
+        // An explicit JSON null reads as absent here, the same as 'body' above — that is how a
+        // hand-editor writes "there are none". Any other non-object shape is malformed and must
+        // say so: silently skipping it would load the fixture clean with every parameter missing,
+        // and the request would go out malformed with nothing to point at.
+        if (obj["$parameters"] is { } parametersNode)
         {
+            if (parametersNode is not JsonObject parameters)
+                throw new FixtureFormatException(
+                    $"Fixture '$parameters' must be a JSON object of name/value pairs, but found " +
+                    $"'{parametersNode.ToJsonString()}'. Regenerate it with `intest fixtures repair`.");
+
             foreach (var (key, value) in parameters)
             {
                 try
