@@ -24,8 +24,16 @@ init.SetAction(parseResult => InitCommand.Run(
     parseResult.GetValue(nameOption)!,
     parseResult.GetValue(specOption)!));
 
+var fixtures = new Command("fixtures", "Fixture maintenance.");
+var repair = new Command("repair", "Create missing fixtures and add sentinels for new required properties.");
+repair.Options.Add(projectOption);
+repair.SetAction((parseResult, cancellationToken) =>
+    FixturesRepairCommand.RunAsync(parseResult.GetValue(projectOption)!, cancellationToken));
+fixtures.Subcommands.Add(repair);
+
 var root = new RootCommand("InTest — generate API integration tests from an OpenAPI document.");
 root.Subcommands.Add(generate);
 root.Subcommands.Add(init);
+root.Subcommands.Add(fixtures);
 
 return await root.Parse(args).InvokeAsync();
