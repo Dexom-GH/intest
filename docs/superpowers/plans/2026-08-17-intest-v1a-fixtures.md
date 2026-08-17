@@ -889,7 +889,7 @@ The only command that writes under `fixtures/`, owning creation, sentinel additi
 - Create: `src/InTest.Cli/Fixtures/FixtureDrift.cs`, `src/InTest.Cli/Commands/FixturesRepairCommand.cs`
 - Test: `tests/InTest.Cli.Tests/FixturesRepairCommandTests.cs`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```csharp
 using InTest.Cli.Commands;
@@ -1042,7 +1042,7 @@ public class FixturesRepairCommandTests
 }
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 ```bash
 dotnet test tests/InTest.Cli.Tests --filter "FullyQualifiedName~FixturesRepairCommandTests"
@@ -1050,7 +1050,7 @@ dotnet test tests/InTest.Cli.Tests --filter "FullyQualifiedName~FixturesRepairCo
 
 Expected: FAIL — `The type or namespace name 'FixturesRepairCommand' could not be found`.
 
-- [ ] **Step 3: Implement `FixtureDrift` and `FixturesRepairCommand`**
+- [x] **Step 3: Implement `FixtureDrift` and `FixturesRepairCommand`**
 
 `FixtureDrift.Compare(existing, composed)` returns three lists: `MissingProperties` (in composed, absent from existing), `StaleProperties` (in existing, absent from composed), and `MissingParameters`. Repair merges the first and third into the existing document, leaves values it did not create untouched, and **prints** the second.
 
@@ -1066,7 +1066,7 @@ rather than capturing `Console` globally in a test assembly where that is shared
 
 Exit codes per §5: `0` including nothing to repair, `2` on a tool error.
 
-- [ ] **Step 4: Wire into `Program.cs`, run tests, commit**
+- [x] **Step 4: Wire into `Program.cs`, run tests, commit**
 
 ```csharp
 var fixtures = new Command("fixtures", "Fixture maintenance.");
@@ -1094,7 +1094,7 @@ Expected: `Passed! - Failed: 0, Passed: 7`.
 - Modify: `src/InTest.Cli/Commands/GenerateCommand.cs`
 - Test: `tests/InTest.Cli.Tests/GenerateDriftTests.cs`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Assert all four behaviours: a missing fixture is reported as drift and `generate` exits `1`; the message names the operation and says `Run 'intest fixtures repair'`; **nothing is created under `fixtures/`**; and with every fixture resolved, `generate` exits `0`.
 
@@ -1110,7 +1110,7 @@ public async Task ReportsAMissingFixtureAsDriftAndWritesNothing()
 }
 ```
 
-- [ ] **Step 2: Reconcile the two v0 tests this breaks**
+- [x] **Step 2: Reconcile the two v0 tests this breaks**
 
 `generate` returning `1` when fixtures are missing breaks two existing tests. Both must be
 updated in this task, not discovered later:
@@ -1120,7 +1120,7 @@ updated in this task, not discovered later:
 | `CompileVerificationTests.cs:65` — `ShouldBe(0)` | Its spec `Specs/orders.json` has `GET /orders/{id}` with a **required** path parameter, so under decision 1 that operation needs a fixture | Call `FixturesRepairCommand.RunAsync` in the test's setup, before `GenerateCommand`. Note this test never calls `init` — it hand-writes `intest.json` and the `.csproj` (`CompileVerificationTests.cs:24-46`) — and `repair` needs only `intest.json` plus the spec, so calling it directly works. Keeps the test asserting what it is named for: that generated code compiles |
 | `GeneratedSuiteExecutionTests.cs:98,118` | Its spec is a bare `GET` with no body and no parameters, so it survives — **but** it has no `fixtures/` directory at all | Add the same `repair` call for realism, and add the `FixtureStore` case in Task 5 below so an absent directory is proven harmless rather than assumed so |
 
-- [ ] **Step 3: Run to verify failure, implement, re-run, commit**
+- [x] **Step 3: Run to verify failure, implement, re-run, commit**
 
 Expected after implementation: `Passed! - Failed: 0, Passed: 4`, and the full suite still green.
 
@@ -1146,7 +1146,7 @@ never that it runs.* This task is that lesson applied before the fact rather tha
 - Modify: `src/InTest.Cli/Commands/InitCommand.cs`
 - Test: `tests/InTest.Cli.Tests/InitCommandTests.cs`, `tests/InTest.Golden.Tests/GeneratedSuiteExecutionTests.cs`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests** *(the live-suite half moved to Task 8 Step 2a — see below)*
 
 ```csharp
 [TestMethod]
@@ -1201,7 +1201,28 @@ that executes rather than compiles.
 and `build`, plus a step that replaces `TODO:id` with a value the stub accepts. That mirrors
 exactly what an adopter does, and it means the F1 class of defect cannot recur silently.
 
-- [ ] **Step 2: Run to verify failure, then implement**
+> **Deferred to Task 8 Step 2a — this task cannot execute the paragraph above, and the plan was
+> self-contradictory in asking it to.** At Task 4a the template still emits
+> `TestData.Require(operationKey, name)` for every path parameter (`TemplateRenderer.cs:53`) and
+> `src/InTest.Runtime/Neutral/TestData.cs` still exists; both go away in **Task 8**. So adding a
+> fixture-needing operation here produces a generated suite that throws
+> `InvalidOperationException` at `dotnet test` — it cannot pass, whatever the fixture does.
+> Task 5 assumes the opposite state for the same file at nearly the same moment (line 1288:
+> "`GeneratedSuiteExecutionTests` has no fixtures at all and must keep working"), which is the
+> contradiction.
+>
+> Resolved by sequencing rather than by dropping the proof: **Task 4a keeps the cheap half**
+> (the `Content` glob, the `TestStartup` comment, version single-sourcing — all landed in
+> `07818cf`), and **Task 8 Step 2a owns the live half**, once the template sources parameters
+> from fixtures and `TestData` is gone. Task 5's empty-store case stays valid as written, because
+> until Task 8 lands this test genuinely has no fixtures.
+>
+> The glob was verified independently rather than by string-match: a throwaway project with
+> `<Content Include="fixtures/**/*.json" .../>` copies both a top-level fixture *and* a nested
+> `fixtures/staging/*.json` overlay into `bin/`, so it satisfies Task 5's
+> `{root}/fixtures/{profile}/*.json` layout too.
+
+- [x] **Step 2: Run to verify failure, then implement**
 
 Add to the scaffolded `.csproj`:
 
@@ -1217,7 +1238,7 @@ Have `intest.json`'s `intestVersion`, `.config/dotnet-tools.json`'s pinned versi
 `FixtureMeta.GeneratedBy` all read the CLI assembly's informational version instead of the two
 hardcoded `0.1.0` literals.
 
-- [ ] **Step 3: Run tests, then commit**
+- [x] **Step 3: Run tests, then commit**
 
 ```bash
 dotnet test tests/InTest.Cli.Tests tests/InTest.Golden.Tests
@@ -1554,6 +1575,32 @@ dotnet test tests/InTest.Golden.Tests --filter "FullyQualifiedName~GoldenFileTes
 ```
 
 Read the regenerated golden file before committing. It locks in whatever it is handed.
+
+- [ ] **Step 2a: Close the F1 loop Task 4a had to defer — the live proof**
+
+**This is the step that makes F1 unable to recur silently, and it is the one most likely to be
+skipped, because everything is green without it.** Task 4a proved a fixture is *declared* for
+copying; nothing yet proves one is *loaded and used* by a running test. Only this step does, and
+it is possible only now, because it needs the template change and the `TestData` deletion above.
+
+`GeneratedSuiteExecutionTests` is the sole test that executes a generated suite rather than
+compiling it. Give it the operation Task 4a specified (transcribed at lines 1176-1196): add
+`GET /api/status/{id}` with `operationId: getStatusById`, tag `Status`, a required `id` path
+parameter and a `$ref` Status response, and serve `/api/status/{anything}` from the stub.
+
+Then its setup runs `generate` → `intest fixtures repair` → replace `TODO:id` with a value the
+stub accepts → `build` → run. That is exactly the sequence an adopter performs.
+
+The assertion that matters is the whole chain in one place: the fixture reached
+`AppContext.BaseDirectory`, `FixtureStore` loaded it, the sentinel was filled, the generated test
+built a real request from it, and the request succeeded live.
+
+Two failure modes to write the test against, because either would let it pass while proving
+nothing:
+- If the `TODO:id` replacement silently no-ops — wrong path, wrong key, wrong file — the test must
+  fail, not quietly send the literal `TODO:id`. Assert the replacement took effect.
+- If `getStatusById` is never generated at all, the suite passes with one fewer test and nothing
+  notices. Assert the generated suite contains and runs that specific test.
 
 - [ ] **Step 3: Verify no stray blank lines survived the template change**
 
