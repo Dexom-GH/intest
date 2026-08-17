@@ -11,5 +11,7 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../../src/InTest.Cli/InTest.Cli.csproj" />
+    <!-- SchemaBundleBuilderTests round-trips its bundle through Runtime.SchemaBundle. -->
+    <ProjectReference Include="../../src/InTest.Runtime/InTest.Runtime.csproj" />
   </ItemGroup>
 </Project>
