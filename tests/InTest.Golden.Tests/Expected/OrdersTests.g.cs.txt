@@ -14,7 +14,6 @@ public partial class OrdersTests : Orders.ApiTests.OrdersTestBase
 {
     [TestMethod, TestCategory("Contract")]
     [Description("Given Orders, when getOrderById, then 200")]
-
     public async Task GetOrderById_Contract()
     {
         using var request = new HttpRequestMessage(
@@ -25,16 +24,13 @@ public partial class OrdersTests : Orders.ApiTests.OrdersTestBase
         using var response = await Client.SendAsync(request, TestContext.CancellationToken);
         stopwatch.Stop();
 
-
         await ApiResponseAssertions.ShouldMatchContractAsync(
             response, 200, "Order", Schemas, TestId, stopwatch.Elapsed,
             TestContext.CancellationToken);
-
     }
 
     [TestMethod, TestCategory("Contract")]
     [Description("Given Orders, when listOrders, then 200")]
-
     public async Task ListOrders_Contract()
     {
         using var request = new HttpRequestMessage(
@@ -45,11 +41,8 @@ public partial class OrdersTests : Orders.ApiTests.OrdersTestBase
         using var response = await Client.SendAsync(request, TestContext.CancellationToken);
         stopwatch.Stop();
 
-
         await ApiResponseAssertions.ShouldMatchContractAsync(
             response, 200, "op:listOrders:200:application/json", Schemas, TestId, stopwatch.Elapsed,
             TestContext.CancellationToken);
-
     }
-
 }

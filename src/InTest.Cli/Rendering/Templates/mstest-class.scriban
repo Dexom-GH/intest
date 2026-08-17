@@ -12,12 +12,12 @@ namespace {{ namespace }};
 [TestClass]
 public partial class {{ class_name }} : {{ base_class }}
 {
-{{~ for tc in cases ~}}
+{{- for tc in cases }}
     [TestMethod, TestCategory("{{ tc.category }}")]
     [Description("{{ tc.display_name }}")]
-{{~ if tc.mutates }}
+{{~ if tc.mutates ~}}
     [DoNotParallelize]
-{{~ end }}
+{{~ end ~}}
     public async Task {{ tc.method_name }}()
     {
         using var request = new HttpRequestMessage(
@@ -28,15 +28,14 @@ public partial class {{ class_name }} : {{ base_class }}
         using var response = await Client.SendAsync(request, TestContext.CancellationToken);
         stopwatch.Stop();
 
-{{~ if tc.schema_key }}
+{{~ if tc.schema_key ~}}
         await ApiResponseAssertions.ShouldMatchContractAsync(
             response, {{ tc.expected_status }}, "{{ tc.schema_key }}", Schemas, TestId, stopwatch.Elapsed,
             TestContext.CancellationToken);
-{{~ else }}
+{{~ else ~}}
         await ApiResponseAssertions.ShouldMatchStatusAsync(
             response, {{ tc.expected_status }}, TestId, stopwatch.Elapsed, TestContext.CancellationToken);
-{{~ end }}
+{{~ end ~}}
     }
-
 {{~ end ~}}
 }
