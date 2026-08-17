@@ -16,15 +16,49 @@
 
 ## Decisions this plan encodes
 
-Three were taken before writing it, and two depart from the spec as written. Both departures get a task that amends the spec, so code and document do not drift.
+Four, of which two depart from the spec as written. Both departures get a task that amends the spec, so code and document do not drift.
 
 **1. Path and query parameters live in fixtures, not `TestData`.** v0's `TestData.Require` throws until someone calls `TestData.Set` in `TestStartup`. That was a placeholder. One fixture per operation now carries both its parameters and its body, so there is one mechanism and one place to look, and startup validation covers parameters too. `TestData` is deleted.
+
+**Only `required: true` parameters get a sentinel.** An optional parameter is omitted from
+`$parameters` entirely and is not sent. This is not a detail — getting it wrong regresses the
+suite. `GET /api/products` in `samples/Catalog.Api` declares five optional query parameters
+(`name`, `minPrice`, `category`, `page`, `pageSize`, all `required: false`) and passes today; a
+sentinel for each would block an operation that currently works, and Task 10 would finish with
+fewer passing tests than v0 achieved.
+
+The rule, stated once:
+
+| Parameter | In `$parameters`? | Sent? |
+|---|---|---|
+| `required: true` | Yes, as `TODO:{name}` until filled | Yes |
+| Optional with an `example` or `default` | Yes, as that real value — never a sentinel | Yes |
+| Optional with neither | No | No |
+
+Query parameters that are present are appended as a query string; path parameters substitute
+into the path template. Both are the template's job (Task 8).
 
 **2. A bad fixture fails its own operation, not the whole run.** §10 currently specifies that validation aborts everything. This plan reports *all* problems in one aggregated message at startup — that part is unchanged and is the valuable half — but fails only the operations whose fixtures are unresolved. On the current sample corpus the spec's behaviour would turn 6 passing Catalog tests red for a problem in 3 unrelated ones.
 
 This does **not** reopen "no skip-flags, no silent green" (§1 principle 5). Nothing is skipped and nothing goes quietly green: affected tests fail loudly with a message naming the file and property. Task 9 amends §10.
 
-**3. `{{fixture:…}}` is out of scope.** It resolves after `IAssemblyFixture` implementations complete, and those are v1-b. v1-a ships `{{config:…}}`, `{{secret:…}}`, `{{runId}}` and `{{utcNow}}`. A `{{fixture:…}}` token encountered in v1-a fails validation with "not supported until v1-b" rather than being silently left as literal text.
+**3. Every sentinel is a string, whatever the declared type.** A numeric property gets
+`"price": "TODO:price"`, not `0`.
+
+The plan originally emitted the type's zero value for non-strings and recorded the property
+elsewhere so validation could still flag it. That created a lifecycle with no exit: `repair`
+never overwrites, and it cannot distinguish a human's deliberate `19.99` from the `0` it wrote
+itself, so the flag — and the block — would persist forever.
+
+A string sentinel has none of that. It is unmistakably unfilled, it is the same mechanism for
+every type, and replacing it with `19.99` clears the block by construction with nothing to
+reconcile. The cost is that the fixture is not schema-valid until filled, which is harmless:
+a blocked operation never sends its body. Nothing in v1-a validates a fixture body against the
+request schema — validation looks for sentinels, not conformance.
+
+This removes the risk the first draft of this plan flagged as having no clean answer.
+
+**4. `{{fixture:…}}` is out of scope.** It resolves after `IAssemblyFixture` implementations complete, and those are v1-b. v1-a ships `{{config:…}}`, `{{secret:…}}`, `{{runId}}` and `{{utcNow}}`. A `{{fixture:…}}` token encountered in v1-a fails validation with "not supported until v1-b" rather than being silently left as literal text.
 
 ---
 
@@ -38,13 +72,23 @@ This does **not** reopen "no skip-flags, no silent green" (§1 principle 5). Not
   "body": {
     "sku": "TODO:sku",
     "name": "TODO:name",
-    "price": 0,
+    "price": "TODO:price",
     "categoryId": "{{config:TestData:CategoryId}}"
   }
 }
 ```
 
-`$meta` records provenance. `$parameters` covers path and query values by name. `body` is absent for operations that take no request body. Filenames are the operation key, sanitised — the same key everything else already uses.
+`$meta` records provenance. `$parameters` carries **required** path and query values by name,
+plus optional ones that have a real value (decision 1). `body` is absent for operations that
+take no request body. Note `price` is a **string** sentinel although the schema declares a
+number — decision 3.
+
+`generatedBy` is `"intest " + <the CLI assembly's informational version>`, not a literal.
+`InitCommand` currently hardcodes `0.1.0` in two places (`intest.json` and
+`.config/dotnet-tools.json`); Task 4a makes all three read one source, so a fixture cannot
+claim a version the tool does not have.
+
+Filenames are the operation key, sanitised (Task 1).
 
 ## File structure
 
@@ -136,10 +180,24 @@ public class FixtureDocumentTests
     }
 
     [TestMethod]
-    public void FileNameIsDerivedFromTheOperationKey()
+    [DataRow("post_api_products", "post_api_products.json", DisplayName = "synthesized key")]
+    [DataRow("Stock_GetBySku", "Stock_GetBySku.json", DisplayName = "NSwag key")]
+    [DataRow("Orders/Create", "Orders_Create.json", DisplayName = "slash is not a path separator here")]
+    [DataRow("get order?", "get_order_.json", DisplayName = "characters illegal in a filename")]
+    [DataRow("CON", "CON_.json", DisplayName = "Windows reserved device name")]
+    public void FileNameIsSanitisedFromTheOperationKey(string key, string expected)
     {
-        FixtureDocument.FileNameFor("post_api_products").ShouldBe("post_api_products.json");
-        FixtureDocument.FileNameFor("Stock_GetBySku").ShouldBe("Stock_GetBySku.json");
+        // OpenAPI permits any string as an operationId and InTest uses a declared one verbatim
+        // (OperationKey.Resolve only trims). Synthesized keys are safe by construction; declared
+        // ones are not.
+        FixtureDocument.FileNameFor(key).ShouldBe(expected);
+    }
+
+    [TestMethod]
+    public void DistinctKeysProduceDistinctFileNames()
+    {
+        FixtureDocument.FileNameFor("Orders/Create")
+                       .ShouldNotBe(FixtureDocument.FileNameFor("Orders?Create"));
     }
 }
 ```
@@ -179,7 +237,27 @@ public sealed class FixtureDocument
     public SortedDictionary<string, string> Parameters { get; init; } = new(StringComparer.Ordinal);
     public JsonNode? Body { get; set; }
 
-    public static string FileNameFor(string operationKey) => operationKey + ".json";
+    private static readonly string[] ReservedNames =
+        ["CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7",
+         "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"];
+
+    /// <summary>
+    /// Operation keys become filenames. Synthesized keys are safe by construction, but a
+    /// declared operationId is used verbatim and OpenAPI permits any string — including path
+    /// separators and Windows device names. Collisions are avoided by appending a short hash
+    /// whenever sanitisation changed anything.
+    /// </summary>
+    public static string FileNameFor(string operationKey)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(operationKey);
+
+        var invalid = Path.GetInvalidFileNameChars().Concat(['/', '\', '?', '*', ':']).ToHashSet();
+        var sanitised = new string(operationKey.Select(c => invalid.Contains(c) ? '_' : c).ToArray());
+
+        if (ReservedNames.Contains(sanitised, StringComparer.OrdinalIgnoreCase)) sanitised += "_";
+
+        return sanitised + ".json";
+    }
 
     public string ToJson()
     {
@@ -377,7 +455,7 @@ public class FixtureComposerTests
     }
 
     [TestMethod]
-    public async Task IncludesPathAndQueryParametersAsSentinels()
+    public async Task OnlySentinelsRequiredParameters()
     {
         const string spec = """
         {
@@ -386,6 +464,8 @@ public class FixtureComposerTests
             "parameters":[
               {"name":"id","in":"path","required":true,"schema":{"type":"string"}},
               {"name":"page","in":"query","schema":{"type":"integer","example":2}},
+              {"name":"sort","in":"query","schema":{"type":"string","default":"name"}},
+              {"name":"filter","in":"query","schema":{"type":"string"}},
               {"name":"X-Trace","in":"header","schema":{"type":"string"}}],
             "responses":{"200":{"description":"ok"}}}}}
         }
@@ -393,9 +473,37 @@ public class FixtureComposerTests
 
         var fixture = await ComposeAsync(spec, "/p/{id}", "GET");
 
-        fixture.Parameters["id"].ShouldBe("TODO:id");
-        fixture.Parameters["page"].ShouldBe("2", "a per-parameter example is a real value");
+        fixture.Parameters["id"].ShouldBe("TODO:id", "required parameters must be supplied");
+        fixture.Parameters["page"].ShouldBe("2", "an example is a real value, not a sentinel");
+        fixture.Parameters["sort"].ShouldBe("name", "a default is a real value too");
+
+        // The regression this prevents: Catalog's GET /api/products declares five optional
+        // query parameters and passes today. Sentinelling them would block a working operation
+        // and leave Task 10 below the 6 passing tests v0 already achieved.
+        fixture.Parameters.ShouldNotContainKey("filter", "an optional parameter with no value is omitted");
         fixture.Parameters.ShouldNotContainKey("X-Trace", "headers are not path or query parameters");
+    }
+
+    [TestMethod]
+    public async Task SentinelsAreStringsRegardlessOfDeclaredType()
+    {
+        const string spec = """
+        {
+          "openapi":"3.0.3","info":{"title":"T","version":"1"},
+          "paths":{"/p":{"post":{
+            "requestBody":{"content":{"application/json":{"schema":{"type":"object",
+              "required":["price","active"],"properties":{
+                "price":{"type":"number"},"active":{"type":"boolean"}}}}}},
+            "responses":{"201":{"description":"ok"}}}}}
+        }
+        """;
+
+        var fixture = await ComposeAsync(spec, "/p", "POST");
+
+        // A zero would be schema-valid and indistinguishable from a deliberate value, leaving
+        // repair no way to know it was never filled in. See decision 3.
+        fixture.Body!["price"]!.GetValue<string>().ShouldBe("TODO:price");
+        fixture.Body["active"]!.GetValue<string>().ShouldBe("TODO:active");
     }
 
     [TestMethod]
@@ -410,7 +518,7 @@ public class FixtureComposerTests
     }
 
     [TestMethod]
-    public async Task TerminatesOnASelfReferencingSchema()
+    public async Task StopsAtARepeatedSchemaReference()
     {
         const string spec = """
         {
@@ -423,9 +531,14 @@ public class FixtureComposerTests
         }
         """;
 
-        var compose = ComposeAsync(spec, "/p", "POST");
-        (await Task.WhenAny(compose, Task.Delay(TimeSpan.FromSeconds(10)))).ShouldBe(compose);
-        (await compose).Body.ShouldNotBeNull();
+        var fixture = await ComposeAsync(spec, "/p", "POST");
+
+        // Asserted on observable output, not by racing a timeout. Compose is synchronous, so
+        // non-termination stack-overflows or hangs the test host before any timeout could be
+        // observed — a timeout guard here passes only when the bug is absent, which is not the
+        // case it exists for.
+        fixture.Body!["name"]!.GetValue<string>().ShouldBe("TODO:name");
+        fixture.Body["child"].ShouldBeNull("a repeated reference emits null and stops");
     }
 }
 ```
@@ -446,7 +559,9 @@ Key requirements the tests encode, restated so the implementation is not guessed
 - Recursion into `$ref` must track visited schema names and stop on revisit, emitting `null` for the recursive property. Self-referencing schemas are common and inlining them does not terminate.
 - Arrays get exactly one element — enough to show the shape, not so many that a human editing it despairs.
 - Only `in: path` and `in: query` parameters are emitted. Headers are excluded: §9 notes empty headers are often dropped before reaching app code, and they are not part of the request line.
-- Sentinels are `TODO:{propertyName}` for strings. For non-strings the sentinel cannot be a string without breaking the schema, so emit the type's zero value **and** record the property in `$meta` so validation still flags it — see Task 7.
+- **Sentinels are always the string `TODO:{propertyName}`**, whatever the schema declares (decision 3). Never emit a typed zero value.
+- **Only `required: true` parameters are sentinelled** (decision 1). An optional parameter appears only when the spec gives it an `example` or `default`; otherwise it is omitted entirely.
+- Tier reflects the worst source used anywhere: one `TODO:` makes the whole fixture tier 4.
 
 ```csharp
 using System.Text.Json.Nodes;
@@ -605,7 +720,7 @@ public class FixturesRepairCommandTests
     }
 
     [TestMethod]
-    public async Task FlagsAPropertyThatLeftTheSchemaWithoutDeletingIt()
+    public async Task ReportsAPropertyThatLeftTheSchemaWithoutDeletingIt()
     {
         await FixturesRepairCommand.RunAsync(_root, CancellationToken.None);
 
@@ -613,10 +728,46 @@ public class FixturesRepairCommandTests
         document.Body!["legacyRef"] = "kept-by-hand";
         File.WriteAllText(FixturePath, document.ToJson());
 
+        var console = new StringWriter();
+        Console.SetOut(console);
+        try { await FixturesRepairCommand.RunAsync(_root, CancellationToken.None); }
+        finally { Console.SetOut(new StreamWriter(Console.OpenStandardOutput()) { AutoFlush = true }); }
+
+        // §10 requires both halves: not deleted, and reported. Silent retention is how a
+        // property nobody meant to keep survives three refactors.
+        FixtureDocument.Parse(File.ReadAllText(FixturePath)).Body!["legacyRef"].ShouldNotBeNull(
+            "never silently deleted — it may be deliberate");
+        console.ToString().ShouldContain("legacyRef");
+        console.ToString().ShouldContain("no longer in schema");
+    }
+
+    [TestMethod]
+    public async Task CreatesFixturesOnlyForOperationsTheTestPlanCovers()
+    {
+        // TestPlanBuilder already owns "which operations exist", including skips for non-JSON
+        // request bodies and operations with no 2xx response. If repair iterated the raw
+        // document instead, it would create fixtures for operations no generated test uses,
+        // and generate's drift check would disagree with it about the operation set.
+        const string withSkipped = """
+        {
+          "openapi":"3.0.3","info":{"title":"T","version":"1"},
+          "paths":{
+            "/api/products":{"post":{"operationId":"createProduct",
+              "requestBody":{"content":{"application/json":{"schema":{"type":"object",
+                "required":["sku"],"properties":{"sku":{"type":"string"}}}}}},
+              "responses":{"201":{"description":"ok"}}}},
+            "/api/upload":{"post":{"operationId":"upload",
+              "requestBody":{"content":{"multipart/form-data":{"schema":{"type":"object"}}}},
+              "responses":{"200":{"description":"ok"}}}}}
+        }
+        """;
+
+        File.WriteAllText(Path.Combine(_root, "spec.json"), withSkipped);
         await FixturesRepairCommand.RunAsync(_root, CancellationToken.None);
 
-        FixtureDocument.Parse(File.ReadAllText(FixturePath)).Body!["legacyRef"].ShouldNotBeNull(
-            "a stale property is reported, never silently deleted — it may be deliberate");
+        File.Exists(Path.Combine(_root, "fixtures", "createProduct.json")).ShouldBeTrue();
+        File.Exists(Path.Combine(_root, "fixtures", "upload.json")).ShouldBeFalse(
+            "multipart operations are skipped by the plan, so they get no fixture");
     }
 
     [TestMethod]
@@ -643,7 +794,12 @@ Expected: FAIL — `The type or namespace name 'FixturesRepairCommand' could not
 
 - [ ] **Step 3: Implement `FixtureDrift` and `FixturesRepairCommand`**
 
-`FixtureDrift.Compare(existing, composed)` returns three lists: `MissingProperties` (in composed, absent from existing), `StaleProperties` (in existing, absent from composed), and `MissingParameters`. Repair merges the first and third into the existing document, leaves values it did not create untouched, and reports the second.
+`FixtureDrift.Compare(existing, composed)` returns three lists: `MissingProperties` (in composed, absent from existing), `StaleProperties` (in existing, absent from composed), and `MissingParameters`. Repair merges the first and third into the existing document, leaves values it did not create untouched, and **prints** the second.
+
+**Repair iterates `TestPlanBuilder.Build(...)`, not the raw document.** That type already owns
+which operations exist — including skips for non-JSON request bodies and operations with no 2xx
+response. Iterating anything else makes `repair` and `generate`'s drift check disagree about the
+operation set, and creates fixtures for operations no generated test will ever load.
 
 Exit codes per §5: `0` including nothing to repair, `2` on a tool error.
 
@@ -691,12 +847,90 @@ public async Task ReportsAMissingFixtureAsDriftAndWritesNothing()
 }
 ```
 
-- [ ] **Step 2: Run to verify failure, implement, re-run, commit**
+- [ ] **Step 2: Reconcile the two v0 tests this breaks**
 
-Expected after implementation: `Passed! - Failed: 0, Passed: 4`.
+`generate` returning `1` when fixtures are missing breaks two existing tests. Both must be
+updated in this task, not discovered later:
+
+| Test | Why it breaks | Reconciliation |
+|---|---|---|
+| `CompileVerificationTests.cs:65` — `ShouldBe(0)` | Its spec `Specs/orders.json` has `GET /orders/{id}` with a **required** path parameter, so under decision 1 that operation needs a fixture | Call `FixturesRepairCommand` in the test's setup, between `init` and `generate`. That is what a real adopter does, and it keeps the test asserting what it is named for — that generated code compiles |
+| `GeneratedSuiteExecutionTests.cs:98,118` | Its spec is a bare `GET` with no body and no parameters, so it survives — **but** it has no `fixtures/` directory at all | Add the same `repair` call for realism, and add the `FixtureStore` case in Task 5 below so an absent directory is proven harmless rather than assumed so |
+
+- [ ] **Step 3: Run to verify failure, implement, re-run, commit**
+
+Expected after implementation: `Passed! - Failed: 0, Passed: 4`, and the full suite still green.
 
 ```bash
+dotnet test
 git commit -m "feat(cli): report fixture drift from generate without writing fixtures"
+```
+
+---
+
+## Task 4a: Scaffold changes — fixtures must reach the output directory
+
+**This is F1 again**, and it is the task most likely to be skipped. `FixtureStore` loads at
+runtime, meaning from `AppContext.BaseDirectory`. `InitCommand` copies `spec-schemas.json`,
+`spec-paths.json` and `appsettings*.json` to the output directory — and nothing else. Without
+this task every fixture is invisible at runtime, and it surfaces at Task 10, live, after nine
+tasks of green.
+
+The v0 acceptance record states the lesson: *compile verification proves generated code builds,
+never that it runs.* This task is that lesson applied before the fact rather than after.
+
+**Files:**
+- Modify: `src/InTest.Cli/Commands/InitCommand.cs`
+- Test: `tests/InTest.Cli.Tests/InitCommandTests.cs`, `tests/InTest.Golden.Tests/GeneratedSuiteExecutionTests.cs`
+
+- [ ] **Step 1: Write the failing tests**
+
+```csharp
+[TestMethod]
+public void CsprojCopiesFixturesToTheOutputDirectory()
+{
+    InitCommand.Run(_root, "Orders.ApiTests", "orders.json");
+
+    File.ReadAllText(Path.Combine(_root, "Orders.ApiTests.csproj"))
+        .ShouldContain("fixtures/**/*.json",
+            "FixtureStore loads from AppContext.BaseDirectory — this is the F1 defect repeating");
+}
+
+[TestMethod]
+public void TestStartupDoesNotReferenceTheDeletedTestDataType()
+{
+    InitCommand.Run(_root, "Orders.ApiTests", "orders.json");
+
+    File.ReadAllText(Path.Combine(_root, "TestStartup.cs"))
+        .ShouldNotContain("TestData", "Task 8 deletes it; a scaffold must not teach a dead API");
+}
+```
+
+Extend `GeneratedSuiteExecutionTests.ScaffoldedConfigurationTravelsToTheOutputDirectory` to
+require a fixture file in the output directory too, so this is proven by execution and not only
+by inspecting the csproj.
+
+- [ ] **Step 2: Run to verify failure, then implement**
+
+Add to the scaffolded `.csproj`:
+
+```xml
+<Content Include="fixtures/**/*.json" CopyToOutputDirectory="PreserveNewest" />
+```
+
+Replace the `TestStartup.cs` comment — it currently tells developers to register
+"path-parameter test data here" with a `TestData.Set(...)` example — with one pointing at
+`fixtures/` and `intest fixtures repair`.
+
+Have `intest.json`'s `intestVersion`, `.config/dotnet-tools.json`'s pinned version, and
+`FixtureMeta.GeneratedBy` all read the CLI assembly's informational version instead of the two
+hardcoded `0.1.0` literals.
+
+- [ ] **Step 3: Run tests, then commit**
+
+```bash
+dotnet test tests/InTest.Cli.Tests tests/InTest.Golden.Tests
+git commit -m "feat(cli): scaffold copies fixtures to output and drops the TestData example"
 ```
 
 ---
@@ -709,7 +943,21 @@ git commit -m "feat(cli): report fixture drift from generate without writing fix
 
 - [ ] **Step 1: Write the failing tests**
 
-Cover: loads every `fixtures/*.json`; deep-merges `fixtures/{profile}/x.json` over the base with the environment winning; a nested object merges per property rather than replacing wholesale; an overlay for an operation with no base fixture is an error naming the file; a malformed fixture reports its filename rather than a bare `JsonException`.
+Cover: loads every `fixtures/*.json`; deep-merges `fixtures/{profile}/x.json` over the base with the environment winning; a nested object merges per property rather than replacing wholesale; an overlay for an operation with no base fixture is an error naming the file; a malformed fixture reports its filename rather than a bare `JsonException`; **and an absent `fixtures/` directory loads to an empty store rather than throwing** — `GeneratedSuiteExecutionTests` has no fixtures at all and must keep working.
+
+```csharp
+[TestMethod]
+public void AnAbsentFixturesDirectoryIsAnEmptyStoreNotAnError()
+{
+    // A spec whose every operation is a parameterless GET needs no fixtures. That is the
+    // shape GeneratedSuiteExecutionTests uses, so this must not throw.
+    var store = FixtureStore.Load(Path.Combine(_root, "no-such-directory"), profile: null);
+
+    store.Count.ShouldBe(0);
+    Should.Throw<FixtureNotFoundException>(() => store.Get("anything"))
+          .Message.ShouldContain("intest fixtures repair");
+}
+```
 
 ```csharp
 [TestMethod]
@@ -760,6 +1008,22 @@ public void SecretValuesNeverAppearInAnErrorMessage()
     ex.Message.ShouldContain("Orders:Missing");
 }
 ```
+
+#### The interface, pinned
+
+§10 makes `{{utcNow}}` per-request and uncached while `{{config:}}` is once-per-run and cached.
+That needs two passes over the same fixture, so the store exposes both and generated code is
+explicit about which it wants:
+
+| Member | Returns | Used by |
+|---|---|---|
+| `FixtureStore.Get(key)` | The raw `FixtureDocument`, tokens **unresolved** | Startup validation (Task 7) — it inspects tokens, so it must not resolve them |
+| `FixtureStore.ResolvedBody(key)` | A fresh `JsonNode` with every token resolved, **per call** | Generated tests (Task 8), once per request, so `{{utcNow}}` differs between them |
+| `FixtureStore.ResolvedParameter(key, name)` | A resolved `string`, per call | Generated tests building the path and query string |
+
+Cached tokens are resolved once at startup and reused; only `{{utcNow}}` is evaluated per call.
+Without this split, either validation would resolve `{{config:}}` before configuration exists,
+or every request would re-read configuration.
 
 - [ ] **Step 2–4: Run, implement, re-run, commit**
 
@@ -838,7 +1102,33 @@ git commit -m "feat(runtime): aggregated fixture validation with per-operation b
 
 - [ ] **Step 1: Extend the renderer tests**
 
-A POST operation must render a `StringContent` body from the fixture with `application/json`; a GET with a path parameter must take its value from the fixture rather than `TestData`; every generated method must call `RequireFixture` before building its request; and no generated file may still reference `TestData`.
+A POST operation must render a `StringContent` body from the fixture with `application/json`;
+a GET with a **path** parameter must substitute it into the path template from the fixture
+rather than `TestData`; a GET with **query** parameters present in the fixture must append them
+as a percent-encoded query string, and must append nothing when the fixture has none (decision 1
+omits optional parameters, so the common case is no query string at all); every generated method
+must call `RequireFixture` before building its request; and no generated file may still
+reference `TestData`.
+
+```csharp
+[TestMethod]
+public void AppendsOnlyTheQueryParametersTheFixtureSupplies()
+{
+    var rendered = Render(PlanWithQueryParameters("page", "sort"));
+
+    rendered.ShouldContain("InTestUrl.BuildQuery(");
+    rendered.ShouldNotContain("?page=", "values come from the fixture at runtime, not the template");
+}
+
+[TestMethod]
+public void EmitsNoQueryStringWhenThereAreNoQueryParameters()
+{
+    Render(Plan()).ShouldNotContain("BuildQuery");
+}
+```
+
+This closes the other half of decision 1: sentinelling a parameter the generated code never
+sends would block an operation for a value that could not have mattered.
 
 - [ ] **Step 2: Update the template, delete `TestData`, regenerate the golden file**
 
@@ -873,9 +1163,17 @@ Record the decision *and* the reasoning against the alternative, in the style th
 
 Document the file shape including `$parameters`, and state that `{{fixture:…}}` is v1-b and fails loudly until then.
 
-- [ ] **Step 3: Update `docs/getting-started.md` Phase 5**
+- [ ] **Step 3: Update both documents that claim fixtures do not exist**
 
-It currently describes fixtures as designed-but-unbuilt. Phase 5 becomes real; the status banner loses fixtures from its "not yet built" list.
+Three specific places, all currently false once this plan lands:
+
+| File | What it says now |
+|---|---|
+| `README.md` status banner (lines 10–19) | Lists fixtures and `fixtures repair` under "Not yet built" |
+| `README.md` "What day one actually looks like" (lines 57–62) | "At v0 there are no fixtures at all, so operations taking a request body generate a test that cannot send one and fails with 415" |
+| `docs/getting-started.md` Phase 5 and its status banner | Describes fixtures as designed-but-unbuilt |
+
+`survey`, `--check` and YAML stay on the not-yet-built list — this plan does not deliver them.
 
 - [ ] **Step 4: Commit**
 
@@ -898,7 +1196,25 @@ dotnet build samples/Catalog.Api samples/Orders.Api samples/Inventory.Api
 
 - [ ] **Step 2: Fill the sentinels using seeded data**
 
-`samples/README.md` lists the fixed GUIDs. The point of this step is to feel how much work a real adopter faces — record how many sentinels needed filling per API.
+The seeded identifiers, so the implementer does not have to read the seed code:
+
+| Sample | Entity | Value |
+|---|---|---|
+| Catalog | Product "Widget" | `aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa` |
+| Catalog | Product "Sparse" (all nullables null) | `bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb` |
+| Catalog | Category "Hardware" (referenced — delete returns 409) | `11111111-1111-1111-1111-111111111111` |
+| Catalog | Category "Software" | `22222222-2222-2222-2222-222222222222` |
+| Catalog | Category "Deprecated" (unreferenced — delete returns 204) | `33333333-3333-3333-3333-333333333333` |
+| Orders | Customer "Acme Ltd" | `cccccccc-cccc-cccc-cccc-cccccccccccc` |
+| Orders | Order ORD-0001, status Placed (cancellable) | `dddddddd-dddd-dddd-dddd-dddddddddddd` |
+| Orders | Order ORD-0002, status Shipped (cancel returns 409) | `eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee` |
+| Inventory | Warehouse London `1`, Leeds `2`; stock rows `1` and `2` | integers, not GUIDs |
+
+New products need a unique SKU matching `^[A-Z]{3}-[0-9]{4}$` — reusing `WGT-0001` returns 409
+from a real unique index, which is a valid thing to assert but not what the 201 test wants.
+
+**Record how many sentinels needed filling per API.** That number is the fixture workload a
+real adopter faces, and it is the measurement `intest survey` will eventually predict.
 
 - [ ] **Step 3: Run Catalog live and record the result**
 
@@ -933,4 +1249,33 @@ git commit -m "docs: v1-a acceptance run against the sample APIs"
 
 **Type consistency.** `FixtureDocument.Parameters` is `SortedDictionary<string, string>` in Task 1 and consumed as such in Tasks 2, 5 and 8. `FixtureComposer.Compose` returns `FixtureDocument` and is called by both `FixturesRepairCommand` (Task 3) and `GenerateCommand`'s drift check (Task 4). `FixtureStore.Get(operationKey)` returns `FixtureDocument` in Task 5 and is used in Tasks 7 and 8. Operation keys are the same strings `OperationKey.Resolve` produces in v0 — synthesized ones included, which is most of the sample corpus.
 
-**One risk worth stating.** Task 2's non-string sentinel problem has no clean answer: `"TODO:price"` is not a valid number, so a schema-valid placeholder must be a real number, and a real number is indistinguishable from a deliberate value. The plan records the property in `$meta` so validation can still flag it, but an implementer who skips that produces exactly the plausible-but-fake value §10 calls the genuinely dangerous alternative. Task 7's tests must cover a numeric sentinel, not only a string one.
+**Review corrections folded in.** A review of the first draft found seven issues; all are
+resolved above rather than left as notes.
+
+The three that would have produced a failed acceptance run:
+
+1. **Optional query parameters would have blocked green operations.** Composing a sentinel for
+   every parameter would have blocked Catalog's `GET /api/products` — five optional query
+   parameters, passing today — and finished Task 10 *below* v0's six. Decision 1 now sentinels
+   only `required: true`, and Task 8 pins that the template sends exactly what the fixture
+   carries.
+2. **Numeric sentinels had no exit.** The first draft emitted a typed zero and flagged the
+   property elsewhere; nothing could ever un-flag it, because `repair` cannot distinguish a
+   human's `19.99` from the `0` it wrote. Decision 3 makes every sentinel a string, which
+   removes the lifecycle entirely rather than managing it.
+3. **Fixtures never reached the output directory** — F1 exactly, and it would have surfaced
+   live at Task 10 after nine tasks of green. Task 4a now owns the scaffold.
+
+The rest, corrected in place: Task 4 names the two v0 tests it breaks and how they reconcile;
+Task 2's recursion test asserts observable output instead of racing a timeout it could never
+reach against synchronous code; `FileNameFor` is genuinely sanitised rather than only claimed to
+be; Task 6 pins raw-vs-resolved access so `{{utcNow}}` can be per-call while `{{config:}}` is
+cached; Task 3 asserts stale properties are *reported* as well as retained, and iterates the
+test plan so `repair` and `generate` cannot disagree about which operations exist.
+
+**One risk that remains.** `repair` merges by property name. A fixture whose body a human has
+restructured — say wrapping fields in an envelope the spec later adopted — will have properties
+added at the top level where the human put them nested. The tests pin "never overwrites", not
+"merges intelligently", and intelligent merging of hand-edited JSON is not something this plan
+attempts. If Task 10 shows it happening on real specs, that is a finding for v1-b, not a defect
+to fix mid-plan.
