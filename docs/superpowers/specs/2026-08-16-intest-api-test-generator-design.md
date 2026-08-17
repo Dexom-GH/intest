@@ -1262,9 +1262,21 @@ in *this* environment.
 | Token | Resolved | Cached |
 |---|---|---|
 | `{{runId}}` | Once per assembly run | Yes |
-| `{{config:…}}` / `{{secret:…}}` | Once per assembly run, after configuration build | Yes |
+| `{{config:…}}` / `{{secret:…}}` | Per request, after configuration build | **No — see below** |
 | `{{fixture:…}}` | After all `IAssemblyFixture` implementations complete | Yes |
 | `{{utcNow}}` | Per request | No |
+
+**`{{config:}}` and `{{secret:}}` are not cached, though the design intended them to be.** Measured
+in v1-a by instrumenting `IConfiguration` with a counting wrapper: two `ResolvedBody` calls on one
+resolver produced fresh reads for every token occurrence on both calls. Only `{{runId}}` is
+genuinely fixed for the resolver's lifetime, bound in its constructor.
+
+This is accepted rather than fixed. The reason the design separated cached from per-request tokens
+was to stop validation resolving `{{config:}}` before configuration exists, and that still holds —
+startup validation reads raw, unresolved values. The remaining cost, re-reading configuration per
+request, is nil in practice because `IConfiguration` serves an in-memory dictionary once its
+providers are built. A cache would buy no measurable time and would introduce a staleness question
+nothing needs. Revisit if a provider ever makes reads expensive — a remote secret store, say.
 
 `{{config:}}` and `{{secret:}}` are **how credentials stay out of committed fixtures.**
 Generation warns on any literal value matching credential heuristics.
