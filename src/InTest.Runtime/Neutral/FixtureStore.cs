@@ -30,6 +30,13 @@ public sealed class FixtureStore
     /// <summary>Number of operations with a loaded fixture, base and overlay combined.</summary>
     public int Count => _fixtures.Count;
 
+    /// <summary>
+    /// Operation keys with a loaded fixture, base and overlay combined. Startup validation
+    /// (Task 7) walks exactly this set — an operation absent from it needs no fixture and is
+    /// never blocked, without either side having to duplicate the directory scan above.
+    /// </summary>
+    public IReadOnlyCollection<string> Keys => _fixtures.Keys;
+
     public static FixtureStore Load(string root, string? profile)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(root);

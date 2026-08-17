@@ -15,6 +15,14 @@ public static class TestHost
     public static SchemaBundle Schemas { get; private set; } = null!;
     public static string RunIdValue { get; private set; } = null!;
     public static string Profile { get; private set; } = null!;
+    public static FixtureStore Fixtures { get; private set; } = null!;
+
+    /// <summary>
+    /// One aggregated fixture-validation report, built once at <see cref="InitializeAsync"/> and
+    /// consulted by every <c>ApiTestBase.RequireFixture</c> call — never rebuilt per test, and
+    /// never bypassed by going straight to <see cref="Fixtures"/> (decision 2 / Task 7).
+    /// </summary>
+    public static FixtureValidation.Report FixtureValidationReport { get; private set; } = null!;
 
     /// <summary>Registration hook. The generated project's TestStartup assigns this before
     /// InitializeAsync runs, so team registrations compose with InTest's.</summary>
@@ -28,6 +36,12 @@ public static class TestHost
         Configuration = BuildConfiguration(Profile);
         RunIdValue = RunId.Create(Configuration["InTest:RunId:Prefix"]);
         context.WriteLine($"InTest run id: {RunIdValue} (profile '{Profile}')");
+
+        Fixtures = FixtureStore.Load(AppContext.BaseDirectory, Profile);
+        FixtureValidationReport = FixtureValidation.Build(Fixtures, new TokenResolver(Configuration, RunIdValue));
+        // Written once here so every problem across every fixture lands in the .trx and the CI
+        // summary, even though only the operations actually blocked go on to fail (decision 2).
+        context.WriteLine(FixtureValidationReport.Message);
 
         var services = new ServiceCollection();
         services.AddSingleton(Configuration);

@@ -42,4 +42,15 @@ public abstract class ApiTestBase
         InTestAmbient.TestId.Value = null;
         _scope.Dispose();
     }
+
+    /// <summary>
+    /// Generated tests call this before building a request. Consults the aggregated validation
+    /// report built once at <c>AssemblyInitialize</c> — never <c>TestHost.Fixtures.Get</c>
+    /// directly — so an operation with no fixture at all (the majority case) is a no-op rather
+    /// than the <see cref="FixtureNotFoundException"/> a direct <c>Get</c> would throw. Only an
+    /// operation whose fixture has an unresolved sentinel or token throws, naming its file and
+    /// property (Task 7 / decision 2).
+    /// </summary>
+    protected static void RequireFixture(string operationKey) =>
+        TestHost.FixtureValidationReport.ThrowIfBlocked(operationKey);
 }
