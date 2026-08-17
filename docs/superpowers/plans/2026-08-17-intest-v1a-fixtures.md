@@ -443,7 +443,7 @@ Implements §10's precedence. The tier is recorded so a reader knows how much to
 - Create: `src/InTest.Cli/Fixtures/FixtureComposer.cs`
 - Test: `tests/InTest.Cli.Tests/FixtureComposerTests.cs`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```csharp
 using InTest.Cli.Fixtures;
@@ -650,15 +650,18 @@ public class FixtureComposerTests
 }
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 ```bash
 dotnet test tests/InTest.Cli.Tests --filter "FullyQualifiedName~FixtureComposerTests"
 ```
 
 Expected: FAIL — `The type or namespace name 'FixtureComposer' could not be found`.
+*Measured:* it reports `CS0103: The name 'FixtureComposer' does not exist in the current context`
+instead — same root cause, reported differently because the tests reach it through a static method
+call rather than a bare type reference.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 Key requirements the tests encode, restated so the implementation is not guessed at:
 
@@ -696,7 +699,11 @@ public static class FixtureComposer
         {
             if (parameter.In is not (ParameterLocation.Path or ParameterLocation.Query)) continue;
 
-            parameters[parameter.Name!] = ParameterValue(parameter, tier);
+            // ParameterValue returns null for an optional query parameter with neither an example
+            // nor a default, and null means *omit the key entirely* — decision 1. Assigning
+            // unconditionally would put every such parameter in $parameters, which is exactly the
+            // regression decision 1 exists to prevent.
+            if (ParameterValue(parameter, tier) is { } value) parameters[parameter.Name!] = value;
         }
 
         JsonNode? body = null;
@@ -719,7 +726,7 @@ public static class FixtureComposer
 
 > **Implementer:** the four private helpers are deliberately left for you to write against the tests above rather than transcribed here — every behaviour they must exhibit is asserted. Do not add behaviour the tests do not require.
 
-- [ ] **Step 4: Run tests to verify they pass, then commit**
+- [x] **Step 4: Run tests to verify they pass, then commit**
 
 ```bash
 dotnet test tests/InTest.Cli.Tests --filter "FullyQualifiedName~FixtureComposerTests"
@@ -728,6 +735,15 @@ git commit -m "feat(cli): four-tier fixture composition"
 ```
 
 Expected: `Passed! - Failed: 0, Passed: 9`.
+
+**Microsoft.OpenApi 3.10.0, measured during implementation.** `IOpenApiSchema.Example` (singular)
+is `[Obsolete("Use Examples instead.")]`, and this repository builds with
+`TreatWarningsAsErrors=true`, so reading it is a compile error. But for an OpenAPI 3.0.x document's
+singular `example` keyword the plural `Examples` collection is left **empty** — `Example` is the
+only populated property. Verified against the installed package, not assumed. The composer
+therefore reads `Example` behind a two-line `#pragma warning disable CS0618`. Do not "modernise"
+that into `Examples`: it silently breaks tier-2 and tier-3 resolution for every 3.0.x document,
+which is the whole sample corpus.
 
 ---
 
