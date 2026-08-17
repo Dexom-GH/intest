@@ -73,6 +73,28 @@ This removes the risk the first draft of this plan flagged as having no clean an
 
 **4. `{{fixture:…}}` is out of scope.** It resolves after `IAssemblyFixture` implementations complete, and those are v1-b. v1-a ships `{{config:…}}`, `{{secret:…}}`, `{{runId}}` and `{{utcNow}}`. A `{{fixture:…}}` token encountered in v1-a fails validation with "not supported until v1-b" rather than being silently left as literal text.
 
+**5. The CLI writes fixtures; the runtime reads them. There is no shared type.** `FixtureDocument`
+(Task 1) lives in `InTest.Cli` and is the *writer* model — composition, `$meta` provenance, and
+operationId filename validation are all generate-time concerns. `FixtureStore` (Task 5) lives in
+`InTest.Runtime` and gets its own read-only `Fixture` model.
+
+This mirrors what the project already does for schemas, exactly: `SchemaBundleBuilder`
+(`src/InTest.Cli/Schemas/`) writes the bundle, `SchemaBundle` (`src/InTest.Runtime/Neutral/`)
+reads it, and neither project references the other. **The contract is the JSON file format, not a
+shared assembly.**
+
+The alternative — having `FixtureStore.Get` return the Task 1 `FixtureDocument` — cannot compile.
+`InTest.Cli` is `OutputType=Exe` with `PackAsTool=true`; `InTest.Runtime` is the library every
+generated test project takes a `PackageReference` on (`InitCommand.cs:54`). Pointing Runtime at
+the CLI would drag a packed executable into every adopter's test project, and inverts the
+dependency: generate-time tooling would become a runtime dependency.
+
+The duplication this creates is bounded — two small models over one file format — and its
+anti-drift mechanism already exists in this repository. `InTest.Cli.Tests` references **both**
+projects (see its `.csproj`, which notes "SchemaBundleBuilderTests round-trips its bundle through
+Runtime.SchemaBundle"), so a round-trip test there pins CLI-written output against the runtime
+reader. Task 5 adds that test.
+
 ---
 
 ## Fixture file shape
@@ -114,6 +136,7 @@ mangled — see Task 1.
 | `FixtureDrift.cs` | Compares an existing fixture against the current schema |
 | `src/InTest.Cli/Commands/FixturesRepairCommand.cs` | The only writer under `fixtures/` |
 | **`src/InTest.Runtime/Neutral/`** | |
+| `Fixture.cs` | The runtime **read** model. Deliberately separate from `FixtureDocument` — decision 5 |
 | `FixtureStore.cs` | Loads fixtures, deep-merges overlays, exposes resolved values |
 | `TokenResolver.cs` | `{{config:}}`, `{{secret:}}`, `{{runId}}`, `{{utcNow}}` |
 | `FixtureValidation.cs` | Aggregated report; per-operation resolution state |
@@ -1177,8 +1200,59 @@ git commit -m "feat(cli): scaffold copies fixtures to output and drops the TestD
 ## Task 5: `FixtureStore` — loading and overlays
 
 **Files:**
-- Create: `src/InTest.Runtime/Neutral/FixtureStore.cs`
+- Create: `src/InTest.Runtime/Neutral/Fixture.cs`, `src/InTest.Runtime/Neutral/FixtureStore.cs`
 - Test: `tests/InTest.Runtime.Tests/FixtureStoreTests.cs`
+- Test: `tests/InTest.Cli.Tests/FixtureContractTests.cs` — the round-trip that keeps the two models honest
+
+**`Fixture` is the runtime read model and does not reference `InTest.Cli`** (decision 5). It
+carries what a test needs at request time — `Parameters` (`SortedDictionary<string, string>`,
+matching Task 1 so Task 8 consumes one shape) and `Body` (`JsonNode?`) — and nothing else. It has
+no `FileNameFor`, no `TryValidateOperationKey` and no tier composition: those are generate-time
+concerns that belong to `FixtureDocument`. Parsing is the same defensive shape Task 1 uses — a
+malformed field raises a domain exception naming the file and field, never a bare `JsonException`,
+because at runtime this runs inside `AssemblyInitialize` where an unhandled crash costs the whole
+suite.
+
+- [ ] **Step 0: Pin the file-format contract with a round-trip test**
+
+The one real cost of decision 5 is that two models can drift. This is the mechanism that stops it,
+and it is the pattern `SchemaBundleBuilderTests` already established — `InTest.Cli.Tests`
+references both projects, so it is the one place that can see both sides of the contract.
+
+```csharp
+[TestMethod]
+public void AFixtureTheCliWritesIsOneTheRuntimeCanRead()
+{
+    // FixtureDocument (CLI, writer) and Fixture (Runtime, reader) are deliberately separate
+    // types over one file format — decision 5. Nothing but this test couples them, so if the
+    // two ever disagree about $meta, $parameters or body, it fails here rather than at
+    // AssemblyInitialize in an adopter's suite.
+    var written = new FixtureDocument
+    {
+        Meta = new FixtureMeta { Tier = 4, OperationId = "createProduct", GeneratedBy = "intest 0.2.0" },
+        Parameters = new() { ["id"] = "7", ["page"] = "2" },
+        Body = JsonNode.Parse("""{"sku":"TODO:sku","nested":{"x":1}}""")
+    };
+
+    var read = InTest.Runtime.Fixture.Parse(written.ToJson());
+
+    read.Parameters.ShouldBe(written.Parameters);
+    read.Body!["sku"]!.GetValue<string>().ShouldBe("TODO:sku");
+    read.Body["nested"]!["x"]!.GetValue<int>().ShouldBe(1);
+}
+
+[TestMethod]
+public void ABodylessFixtureRoundTripsAsBodyless()
+{
+    var written = new FixtureDocument
+    {
+        Meta = new FixtureMeta { Tier = 1, OperationId = "getById", GeneratedBy = "intest 0.2.0" },
+        Parameters = new() { ["id"] = "7" }
+    };
+
+    InTest.Runtime.Fixture.Parse(written.ToJson()).Body.ShouldBeNull();
+}
+```
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1262,7 +1336,7 @@ explicit about which it wants:
 
 | Member | Returns | Used by |
 |---|---|---|
-| `FixtureStore.Get(key)` | The raw `FixtureDocument`, tokens **unresolved** | Startup validation (Task 7) — it inspects tokens, so it must not resolve them |
+| `FixtureStore.Get(key)` | The raw `Fixture` (the Runtime read model — decision 5, *not* `FixtureDocument`), tokens **unresolved** | Startup validation (Task 7) — it inspects tokens, so it must not resolve them |
 | `FixtureStore.ResolvedBody(key)` | A fresh `JsonNode` with every token resolved, **per call** | Generated tests (Task 8), once per request, so `{{utcNow}}` differs between them |
 | `FixtureStore.ResolvedParameter(key, name)` | A resolved `string`, per call | Generated tests building the path and query string |
 
@@ -1560,7 +1634,7 @@ git commit -m "docs: v1-a acceptance run against the sample APIs"
 
 **Deliberately deferred, each with a reason.** `{{fixture:…}}` needs `IAssemblyFixture` (v1-b) and fails loudly meanwhile. `fixtures promote` and the spec-example percentage are v1-f. Credential heuristics on literal fixture values are v1-f, with `{{secret:}}` available from Task 6. Non-JSON request bodies stay out of v1 entirely.
 
-**Type consistency.** `FixtureDocument.Parameters` is `SortedDictionary<string, string>` in Task 1 and consumed as such in Tasks 2, 5 and 8. `FixtureComposer.Compose` returns `FixtureDocument` and is called by both `FixturesRepairCommand` (Task 3) and `GenerateCommand`'s drift check (Task 4). `FixtureStore.Get(operationKey)` returns `FixtureDocument` in Task 5 and is used in Tasks 7 and 8. Operation keys are the same strings `OperationKey.Resolve` produces in v0 — synthesized ones included, which is most of the sample corpus.
+**Type consistency.** `FixtureDocument.Parameters` is `SortedDictionary<string, string>` in Task 1 and consumed as such in Tasks 2 and 3. `FixtureComposer.Compose` returns `FixtureDocument` and is called by both `FixturesRepairCommand` (Task 3) and `GenerateCommand`'s drift check (Task 4). Across the assembly boundary the type changes deliberately: `FixtureStore.Get(operationKey)` returns the Runtime-side `Fixture` in Task 5 and is used in Tasks 7 and 8 (decision 5). `Fixture.Parameters` is the same `SortedDictionary<string, string>` shape, so Task 8 consumes one form regardless of which side produced it, and Task 5's Step 0 round-trip test is what holds the two models to one file format. Operation keys are the same strings `OperationKey.Resolve` produces in v0 — synthesized ones included, which is most of the sample corpus.
 
 **Review corrections folded in.** Three rounds of review, fourteen findings, all resolved
 above rather than left as notes. None needed code to be written to find, which is the cheapest
