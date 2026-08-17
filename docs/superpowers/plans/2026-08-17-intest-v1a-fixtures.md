@@ -1641,15 +1641,15 @@ git commit -m "feat(cli): emit request bodies and fixture-sourced parameters"
 
 Code and spec must not drift. Two documented behaviours changed.
 
-- [ ] **Step 1: Amend §10 — validation blocks operations, not the run**
+- [x] **Step 1: Amend §10 — validation blocks operations, not the run**
 
 Record the decision *and* the reasoning against the alternative, in the style the spec already uses: the aggregated report is unchanged and is the valuable half; failing unaffected operations punishes tests that would pass; and this does not reopen "no skip-flags, no silent green" because nothing is skipped and nothing goes quietly green.
 
-- [ ] **Step 2: Amend §10 — parameters live in fixtures**
+- [x] **Step 2: Amend §10 — parameters live in fixtures**
 
 Document the file shape including `$parameters`, and state that `{{fixture:…}}` is v1-b and fails loudly until then.
 
-- [ ] **Step 3: Update both documents that claim fixtures do not exist**
+- [x] **Step 3: Update both documents that claim fixtures do not exist**
 
 Three specific places, all currently false once this plan lands:
 
@@ -1661,7 +1661,7 @@ Three specific places, all currently false once this plan lands:
 
 `survey`, `--check` and YAML stay on the not-yet-built list — this plan does not deliver them.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git commit -m "docs: fixtures are built; validation blocks operations rather than the run"
