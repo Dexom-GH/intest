@@ -315,6 +315,24 @@ the entire point of generating at pull-request time rather than in the pipeline.
 **Trailing slashes.** Covered above, and worth repeating: it fails silently and looks like
 passing tests.
 
+**Do not repeat a path prefix in the base URL.** `Api:BaseUrl` substitutes for the spec's
+`servers[0].url` and operation paths are appended to it. If your paths already begin `/api`,
+the base URL must be the origin — `https://host/`, not `https://host/api/`. InTest now detects
+this at startup and names both halves, but the failure it prevents was nine tests returning 404
+against configuration that read perfectly.
+
+**Health endpoints usually sit at the host root.** `readiness.path` follows ordinary URI rules:
+`/health/ready` resolves against the origin, `health/ready` against the API base URL. The
+scaffold ships the leading slash. A 404 on the probe fails immediately rather than waiting out
+the timeout, because a missing route does not appear by waiting.
+
+**Route constraints do not disambiguate OpenAPI paths.** `GET /api/stock/{sku}` and
+`DELETE /api/stock/{id:int}` are distinct routes to ASP.NET, which separates them by constraint.
+OpenAPI has no such concept: both collapse to the path signature `/api/stock/{}`, which the
+specification requires to be unique. Every producer will happily emit this invalid document from
+an API that compiles and serves traffic correctly. InTest refuses it with exit code 2 and names
+the colliding signature; the fix is to give one of the routes a distinct segment.
+
 **Non-ASCII in display names.** `X-Test-Run-Id` must be ASCII — `HttpClient` throws otherwise.
 InTest transliterates and appends a hash when a name is lossy, so emoji and RTL variation cases
 stay distinct. Custom display names you write yourself go through the same path.

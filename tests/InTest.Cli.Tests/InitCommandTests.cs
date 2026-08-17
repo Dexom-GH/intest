@@ -30,7 +30,7 @@ public class InitCommandTests
         foreach (var file in new[]
         {
             "intest.json", "Orders.ApiTests.csproj", ".editorconfig", "AssemblyInfo.cs",
-            "TestStartup.cs", "OrdersTestBase.cs", "appsettings.json", "orders.runsettings",
+            "TestStartup.cs", "OrdersTestBase.cs", "appsettings.json", "Orders.ApiTests.runsettings",
             ".config/dotnet-tools.json"
         })
             File.Exists(Path.Combine(_root, file)).ShouldBeTrue($"{file} was not scaffolded.");
@@ -60,7 +60,7 @@ public class InitCommandTests
     public void LeavesTheProfileParameterCommentedOut()
     {
         InitCommand.Run(_root, "Orders.ApiTests", "orders.json");
-        var runsettings = File.ReadAllText(Path.Combine(_root, "orders.runsettings"));
+        var runsettings = File.ReadAllText(Path.Combine(_root, "Orders.ApiTests.runsettings"));
         runsettings.ShouldContain("<!-- <Parameter name=\"profile\"");
     }
 

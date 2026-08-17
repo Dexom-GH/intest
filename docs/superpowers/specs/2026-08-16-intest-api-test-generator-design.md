@@ -616,6 +616,31 @@ the variable silently runs against the wrong environment. The scaffold therefore
 Environment-specific files (`qa.runsettings`) *do* declare it — that is their purpose. The
 default one does not.
 
+### `Api:BaseUrl` substitutes for `servers[0].url`
+
+Because `servers[]` is ignored (below), the configured base URL takes its place: **the spec's
+operation paths are appended to it.** So if those paths already begin with a prefix such as
+`/api`, the base URL must **not** repeat it.
+
+Getting this wrong is silent. The v0 acceptance run configured `http://host/api/` against paths
+beginning `/api/products` and every request resolved to `/api/api/products` — nine tests, nine
+404s, configuration that looked entirely correct. Note this is the *opposite* failure to the
+trailing-slash problem below, and the guard for that one does not detect it.
+
+**So it is detected, not documented.** `generate` writes the longest path prefix shared by every
+operation to `Generated/spec-paths.json`, and `AssemblyInitialize` fails before the first
+request if the base URL repeats it:
+
+```
+Base URL 'http://localhost:5081/api/' and the spec's operation paths both start with '/api',
+so every request would resolve to '/api/api/...' and return 404.
+The base URL substitutes for the spec's servers[0].url, and operation paths are appended to it
+— so it must not repeat a prefix the paths already carry.
+Set Api:BaseUrl to 'http://localhost:5081/' instead.
+```
+
+Comparison is segment-wise, so a base of `/api` against paths under `/apiary` is not flagged.
+
 ### `servers[]` is ignored
 
 The base URL comes from configuration only. InTest never reads the spec's `servers[]` block —
@@ -1448,6 +1473,19 @@ Post-deploy cold start is the single largest source of flaky gates.
   can come from the old instance.
 - **`expectVersion`** — assert the deployed build, not just liveness. Sourced from a pipeline
   variable via config.
+
+**The probe path follows ordinary URI resolution**, and the distinction matters because health
+endpoints conventionally sit at the host root while the API sits under a prefix:
+
+| `readiness.path` | Resolves to |
+|---|---|
+| `health/ready` | `{baseUrl}/health/ready` — under the API prefix |
+| `/health/ready` | `{origin}/health/ready` — the host root, and the scaffold's default |
+| `https://other/health` | itself |
+
+**A 404, 405, 410 or 501 on the probe is terminal, not retried.** Those mean the path is wrong,
+and no amount of waiting fixes a route that does not exist. The v0 acceptance run spent the full
+120 seconds discovering a misconfigured probe path that could have been reported in three.
 
 Fails with `Service did not become ready within 120s (last response: 503)` — not 200 confusing
 test failures. Opt-out per profile. Falls back to a configured lightweight GET where no health

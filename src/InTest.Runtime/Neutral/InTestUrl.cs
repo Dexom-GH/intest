@@ -65,4 +65,47 @@ public static class InTestUrl
         var path = result.ToString();
         return path.StartsWith('/') ? path[1..] : path;
     }
+
+    /// <summary>
+    /// Fails when the configured base URL repeats a path prefix that the spec's own paths
+    /// already carry.
+    /// <para>
+    /// InTest ignores the spec's <c>servers[]</c> block, so the configured base URL takes its
+    /// place and operation paths are appended to it. A base of <c>https://host/api/</c> against
+    /// paths beginning <c>/api/</c> therefore produces <c>/api/api/…</c>. Every request 404s
+    /// against configuration that looks entirely correct, which is why this is detected rather
+    /// than documented.
+    /// </para>
+    /// </summary>
+    public static void EnsureNoPrefixDuplication(Uri baseAddress, string? operationPathPrefix)
+    {
+        ArgumentNullException.ThrowIfNull(baseAddress);
+
+        if (string.IsNullOrWhiteSpace(operationPathPrefix)) return;
+
+        var baseSegments = Segments(baseAddress.AbsolutePath);
+        if (baseSegments.Length == 0) return;
+
+        var pathSegments = Segments(operationPathPrefix);
+        if (pathSegments.Length == 0) return;
+
+        var overlap = Math.Min(baseSegments.Length, pathSegments.Length);
+        for (var i = 0; i < overlap; i++)
+        {
+            if (!string.Equals(baseSegments[i], pathSegments[i], StringComparison.OrdinalIgnoreCase))
+                return;
+        }
+
+        var duplicated = string.Join("/", baseSegments.Take(overlap));
+
+        throw new InvalidOperationException(
+            $"Base URL '{baseAddress}' and the spec's operation paths both start with '/{duplicated}', " +
+            $"so every request would resolve to '/{duplicated}/{duplicated}/...' and return 404." + Environment.NewLine +
+            "The base URL substitutes for the spec's servers[0].url, and operation paths are appended " +
+            "to it — so it must not repeat a prefix the paths already carry." + Environment.NewLine +
+            $"Set Api:BaseUrl to '{baseAddress.GetLeftPart(UriPartial.Authority)}/' instead.");
+    }
+
+    private static string[] Segments(string path)
+        => path.Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 }

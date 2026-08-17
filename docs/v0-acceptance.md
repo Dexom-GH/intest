@@ -60,23 +60,21 @@ and is not optional. The expected physical path was '…/bin/Debug/net10.0/appse
 generated code *builds*, never that it *runs*. Building and running are different gates, and v0
 only had the first.
 
-Fixed in `InitCommand` by adding `appsettings*.json` to the copied content. **A regression test
-that runs a generated suite — not merely compiles it — is still missing.**
+Fixed in `InitCommand` by adding `appsettings*.json` to the copied content, and now guarded by
+`GeneratedSuiteExecutionTests` — which was verified to fail with this exact exception when the
+fix is reverted.
 
-### F2 — readiness path is resolved against the API base URL · **open**
+### F2 — readiness path is resolved against the API base URL · **fixed**
 
 Readiness probed `http://localhost:5081/api/health/ready` and got 404, because the base URL was
 `…/api/` and the probe path is relative. Health endpoints conventionally live at the **host
 root**, not under the API prefix — the sample follows that convention, as most services do.
 
-Setting `readiness.path` to an absolute URL works and is a usable workaround. But the default
-configuration puts a relative path against an API-prefixed base, so the out-of-the-box shape is
-wrong for the common case.
+**Not a design flaw — a scaffold default.** Ordinary URI resolution already distinguishes the
+two cases: `health/ready` resolves against the base URL, `/health/ready` against the origin.
+The scaffold shipped the former; it now ships the latter, and both forms are tested.
 
-*Options:* document that `readiness.path` may be absolute; or give readiness its own base URL;
-or resolve relative readiness paths against the origin rather than the base URL.
-
-### F3 — base URL and spec path prefix silently duplicate · **open, highest value**
+### F3 — base URL and spec path prefix silently duplicate · **fixed**
 
 ```
 GET http://localhost:5081/api/api/products/aaaaaaaa-… → expected 200, got 404 (2ms)
@@ -91,16 +89,15 @@ Nothing states this. §7 documents the *opposite* failure at length — a missin
 silently dropping a base segment — and the guard added for it does not detect duplication.
 The symptom is every test returning 404 with a correct-looking configuration.
 
-*Recommended:* detect it. At `AssemblyInitialize`, if the base URL's path is a prefix of every
-generated path, fail with a message naming both. That is cheap, and it converts a wall of 404s
-into one sentence. §7 should also state plainly that `Api:BaseUrl` substitutes for
-`servers[0].url`.
+Detected rather than documented: `generate` writes the shared operation prefix to
+`Generated/spec-paths.json`, and `AssemblyInitialize` fails before the first request with a
+message naming both halves and the value to use instead.
 
-### F4 — readiness burns the full timeout on a 404 · **open, minor**
+### F4 — readiness burns the full timeout on a 404 · **fixed**
 
 F2 took the full 120 seconds to fail. A 404 or 405 on the probe path is a misconfiguration, not
-a cold start, and no amount of waiting fixes it. Treating those two statuses as terminal would
-have surfaced F2 in three seconds rather than two minutes.
+a cold start, and no amount of waiting fixes it. 404, 405, 410 and 501 are now terminal, and the
+message explains leading-slash resolution — F2 would have been reported in three seconds.
 
 ### F5 — route constraints do not disambiguate OpenAPI paths · **sample fixed, worth documenting**
 
@@ -163,10 +160,18 @@ Stated rather than glossed:
 
 ## Actions
 
-| # | Action | Where |
+All five actions are closed.
+
+| # | Action | Resolution |
 |---|---|---|
-| 1 | F3 — detect base-URL/path-prefix duplication and fail loudly; document `Api:BaseUrl` as substituting for `servers[0].url` | §7, `TestHost` |
-| 2 | F2 — decide how readiness resolves its path | §13, `Readiness` |
-| 3 | Add a test that **runs** a generated suite, not merely compiles it | §16 |
-| 4 | F4 — treat 404/405 on the readiness probe as terminal | `Readiness` |
-| 5 | F5 — document the route-constraint / path-signature trap | `docs/getting-started.md` |
+| 1 | F3 — detect base-URL/path-prefix duplication | `generate` writes the shared operation prefix to `Generated/spec-paths.json`; `AssemblyInitialize` fails before the first request, naming both halves and the correct value. Segment-wise, so `/api` against `/apiary` is not flagged. §7 documents `Api:BaseUrl` as substituting for `servers[0].url` |
+| 2 | F2 — readiness path resolution | Not a design flaw: ordinary URI rules already distinguish `health/ready` (base-relative) from `/health/ready` (origin-rooted). The scaffold shipped the former; it now ships the latter. Both forms tested |
+| 3 | A test that **runs** a generated suite | `GeneratedSuiteExecutionTests` scaffolds, generates, builds and runs against a live `HttpListener` stub. **Negative control performed**: with the F1 fix reverted it fails with the original `FileNotFoundException`; restored, it passes |
+| 4 | F4 — terminal readiness statuses | 404, 405, 410 and 501 now fail immediately with a message explaining leading-slash resolution, rather than consuming the timeout |
+| 5 | F5 — route-constraint trap | Documented in `docs/getting-started.md` under "Things that will bite you" |
+
+Two further defects surfaced while fixing these, both in the scaffold and both fixed: the
+runsettings file was named `orders.runsettings` regardless of project name, and the default
+`Api:BaseUrl` shipped **with** an `/api/` prefix — which is what produced F3 in the first place.
+
+Test count went from 103 to 123.

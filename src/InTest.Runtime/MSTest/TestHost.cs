@@ -46,12 +46,28 @@ public static class TestHost
 
         Schemas = SchemaBundle.FromFile(Path.Combine(AppContext.BaseDirectory, "spec-schemas.json"));
 
+        // Fail on a base URL that repeats a prefix the spec's paths already carry, before a
+        // single request is sent. The alternative is every test returning 404 with no clue why.
+        InTestUrl.EnsureNoPrefixDuplication(
+            InTestUrl.NormalizeBase(Configuration["Api:BaseUrl"]!), ReadOperationPathPrefix());
+
         var readiness = new ReadinessOptions();
         Configuration.GetSection("InTest:Readiness").Bind(readiness);
 
         using var scope = Root.CreateScope();
         var client = scope.ServiceProvider.GetRequiredService<IHttpClientFactory>().CreateClient(InTestClients.Api);
         await Readiness.WaitAsync(client, readiness, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static string? ReadOperationPathPrefix()
+    {
+        var path = Path.Combine(AppContext.BaseDirectory, "spec-paths.json");
+        if (!File.Exists(path)) return null;
+
+        using var document = System.Text.Json.JsonDocument.Parse(File.ReadAllText(path));
+        return document.RootElement.TryGetProperty("operationPathPrefix", out var value)
+            ? value.GetString()
+            : null;
     }
 
     private static string ResolveProfile(TestContext context)

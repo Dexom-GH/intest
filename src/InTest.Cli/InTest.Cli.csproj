@@ -16,4 +16,8 @@
   <ItemGroup>
     <EmbeddedResource Include="Rendering/Templates/*.scriban" />
   </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="InTest.Cli.Tests" />
+  </ItemGroup>
+
 </Project>

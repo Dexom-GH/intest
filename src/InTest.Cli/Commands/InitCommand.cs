@@ -42,7 +42,7 @@ public static class InitCommand
             <Nullable>enable</Nullable>
             <ImplicitUsings>enable</ImplicitUsings>
             <IsPackable>false</IsPackable>
-            <RunSettingsFilePath>$(MSBuildProjectDirectory)/orders.runsettings</RunSettingsFilePath>
+            <RunSettingsFilePath>$(MSBuildProjectDirectory)/{projectName}.runsettings</RunSettingsFilePath>
             <InTestSpecSource>{specSource.Replace("\\", "/")}</InTestSpecSource>
           </PropertyGroup>
           <ItemGroup>
@@ -55,6 +55,7 @@ public static class InitCommand
           </ItemGroup>
           <ItemGroup>
             <Content Include="Generated/spec-schemas.json" Link="spec-schemas.json" CopyToOutputDirectory="PreserveNewest" />
+            <Content Include="Generated/spec-paths.json" Link="spec-paths.json" CopyToOutputDirectory="PreserveNewest" />
             <!-- TestHost resolves configuration from AppContext.BaseDirectory, so these must
                  travel to the output directory. Without them every generated project fails at
                  AssemblyInitialize with a FileNotFoundException for appsettings.json. -->
@@ -131,22 +132,25 @@ public static class InitCommand
             "DefaultProfile": "local",
             "Readiness": {
               "Enabled": true,
-              "Path": "health/ready",
+              "Path": "/health/ready",
               "ExpectStatus": 200,
               "ConsecutiveSuccesses": 2,
               "TimeoutSeconds": 120,
               "IntervalSeconds": 3
             }
           },
-          "Api": { "BaseUrl": "https://localhost:5001/api/" }
+          // BaseUrl substitutes for the spec's servers[0].url: the spec's paths are appended
+          // to it. If those paths already begin with a prefix such as /api, this value must
+          // NOT repeat it, or every request 404s against configuration that looks correct.
+          "Api": { "BaseUrl": "https://localhost:5001/" }
         }
         """);
 
         Write(projectRoot, "appsettings.staging.json", """
-        { "Api": { "BaseUrl": "https://REPLACE-ME.example.com/api/" } }
+        { "Api": { "BaseUrl": "https://REPLACE-ME.example.com/" } }
         """);
 
-        Write(projectRoot, "orders.runsettings", """
+        Write(projectRoot, $"{projectName}.runsettings", """
         <?xml version="1.0" encoding="utf-8"?>
         <RunSettings>
           <TestRunParameters>

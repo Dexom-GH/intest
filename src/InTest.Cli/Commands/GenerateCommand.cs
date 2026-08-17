@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 using System.Text.Json;
 using InTest.Cli.Coverage;
 using InTest.Cli.Planning;
@@ -12,6 +13,30 @@ public static class GenerateCommand
     public const int ExitOk = 0;
     public const int ExitWorkOutstanding = 1;
     public const int ExitToolError = 2;
+
+    /// <summary>Longest leading run of path segments shared by every generated operation.</summary>
+    internal static string CommonPathPrefix(Planning.TestPlan plan)
+    {
+        var paths = plan.Classes.SelectMany(c => c.Cases).Select(c => c.PathTemplate).ToList();
+        if (paths.Count == 0) return string.Empty;
+
+        var segmentLists = paths
+            .Select(p => p.Split('/', StringSplitOptions.RemoveEmptyEntries))
+            .ToList();
+
+        var shortest = segmentLists.Min(s => s.Length);
+        var shared = new List<string>();
+
+        for (var i = 0; i < shortest; i++)
+        {
+            var candidate = segmentLists[0][i];
+            if (candidate.StartsWith('{')) break;
+            if (!segmentLists.All(s => string.Equals(s[i], candidate, StringComparison.OrdinalIgnoreCase))) break;
+            shared.Add(candidate);
+        }
+
+        return shared.Count == 0 ? string.Empty : "/" + string.Join("/", shared);
+    }
 
     public static async Task<int> RunAsync(string projectRoot, CancellationToken cancellationToken)
     {
@@ -49,6 +74,14 @@ public static class GenerateCommand
 
             await File.WriteAllTextAsync(Path.Combine(generated, "spec-schemas.json"),
                 SchemaBundleBuilder.Build(spec.Document, plan), cancellationToken).ConfigureAwait(false);
+
+            // The prefix every operation path shares, if any. TestHost uses it to detect a
+            // base URL that repeats it; otherwise every request 404s and nothing says why.
+            var pathManifest = new JsonObject { ["operationPathPrefix"] = CommonPathPrefix(plan) };
+            await File.WriteAllTextAsync(
+                Path.Combine(generated, "spec-paths.json"),
+                pathManifest.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + "\n",
+                cancellationToken).ConfigureAwait(false);
 
             await File.WriteAllTextAsync(Path.Combine(projectRoot, "coverage-report.json"),
                 CoverageReport.ToJson(plan), cancellationToken).ConfigureAwait(false);
