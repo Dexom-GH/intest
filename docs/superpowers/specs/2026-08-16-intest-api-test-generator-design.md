@@ -1127,6 +1127,49 @@ The hardest part of the system, and where every hand-edit originates.
 
 Tier recorded in each fixture's `$meta`.
 
+### Path and query parameters live in fixtures, not a separate mechanism
+
+There is no `TestData` file and no second source of truth for request inputs. A path or query
+parameter is composed by the same tier precedence as a request body, and lands in the same
+fixture, under `$parameters`:
+
+```jsonc
+{
+  "$meta": { "tier": 4, "operationId": "getOrderById", "generatedBy": "intest 1.0.0" },
+  "$parameters": {
+    "id": "TODO:id"
+  }
+}
+```
+
+Field order is fixed — `$meta`, then `$parameters` (sorted by name), then `body` — and each is
+omitted entirely, never written empty, when the operation has none. That is what keeps a
+committed fixture's diff reviewable: two fixtures with identical content always serialize
+byte-for-byte the same, so a real change is a one-line diff, not a reordering.
+
+Which parameters get a value, and what kind, is one rule, not a case-by-case judgment call:
+
+| Parameter | Appears | Value |
+|---|---|---|
+| Path | Always | `example`/`default` from the spec if present (tier 2/3); `TODO:` sentinel otherwise (tier 4) |
+| Query, `required: true` | Always | Same as path |
+| Query, optional, spec gives `example` or `default` | Always | That value (tier 2/3) — never a sentinel |
+| Query, optional, no `example`/`default` | Never | Omitted from `$parameters` — never sent |
+
+**A path parameter is sentinelled whatever the document's `required` flag claims.** An unrouted
+path segment does not produce a smaller version of the same test — it is a 404 from routing
+before the handler under test ever runs, which is a different operation, not a lenient one.
+Treating `required: false` on a path parameter as license to skip it would mean silently
+generating a request that cannot route. So InTest disregards the flag there and always
+sentinels the path.
+
+**An optional query parameter with neither `example` nor `default` is the one input InTest
+declines to invent a value for.** Sentinelling it would assert on a query parameter nobody
+asked to test; omitting it instead means the generated request exercises the API's actual
+default behaviour when that parameter is absent, which is the faithful contract test. This is
+the same reasoning as tier 4 sentinels generally, applied in the direction of *not* fabricating
+a value rather than fabricating an obviously-fake one.
+
 ### Fail loudly, don't flag
 
 There is **no review flag.** A tier-4 fixture contains obvious sentinels and the test fails.
@@ -1146,6 +1189,35 @@ Fixture validation failed (3 fixtures, 5 problems):
 
 This works because generation happens in a branch: developer regenerates, tests fail on the
 PR, fixtures get fixed, PR merges. **The gate never sees red.**
+
+#### A bad fixture blocks its own operations, not the run
+
+The aggregated report above names every problem across every fixture, but that report is not
+also a reason to stop the whole suite from running. **A bad fixture fails only the operations
+that consume it.** Everything else — every operation whose fixture resolved cleanly, and every
+operation that needed no fixture at all — runs normally.
+
+The alternative was tried first and rejected. Aborting the run at `AssemblyInitialize` the
+moment any fixture has a problem is the more obvious design — it is what "aggregated
+validation" sounds like it should do — but it fails a test for a reason that has nothing to do
+with that test. On the Catalog sample corpus (§10 acceptance), a single unresolved sentinel in
+`update-product.json` would have turned all 9 generated tests red, 6 of which pass cleanly
+against fixtures that are perfectly fine. That is not "fail loudly", it is "fail everything
+because something, somewhere, is wrong" — a report a developer has to read all the way through
+before learning that most of it doesn't apply to them.
+
+Blocking per-operation instead keeps the report exactly as valuable — it is still one message,
+built once, naming every problem and its file — while making the *consequence* proportional to
+the *cause*. A developer fixing `update-product.json` sees `updateProduct` fail and the other 8
+Catalog tests pass, which is a truer signal of what is and is not broken than a wall of red.
+
+This does not reopen principle 5's "no skip-flags, no silent green." Nothing is skipped: every
+operation still runs, or fails, on its own account — `RequireFixture` throws
+`FixtureUnresolvedException` naming the fixture file and the unresolved property, the same
+message the aggregated report already carries, so nothing about the failure loses detail by
+being scoped down. And nothing goes quietly green: an operation whose fixture is broken fails,
+loudly, every time, until the fixture is fixed. What changes is only which *other* tests share
+that fate — and the answer is now none of them.
 
 #### This conflicts with "easy to adopt", knowingly
 
@@ -1196,6 +1268,17 @@ in *this* environment.
 
 `{{config:}}` and `{{secret:}}` are **how credentials stay out of committed fixtures.**
 Generation warns on any literal value matching credential heuristics.
+
+**`{{fixture:…}}` is v1-b, not v1-a.** No `IAssemblyFixture` publishes anything yet for it to
+resolve against, so the row above describes the finished design, not what v1-a resolves. Writing
+`{{fixture:seededCustomer.id}}` into a v1-a fixture does not pass through as literal text and
+does not silently succeed — it fails the same aggregated validation as an unfilled `TODO:`
+sentinel, naming the token and stating that it is not supported until v1-b. Anything gentler
+would be exactly the plausible-but-fake value this section spends most of its words warning
+against: a fixture that *reads* as wired up to referential integrity while actually sending a
+literal, meaningless string. Until v1-b ships, referential integrity is solved by hand — point a
+sentinel at data seeded some other way, or at a value already known to exist in the target
+environment.
 
 ### Environment overlays
 

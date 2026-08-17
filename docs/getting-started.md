@@ -3,11 +3,17 @@
 End-to-end walkthrough: from an existing .NET API with an OpenAPI document, to a committed
 integration test suite running as a post-deployment gate.
 
-> **Phases 0-4 and 6-8 describe behaviour that exists at v0. Phase 5 does not yet.**
+> **Phase 0 (`survey`) does not exist yet, nor does `--check` within Phase 8. Everything else
+> below, including fixtures (Phase 5), does.**
 >
-> `init` and `generate` work and are verified end to end ([`v0-acceptance.md`](v0-acceptance.md)).
-> Not yet built: fixtures (Phase 5), `survey` (Phase 0), `generate --check` (Phase 8), variation
-> and auth tests, and YAML input. Nothing is published to NuGet, so build from source for now.
+> `init`, `generate`, and `fixtures repair` (Phase 5) all work: together they produce a
+> compiling MSTest project, complete with the fixture files every operation needs. `init` and
+> `generate` are verified end to end against a live API
+> ([`v0-acceptance.md`](v0-acceptance.md)); a live run exercising fixture-sourced request bodies
+> and parameters is the next update to that record, not yet done. Not yet built: `survey`
+> (Phase 0), `generate --check` (Phase 8), variation and auth tests, `{{fixture:…}}` and
+> `IAssemblyFixture` (both v1-b, see Phase 5), and YAML input. Nothing is published to NuGet, so
+> build from source for now.
 >
 > The walkthrough is kept whole rather than trimmed to what ships, because tracing it end to end
 > is what finds gaps — it is how the unowned creation of the first fixture files was caught, and
@@ -177,35 +183,52 @@ intest fixtures repair
 ```
 
 The only command that writes under `fixtures/`. It creates missing fixtures, adds `TODO:`
-sentinels for newly-required properties, flags properties that left the schema, and **never
-overwrites a value you wrote**.
+sentinels for newly-required properties and parameters, flags properties that left the schema,
+and **never overwrites a value you wrote**.
 
 Now the real work. A generated fixture looks like:
 
 ```jsonc
 {
-  "$meta": { "tier": 4, "operationId": "createOrder" },
-  "customerId": "TODO:customerId",
-  "items": [ { "sku": "TODO:sku", "quantity": 1 } ]
+  "$meta": { "tier": 4, "operationId": "createOrder", "generatedBy": "intest 1.0.0" },
+  "$parameters": {
+    "id": "TODO:id"
+  },
+  "body": {
+    "customerId": "TODO:customerId",
+    "items": [ { "sku": "TODO:sku", "quantity": 1 } ]
+  }
 }
 ```
+
+Path and query parameters live in the same file, under `$parameters` — there is no separate
+`TestData` mechanism (§10). A path parameter always gets a value; an optional query parameter
+appears only when the spec gives it an `example` or a `default`, and is otherwise omitted
+entirely so the generated request never sends it.
 
 **Tests fail while `TODO:` sentinels remain, by design.** The alternative is inventing
 plausible values, which a permissive endpoint accepts — leaving a green suite that asserts
 nothing. A red test gets fixed; a passing test that proves nothing never does. Failures are
-aggregated into a single message at startup naming every unresolved sentinel and its file, not
-one failure per test.
+aggregated into a single message at startup naming every unresolved sentinel and its file. Only
+the operations that actually depend on a broken fixture fail — a bad fixture does not take down
+tests that never touch it (§10).
 
 Replace sentinels with real values, or with tokens:
 
 | Token | Resolved |
 |---|---|
 | `{{config:Orders:ApiKey}}` | Once per run, from configuration — keeps credentials out of committed files |
-| `{{fixture:seededCustomer.id}}` | After assembly fixtures complete — for referential integrity |
 | `{{runId}}` | Once per run |
 | `{{utcNow}}` | Per request |
 
-For data that must exist in the target environment, write an `IAssemblyFixture`:
+> **`{{fixture:…}}` is designed, not yet built (v1-b).** §10 defines it as resolving a value an
+> `IAssemblyFixture` published — for referential integrity, e.g. a `customerId` that exists in
+> *this* environment — after all assembly fixtures complete. Neither the token nor
+> `IAssemblyFixture` exist today. Writing `{{fixture:…}}` into a fixture now does not pass
+> through as literal text; it fails validation loudly, naming the token. Until v1-b ships,
+> referential integrity is a fixture author's problem to solve by hand: point a sentinel at data
+> seeded some other way, or at a value already known to exist in the target environment. The
+> `IAssemblyFixture` example below is the target design for when it lands.
 
 ```csharp
 var customer = await _api.CreateCustomerAsync(ct);
