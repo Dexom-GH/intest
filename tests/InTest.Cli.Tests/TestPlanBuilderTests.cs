@@ -94,4 +94,43 @@ public class TestPlanBuilderTests
         var second = System.Text.Json.JsonSerializer.Serialize(await BuildAsync());
         first.ShouldBe(second);
     }
+
+    [TestMethod]
+    public async Task SkipsAnOperationWhoseIdCannotBeAFixtureFileName()
+    {
+        const string spec = """
+        {
+          "openapi":"3.0.3","info":{"title":"T","version":"1"},
+          "paths":{
+            "/a":{"post":{"operationId":"Orders/Create",
+              "requestBody":{"content":{"application/json":{"schema":{"type":"object"}}}},
+              "responses":{"201":{"description":"ok"}}}},
+            "/b":{"get":{"operationId":"listOrders","responses":{"200":{"description":"ok"}}}}}
+        }
+        """;
+
+        var plan = TestPlanBuilder.Build((await SpecLoader.LoadFromTextAsync(spec)).Document);
+
+        plan.Skipped.ShouldContain(sk => sk.OperationKey == "Orders/Create" && sk.Reason.Contains("'/'"));
+        plan.Classes.SelectMany(c => c.Cases).ShouldContain(c => c.OperationKey == "listOrders",
+            "one unusable operationId must not cost the rest of the document");
+    }
+
+    [TestMethod]
+    public async Task DoesNotSkipAnUnusableIdWhenTheOperationNeedsNoFixture()
+    {
+        // No request body and no required parameter means no fixture is ever loaded, so the
+        // filename is never needed. §12's rule is that skips remove tests and notes do not — this
+        // operation is perfectly testable, so removing it would lose coverage for no reason.
+        const string spec = """
+        {
+          "openapi":"3.0.3","info":{"title":"T","version":"1"},
+          "paths":{"/a":{"get":{"operationId":"Orders/List","responses":{"200":{"description":"ok"}}}}}}
+        """;
+
+        var plan = TestPlanBuilder.Build((await SpecLoader.LoadFromTextAsync(spec)).Document);
+
+        plan.Skipped.ShouldBeEmpty();
+        plan.Classes.SelectMany(c => c.Cases).Count().ShouldBe(1);
+    }
 }

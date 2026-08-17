@@ -1,3 +1,4 @@
+using InTest.Cli.Fixtures;
 using InTest.Cli.Naming;
 using InTest.Cli.Spec;
 using Microsoft.OpenApi;
@@ -27,6 +28,19 @@ public static class TestPlanBuilder
             foreach (var (method, operation) in (pathItem.Operations ?? []).OrderBy(o => o.Key.Method, StringComparer.Ordinal))
             {
                 var key = OperationKey.Resolve(operation.OperationId, method.Method, path);
+
+                var needsFixture =
+                    operation.RequestBody?.Content?.ContainsKey(JsonMediaType) is true ||
+                    (operation.Parameters ?? []).Any(p =>
+                        // Same predicate as Task 2's composer — a path parameter is required whether or not
+                        // the document says so, because it cannot be omitted from the URL.
+                        p.In is ParameterLocation.Path || (p.Required && p.In is ParameterLocation.Query));
+
+                if (needsFixture && !FixtureDocument.TryValidateOperationKey(key.Value, out var reason))
+                {
+                    skipped.Add(new SkippedOperation(key.Value, reason));
+                    continue;
+                }
 
                 if (operation.RequestBody?.Content is { Count: > 0 } requestContent &&
                     !requestContent.ContainsKey(JsonMediaType))

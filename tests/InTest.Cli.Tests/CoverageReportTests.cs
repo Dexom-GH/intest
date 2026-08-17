@@ -43,4 +43,16 @@ public class CoverageReportTests
     {
         CoverageReport.ToJson(Plan()).ShouldBe(CoverageReport.ToJson(Plan()));
     }
+
+    [TestMethod]
+    public void CarriesAnUnusableOperationIdSkip()
+    {
+        var plan = new TestPlan("Api", [],
+            [new SkippedOperation("Orders/Create", "operationId 'Orders/Create' cannot be a fixture filename: it contains '/'.")]);
+
+        var json = CoverageReport.ToJson(plan);
+
+        json.ShouldContain("Orders/Create");
+        json.ShouldContain("cannot be a fixture filename");
+    }
 }
