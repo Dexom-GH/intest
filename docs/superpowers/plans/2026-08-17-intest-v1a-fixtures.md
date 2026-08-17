@@ -31,9 +31,22 @@ The rule, stated once:
 
 | Parameter | In `$parameters`? | Sent? |
 |---|---|---|
-| `required: true` | Yes, as `TODO:{name}` until filled | Yes |
-| Optional with an `example` or `default` | Yes, as that real value — never a sentinel | Yes |
-| Optional with neither | No | No |
+| **`in: path`** — regardless of the `required` flag | Yes, as `TODO:{name}` until filled | Yes |
+| `in: query`, `required: true` | Yes, as `TODO:{name}` until filled | Yes |
+| `in: query`, optional, with an `example` or `default` | Yes, as that real value — never a sentinel | Yes |
+| `in: query`, optional, with neither | No | No |
+
+**A path parameter is required whether or not the document says so.** A query parameter can be
+left out of the URL; a path parameter cannot — with no value, `Build` renders `/api/products/{id}`
+literally or leaves an empty segment, and every such test 404s.
+
+OpenAPI 3.x mandates `required: true` for `in: path`, so this only arises from a malformed
+document. *Measured:* Microsoft.OpenApi 3.10.0 reports `"required" must be true when parameter
+location is "path"` as a diagnostic **but preserves `Required = false` on the parameter**, and
+`SpecLoader` already refuses any document with diagnostic errors (exit 2). So this rule is
+belt-and-braces rather than a live hole — but the composer should be correct on its own terms
+rather than relying on what upstream validation happens to catch, and this project has met a
+producer emitting an invalid document from a healthy API once already (F5).
 
 Query parameters that are present are appended as a query string; path parameters substitute
 into the path template. Both are the template's job (Task 8).
@@ -631,7 +644,10 @@ Key requirements the tests encode, restated so the implementation is not guessed
 - Arrays get exactly one element — enough to show the shape, not so many that a human editing it despairs.
 - Only `in: path` and `in: query` parameters are emitted. Headers are excluded: §9 notes empty headers are often dropped before reaching app code, and they are not part of the request line.
 - **Sentinels are always the string `TODO:{propertyName}`**, whatever the schema declares (decision 3). Never emit a typed zero value.
-- **Only `required: true` parameters are sentinelled** (decision 1). An optional parameter appears only when the spec gives it an `example` or `default`; otherwise it is omitted entirely.
+- **Every `in: path` parameter is sentinelled regardless of its `required` flag**, and `in: query` only when `required: true` (decision 1). An optional query parameter appears only when the spec gives it an `example` or `default`; otherwise it is omitted entirely. The predicate, used identically here and in Task 2a:
+  ```csharp
+  p.In is ParameterLocation.Path || (p.Required && p.In is ParameterLocation.Query)
+  ```
 - Tier reflects the worst source used anywhere: one `TODO:` makes the whole fixture tier 4.
 
 ```csharp
@@ -786,7 +802,9 @@ In `TestPlanBuilder.Build`, after resolving the operation key and before buildin
 var needsFixture =
     operation.RequestBody?.Content?.ContainsKey(JsonMediaType) is true ||
     (operation.Parameters ?? []).Any(p =>
-        p.Required && p.In is ParameterLocation.Path or ParameterLocation.Query);
+        // Same predicate as Task 2's composer — a path parameter is required whether or not
+        // the document says so, because it cannot be omitted from the URL.
+        p.In is ParameterLocation.Path || (p.Required && p.In is ParameterLocation.Query));
 
 if (needsFixture && !FixtureDocument.TryValidateOperationKey(key.Value, out var reason))
 {
@@ -1298,6 +1316,22 @@ public void OnlyOperationsWithUnresolvedFixturesAreBlocked()
 }
 
 [TestMethod]
+public void AnOperationWithNoFixtureIsNotBlocked()
+{
+    // The majority case, and the one v0 already passes: a parameterless GET never loads a
+    // fixture. FixtureStore.Get throws FixtureNotFoundException for an unknown key by design
+    // (Task 5), and the obvious implementation of RequireFixture — delegate to Get — would
+    // inherit that and fail every such operation. Task 10 would report 0 of 9, not 9 of 9.
+    Validate(("create-order", new[] { "customerId" })).IsBlocked("get_api_products").ShouldBeFalse();
+}
+
+[TestMethod]
+public void RequireFixtureIsANoOpForAnOperationWithNoFixture()
+{
+    Should.NotThrow(() => Validate().ThrowIfBlocked("get_api_products"));
+}
+
+[TestMethod]
 public void BlockedOperationsFailWithTheirOwnFileAndProperty()
 {
     var report = Validate(("create-order", new[] { "customerId" }));
@@ -1310,7 +1344,22 @@ public void BlockedOperationsFailWithTheirOwnFileAndProperty()
 
 - [ ] **Step 2: Implement**
 
-`TestHost` builds the report at `AssemblyInitialize` and writes the full message to `TestContext` **once**, so it appears in the `.trx` and the CI summary even though it does not abort. `ApiTestBase` exposes `RequireFixture(operationKey)`, which generated tests call before building a request; it throws `FixtureUnresolvedException` for blocked operations only.
+`TestHost` builds the report at `AssemblyInitialize` and writes the full message to `TestContext`
+**once**, so it appears in the `.trx` and the CI summary even though it does not abort.
+
+`ApiTestBase.RequireFixture(operationKey)` is what generated tests call before building a
+request. **It consults the validation report, never `FixtureStore.Get`.** Three states, and only
+one of them throws:
+
+| State | Behaviour |
+|---|---|
+| No fixture exists for the operation | **No-op.** The majority case — a parameterless GET needs none |
+| Fixture exists and every value resolves | No-op |
+| Fixture exists with unresolved sentinels or tokens | Throws `FixtureUnresolvedException` naming the file and property |
+
+Delegating to `Get` would collapse the first row into the third, because `Get` throws for an
+unknown key by design (Task 5). That single mistake would fail every operation that legitimately
+needs no fixture, which on the sample corpus is most of them.
 
 - [ ] **Step 3–4: Run, commit**
 
