@@ -3,12 +3,16 @@
 End-to-end walkthrough: from an existing .NET API with an OpenAPI document, to a committed
 integration test suite running as a post-deployment gate.
 
-> **This describes the designed flow. None of it runs yet.**
+> **Phases 0-4 and 6-8 describe behaviour that exists at v0. Phase 5 does not yet.**
 >
-> InTest is at design stage — no code, nothing published to NuGet. This document exists so the
-> intended experience can be reviewed, argued with, and checked for gaps before it is built.
-> Tracing it end to end has already exposed one: nothing owned the creation of the first
-> fixture files. If you spot another, that is the most useful thing you can send us.
+> `init` and `generate` work and are verified end to end ([`v0-acceptance.md`](v0-acceptance.md)).
+> Not yet built: fixtures (Phase 5), `survey` (Phase 0), `generate --check` (Phase 8), variation
+> and auth tests, and YAML input. Nothing is published to NuGet, so build from source for now.
+>
+> The walkthrough is kept whole rather than trimmed to what ships, because tracing it end to end
+> is what finds gaps — it is how the unowned creation of the first fixture files was caught, and
+> how the v0 acceptance run found four defects. If you spot another, that is the most useful
+> thing you can send us.
 >
 > Design detail lives in the [specification](superpowers/specs/2026-08-16-intest-api-test-generator-design.md);
 > section references like §10 point there.

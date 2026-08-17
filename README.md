@@ -7,14 +7,19 @@ The output is a normal MSTest project. You commit it, edit it, and run it with `
 like any other test project. InTest is a development-time tool — it generates on your machine
 or in a pull request, never as part of the deployment pipeline.
 
-> **Status: design. There is no code yet.**
+> **Status: v0. Working, but early — and nothing is published to NuGet yet.**
 >
-> This repository currently contains the design specification and nothing else. Nothing is
-> published to NuGet, no command described below is runnable, and the package IDs are not yet
-> reserved. If you found this looking for a working tool, come back later — or read the design
-> and tell us where it's wrong, which is more useful to us right now.
+> `intest init` and `intest generate` work: they produce a compiling MSTest project whose
+> contract tests pass against a live API. That has been verified against three sample APIs, one
+> per OpenAPI producer — see [`docs/v0-acceptance.md`](docs/v0-acceptance.md).
 >
-> Read it: [`docs/superpowers/specs/2026-08-16-intest-api-test-generator-design.md`](docs/superpowers/specs/2026-08-16-intest-api-test-generator-design.md)
+> **Not yet built:** fixtures (so operations with request bodies generate tests that cannot send
+> one), variation tests, auth tests, `intest survey`, `generate --check`, `fixtures repair`, and
+> YAML input. Packages are unpublished and the IDs are not reserved, so you cannot install this
+> yet — build from source.
+>
+> The design spec is still the source of truth and is worth reading before the code:
+> [`docs/superpowers/specs/2026-08-16-intest-api-test-generator-design.md`](docs/superpowers/specs/2026-08-16-intest-api-test-generator-design.md)
 
 ## What it is for
 
@@ -49,9 +54,12 @@ Read these before evaluating — they are firm for v1, and they rule InTest out 
 
 Worth knowing before you start, because it surprises people.
 
-`intest fixtures repair` creates a request body for every operation that needs one. Where your
-spec provides an `example`, that body is real. Where it does not, InTest emits an obvious
-`TODO:` placeholder — **and the test fails until a human replaces it.**
+Once fixtures land, `intest fixtures repair` will create a request body for every operation
+that needs one. Where your spec provides an `example`, that body is real. Where it does not,
+InTest emits an obvious `TODO:` placeholder — **and the test fails until a human replaces it.**
+
+At v0 there are no fixtures at all, so operations taking a request body generate a test that
+cannot send one and fails with 415. GET and DELETE operations work today.
 
 That is deliberate. The alternative is filling in plausible-looking junk (`"string"`, `0`),
 which a permissive endpoint accepts, so the suite passes while asserting nothing. A red test
@@ -60,30 +68,27 @@ gets fixed; a green test that proves nothing never does.
 In practice that means, on an API with lots of POSTs and few spec examples, your first run is
 mostly red and there is real work to do. Two things make that manageable:
 
-- Run `intest survey` **before** adopting — it tells you what fraction of operations carry
+- Run `intest survey` **before** adopting — it will tell you what fraction of operations carry
   examples, so you can size the work in advance instead of discovering it.
 - A useful suite runs immediately with no fixture work at all: every GET and DELETE contract
   test, every declared-error test (404s, 400s), and every no-token 401 test needs no body.
 
-## How it will work
+## Using it
+
+Working today:
 
 ```bash
-# See what InTest would make of your specs, before committing to anything
-intest survey "specs/**/*.json"                 # a glob over local specs...
-intest survey "https://host/swagger/v1/swagger.json"   # ...or a URL
-
-# Scaffold a test project
-intest init
-
-# Generate tests from the spec
+intest init --name Orders.ApiTests --spec ../Orders/bin/Debug/net10.0/orders.json
 intest generate
+dotnet test
+```
 
-# Create fixtures for operations with request bodies, and update them when the spec moves.
-# `generate` reports what is missing; this is the only command that writes under fixtures/.
-intest fixtures repair
+Designed, not yet built:
 
-# In CI: fail if the committed output is stale
-intest generate --check
+```bash
+intest survey "specs/**/*.json"    # size the work before adopting
+intest fixtures repair             # request bodies for POST/PUT operations
+intest generate --check            # CI: fail if committed output is stale
 ```
 
 Generated code lands in `Generated/` and is regenerated wholesale. Your code lives in
@@ -107,10 +112,10 @@ to a suite running as a post-deployment gate, including CI wiring and the things
 
 ## Contributing
 
-Issues and pull requests are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). While the
-project is at design stage, the most valuable contribution is a careful reading of the spec.
-Prior review rounds have already caught contradictions, a build-breaking interaction, and a
-correlation identifier that silently collapsed across data-driven test rows.
+Issues and pull requests are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). A careful
+reading of the spec remains among the most valuable contributions: prior review rounds caught
+contradictions, a build-breaking interaction, and a correlation identifier that silently
+collapsed across data-driven test rows, all before any of it was written.
 
 ## Security
 
