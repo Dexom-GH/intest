@@ -692,6 +692,125 @@ Expected: `Passed! - Failed: 0, Passed: 9`.
 
 ---
 
+## Task 2a: An unusable operationId skips one operation, not the document
+
+`TryValidateOperationKey` reports rather than throws (Task 1). This task is what consumes that
+report.
+
+**Blast radius is the point.** A 148-operation spec with one operationId containing `/` must
+still generate the other 147. v0 already has the pattern, and it is not aborting:
+`TestPlanBuilder` records a `SkippedOperation` with a reason, keeps going, and surfaces it in
+`coverage-report.json` — the route non-JSON request bodies and missing 2xx responses already
+take. An unusable operationId is the same shape of problem, so it takes the same route, and the
+adopter reads about it in the channel they already read for this class of thing rather than as
+an exit-2 stack trace.
+
+**Files:**
+- Modify: `src/InTest.Cli/Planning/TestPlanBuilder.cs`
+- Test: `tests/InTest.Cli.Tests/TestPlanBuilderTests.cs` (extend), `tests/InTest.Cli.Tests/CoverageReportTests.cs` (extend)
+
+- [ ] **Step 1: Write the failing tests**
+
+```csharp
+[TestMethod]
+public async Task SkipsAnOperationWhoseIdCannotBeAFixtureFileName()
+{
+    const string spec = """
+    {
+      "openapi":"3.0.3","info":{"title":"T","version":"1"},
+      "paths":{
+        "/a":{"post":{"operationId":"Orders/Create",
+          "requestBody":{"content":{"application/json":{"schema":{"type":"object"}}}},
+          "responses":{"201":{"description":"ok"}}}},
+        "/b":{"get":{"operationId":"listOrders","responses":{"200":{"description":"ok"}}}}}
+    }
+    """;
+
+    var plan = TestPlanBuilder.Build((await SpecLoader.LoadFromTextAsync(spec)).Document);
+
+    plan.Skipped.ShouldContain(sk => sk.OperationKey == "Orders/Create" && sk.Reason.Contains("'/'"));
+    plan.Classes.SelectMany(c => c.Cases).ShouldContain(c => c.OperationKey == "listOrders",
+        "one unusable operationId must not cost the rest of the document");
+}
+
+[TestMethod]
+public async Task DoesNotSkipAnUnusableIdWhenTheOperationNeedsNoFixture()
+{
+    // No request body and no required parameter means no fixture is ever loaded, so the
+    // filename is never needed. §12's rule is that skips remove tests and notes do not — this
+    // operation is perfectly testable, so removing it would lose coverage for no reason.
+    const string spec = """
+    {
+      "openapi":"3.0.3","info":{"title":"T","version":"1"},
+      "paths":{"/a":{"get":{"operationId":"Orders/List","responses":{"200":{"description":"ok"}}}}}}
+    """;
+
+    var plan = TestPlanBuilder.Build((await SpecLoader.LoadFromTextAsync(spec)).Document);
+
+    plan.Skipped.ShouldBeEmpty();
+    plan.Classes.SelectMany(c => c.Cases).Count().ShouldBe(1);
+}
+```
+
+And in `CoverageReportTests`, so the reason actually reaches the adopter:
+
+```csharp
+[TestMethod]
+public void CarriesAnUnusableOperationIdSkip()
+{
+    var plan = new TestPlan("Api", [],
+        [new SkippedOperation("Orders/Create", "operationId 'Orders/Create' cannot be a fixture filename: it contains '/'.")]);
+
+    var json = CoverageReport.ToJson(plan);
+
+    json.ShouldContain("Orders/Create");
+    json.ShouldContain("cannot be a fixture filename");
+}
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+```bash
+dotnet test tests/InTest.Cli.Tests --filter "FullyQualifiedName~TestPlanBuilderTests|FullyQualifiedName~CoverageReportTests"
+```
+
+Expected: FAIL — the two new plan tests, because nothing yet consults `TryValidateOperationKey`.
+`CarriesAnUnusableOperationIdSkip` may already pass, since `CoverageReport.ToJson` serialises
+`plan.Skipped` generically. Assert it rather than assume it.
+
+- [ ] **Step 3: Implement**
+
+In `TestPlanBuilder.Build`, after resolving the operation key and before building the case:
+
+```csharp
+var needsFixture =
+    operation.RequestBody?.Content?.ContainsKey(JsonMediaType) is true ||
+    (operation.Parameters ?? []).Any(p =>
+        p.Required && p.In is ParameterLocation.Path or ParameterLocation.Query);
+
+if (needsFixture && !FixtureDocument.TryValidateOperationKey(key.Value, out var reason))
+{
+    skipped.Add(new SkippedOperation(key.Value, reason));
+    continue;
+}
+```
+
+Skipping only when a fixture is actually needed keeps §12's discipline: an operation with no
+body and no required parameter never loads a fixture, so its filename never matters and removing
+it would cost coverage for nothing.
+
+- [ ] **Step 4: Run tests to verify they pass, then commit**
+
+```bash
+dotnet test tests/InTest.Cli.Tests
+git commit -m "feat(cli): skip one operation for an unusable operationId, never the document"
+```
+
+Expected: `TestPlanBuilderTests` 10 passed (8 existing plus 2), `CoverageReportTests` 5 passed
+(4 existing plus 1).
+
+---
+
 ## Task 3: `fixtures repair`
 
 The only command that writes under `fixtures/`, owning creation, sentinel addition and stale flagging (§10).
@@ -1394,8 +1513,9 @@ git commit -m "docs: v1-a acceptance run against the sample APIs"
 
 **Type consistency.** `FixtureDocument.Parameters` is `SortedDictionary<string, string>` in Task 1 and consumed as such in Tasks 2, 5 and 8. `FixtureComposer.Compose` returns `FixtureDocument` and is called by both `FixturesRepairCommand` (Task 3) and `GenerateCommand`'s drift check (Task 4). `FixtureStore.Get(operationKey)` returns `FixtureDocument` in Task 5 and is used in Tasks 7 and 8. Operation keys are the same strings `OperationKey.Resolve` produces in v0 — synthesized ones included, which is most of the sample corpus.
 
-**Review corrections folded in.** A review of the first draft found seven issues; all are
-resolved above rather than left as notes.
+**Review corrections folded in.** Three rounds of review, fourteen findings, all resolved
+above rather than left as notes. None needed code to be written to find, which is the cheapest
+place for them to surface.
 
 The three that would have produced a failed acceptance run:
 
