@@ -1,14 +1,24 @@
+# Acceptance runs — v0 and v1-a
+
+A living record. Each phase ends by regenerating against `samples/` and appending its results
+here, so the defect numbering (`F1`, `F2`, …) runs continuously across phases and the "carried
+forward" list at the end is always the current one.
+
+| Phase | Date | Commit | Headline |
+|---|---|---|---|
+| v0 | 2026-08-17 | `bec4ee1` + F1 fix | Catalog **6 of 9**; Orders and Inventory generated but never run |
+| v1-a | 2026-08-17 | `466e118` | All three run live: **22 of 22**; **44 sentinels** filled by hand |
+
+---
+
 # v0 acceptance run
 
-**Date:** 2026-08-17 · **Commit:** `bec4ee1` plus the fix recorded as F1 below
 **Task:** Plan Task 22 — point InTest at real deployed APIs and record what happens.
 
 The v0 plan's acceptance criterion was a run against "one real API in a real pipeline". This
 run used three purpose-built sample APIs instead (`samples/`), one per OpenAPI producer, so the
 producer matrix and the acceptance run are the same exercise. They are committed, so every
 finding below is reproducible.
-
----
 
 ## What was exercised
 
@@ -33,13 +43,11 @@ OpenAPI 3.x support meets all three in a single organisation.
 | `intest generate` across all three | **22 operations generated, 0 skipped** |
 | Generated projects compile | **3 of 3** |
 | Catalog suite against a live API | **6 of 9 passing** |
-| Orders, Inventory live runs | **Not run** — see "Not covered" |
+| Orders, Inventory live runs | **Not run** — closed in v1-a below |
 
 **16 of 22 operations (73%) ran on synthesized operationIds.** The decision to treat synthesis
 as a first-class path rather than a fallback (§6) is load-bearing, not defensive: on this
 corpus most of the suite depends on it.
-
----
 
 ## Defects found
 
@@ -118,19 +126,18 @@ InTest behaved correctly: it refused to generate, named the exact problem, and r
 code 2 per §5's convention. This is a real-world trap worth a line in the documentation, since
 the API compiles and serves traffic perfectly well.
 
----
-
 ## Known v0 gaps confirmed
 
-The three Catalog failures are all `POST`/`PUT`:
+The three Catalog failures were all `POST`/`PUT`:
 
 ```
 POST http://localhost:5081/api/products → expected 201, got 415 (2ms)
 Body: {"title":"Unsupported Media Type","status":415,…}
 ```
 
-No request body is sent, because v0 has no fixtures — `TestData` covers path parameters only.
-This is the documented v0 boundary and the entire subject of plan **v1-a**. It is not a defect.
+No request body was sent, because v0 has no fixtures — `TestData` covered path parameters only.
+This was the documented v0 boundary and the entire subject of plan **v1-a**. It was not a
+defect, and it is **closed below**: all three are green.
 
 Also confirmed working as designed:
 
@@ -144,23 +151,9 @@ Also confirmed working as designed:
 - **Status-only tests.** 4 of 22 operations returned 204 and generated status-only tests rather
   than being skipped — the case an earlier revision silently dropped.
 
-## Not covered
+## v0 actions
 
-Stated rather than glossed:
-
-- **Orders and Inventory were generated and compiled, but not run live.** Orders needs the
-  identity server running and a multi-identity `ITestTokenProvider`, which is v1-c work.
-- **No auth tests were generated**, because v0 does not generate them. Orders declares
-  `security` on all 7 operations, so it is ready for v1-c.
-- **No pipeline run.** The plan said "in a real pipeline"; this was local only.
-- **`X-Test-Run-Id` was not verified in server-side telemetry.** The header is sent, but no
-  sink was configured to confirm arrival.
-- **The Duende trial-mode startup warning was not observed**, since the identity server was
-  never started.
-
-## Actions
-
-All five actions are closed.
+All five closed.
 
 | # | Action | Resolution |
 |---|---|---|
@@ -175,3 +168,260 @@ runsettings file was named `orders.runsettings` regardless of project name, and 
 `Api:BaseUrl` shipped **with** an `/api/` prefix — which is what produced F3 in the first place.
 
 Test count went from 103 to 123.
+
+---
+
+# v1-a acceptance run — fixtures
+
+**Date:** 2026-08-17 (UTC) · **Commit:** `466e118` (branch `feature/v1a-fixtures`)
+**Task:** Plan v1-a Task 10 — regenerate against the samples now that fixtures exist, and
+measure the fixture workload a real adopter faces.
+
+Unit suite before the run: **226 passing, 0 failing** — Architecture 2, Cli 130, Runtime 88,
+Golden 6.
+
+Each sample got a **fresh test project in a scratch directory outside the repository**, taken
+through `intest init` → `intest generate` → `intest fixtures repair` → fill sentinels →
+`intest generate` → `dotnet test` against the live API. One deviation from a real adopter's
+setup, in every project: `InTest.Runtime` is not published to NuGet, so the scaffolded
+`PackageReference` was swapped for a `ProjectReference` — the same substitution
+`GeneratedSuiteExecutionTests` makes.
+
+## Results
+
+| Sample | Ops | Fixtures composed | Sentinels filled | Live result |
+|---|---|---|---|---|
+| `Catalog.Api` | 9 | 8 | **23** | **9 of 9** |
+| `Orders.Api` | 7 | 5 | **14** | **7 of 7** |
+| `Inventory.Api` | 6 | 4 | **7** | **6 of 6** |
+| **Total** | **22** | **17** | **44** | **22 of 22** |
+
+```
+Passed!  - Failed: 0, Passed: 9, Skipped: 0, Total: 9, Duration: 3 s - Catalog.ApiTests.dll (net10.0)
+Passed!  - Failed: 0, Passed: 7, Skipped: 0, Total: 7, Duration: 3 s - Orders.ApiTests.dll (net10.0)
+Passed!  - Failed: 0, Passed: 6, Skipped: 0, Total: 6, Duration: 3 s - Inventory.ApiTests.dll (net10.0)
+```
+
+**Catalog reached 9 of 9**, as the plan predicted. The three v0 failures were exactly the three
+operations carrying a request body — `POST /api/categories`, `POST /api/products`,
+`PUT /api/products/{id}` — all of which returned 415 for want of one. Every one is now green.
+
+**Orders and Inventory ran live for the first time**, closing the largest v0 gap. Orders needed
+`samples/Identity.Server` for a client-credentials token; auth *tests* are still v1-c, so what
+Orders proves here is that a secured API's bodies and parameters flow correctly under a bearer
+token — not the 401/403 paths.
+
+`generate` exiting 1 while fixtures are unresolved is by design (Task 4), and it did, every
+time. Catalog's first run:
+
+```
+delete_api_categories_id: no fixture found.
+get_api_categories_id: no fixture found.
+get_api_products: no fixture found.
+get_api_products_id: no fixture found.
+get_api_products_id_tags: no fixture found.
+post_api_categories: no fixture found.
+post_api_products: no fixture found.
+put_api_products_id: no fixture found.
+Run 'intest fixtures repair' to create or update the fixture(s) listed above.
+exit code 1
+```
+
+**Reproduced independently.** A second scratch project built from scratch off the same spec
+produced `Created 8 fixture(s), updated 0 fixture(s)` and the same **23** sentinels; a second
+live run against a freshly seeded database returned **9 of 9** again.
+
+## The fixture workload — what `intest survey` will need to predict
+
+This is the measurement the task existed for. **44 sentinels across 17 fixture files for 22
+operations — two per operation on average**, but the average badly understates the shape:
+
+| Where the work is | Sentinels |
+|---|---|
+| Path parameters (one per operation that has one) | 12 |
+| Request-body properties | 32 |
+
+Body properties are **73% of the work** and they cluster. Catalog's single
+`post_api_products` is **11 of that sample's 23** — one operation, nearly half the API's
+fixture cost — because every leaf property of a request body is sentinelled, required or not:
+
+```jsonc
+{
+  "$meta": { "tier": 4, "operationId": "post_api_products", "generatedBy": "intest 0.1.0" },
+  "body": {
+    "sku": "TODO:sku",              "name": "TODO:name",
+    "description": "TODO:description", "price": "TODO:price",
+    "stockQuantity": "TODO:stockQuantity", "categoryId": "TODO:categoryId",
+    "category": "TODO:category",    "availableFrom": "TODO:availableFrom",
+    "supplierEmail": "TODO:supplierEmail", "dimensions": "TODO:dimensions",
+    "tags": [ "TODO:tags" ]
+  }
+}
+```
+
+Only five of those eleven are in the schema's `required` set. **A useful predictor is therefore
+not operation count but total leaf-property count across all JSON request bodies, plus one per
+path parameter** — not `required` count, which would have predicted 5 where the real cost was 11.
+
+Three shapes cost **nothing**, and all three are decisions working as designed:
+
+- **Operations with no parameters and no body compose no fixture at all** — `GET /api/categories`,
+  `GET /api/customers`, `GET /api/warehouses`.
+- **Optional query parameters are omitted entirely** unless the spec gives them an `example` or
+  a `default` (decision 1), so an operation whose only parameters are optional filters also
+  composes nothing — `GET /api/orders` and `GET /api/stock`.
+
+  Together those account for **5 of 22 operations, which is why there are 17 fixtures and not 22.**
+- **Where a default exists, it is used and no sentinel appears.** Catalog's `GET /api/products`
+  has five optional query parameters and produced a **tier-3 fixture with zero sentinels**:
+
+  ```jsonc
+  { "$meta": { "tier": 3, … }, "$parameters": { "page": "1", "pageSize": "20" } }
+  ```
+
+  This is the case the plan's self-review flagged as nearly fatal: sentinelling every parameter
+  would have blocked an operation that already passed in v0 and finished v1-a *below* v0's six.
+  The decision held.
+
+## Defects found
+
+### F6 — a nullable object property composes a scalar sentinel, losing its shape · **open**
+
+`CreateProductRequest.dimensions` is a nullable reference to another schema. The built-in
+producer emits OpenAPI 3.1's idiom for that:
+
+```json
+"dimensions": { "oneOf": [ { "type": "null" }, { "$ref": "#/components/schemas/DimensionsRequest" } ] }
+```
+
+`FixtureComposer.ComposeFromSchema` handles `$ref`, `object`, and `array`, but not `oneOf` or
+`anyOf`. The schema is none of the three, so composition falls through to the bottom of the
+method and emits `"dimensions": "TODO:dimensions"` — a **string** sentinel for what is actually
+an object with three required properties. The adopter is told the property needs a value and
+given no indication of its shape; the real fixture had to be written by hand:
+
+```jsonc
+"dimensions": { "lengthCentimetres": 10.0, "widthCentimetres": 5.0, "heightCentimetres": 2.0 }
+```
+
+**Nesting itself is fine** — the contrast proves it. Orders' `CreateOrderRequest.lines` is a
+plain `array` of `$ref` and composed correctly, all the way into the nested object:
+
+```jsonc
+"lines": [ { "sku": "TODO:sku", "quantity": "TODO:quantity", "unitPrice": "TODO:unitPrice" } ]
+```
+
+So the gap is specifically **un-navigated `oneOf`/`anyOf`**. It is not cosmetic: `oneOf` with a
+null branch is how OpenAPI 3.1 expresses *any* nullable complex property, and 3.1 is what the
+built-in ASP.NET producer emits. Every adopter on the default .NET stack with a nullable
+sub-object hits this.
+
+Not blocking — the sentinel still fails loudly and the property here was optional — but it
+under-reports the workload, and a required nullable sub-object would leave an adopter guessing.
+
+### F7 — the generated suite is not idempotent against a persistent store · **open, by construction**
+
+Running the Catalog suite a second time against the same database, changing nothing:
+
+```
+Failed!  - Failed: 3, Passed: 6, Skipped: 0, Total: 9 - Catalog.ApiTests.dll (net10.0)
+```
+
+```
+POST http://localhost:5081/api/categories → expected 201, got 409 (12ms)
+Body: {"title":"A category named 'Accessories' already exists.","status":409}
+
+POST http://localhost:5081/api/products → expected 201, got 409 (3ms)
+Body: {"title":"A product with SKU 'ACC-0100' already exists.","status":409}
+```
+
+The third failure was `DeleteApiCategoriesId_Contract`, whose target the first run had already
+deleted. The 9-of-9 above is therefore **9 of 9 on a freshly seeded database** — stated plainly
+because the number is otherwise misleading.
+
+This is inherent to literal fixture values plus a stateful API, not a coding error. What
+matters is how much of it v1-a can already solve, which was measured rather than assumed:
+
+- **`{{runId}}` fixes the free-form case.** Changing the category name to
+  `"Accessories-{{runId}}"` and running the same test twice in a row passed both times.
+- **It cannot fix a format-constrained unique field.** The SKU must match `^[A-Z]{3}-[0-9]{4}$`;
+  no run id fits that pattern.
+- **It cannot fix deleting a seeded row.** Nothing in v1-a creates the row to delete.
+
+The designed answer to the remaining two is `{{fixture:…}}` with `IAssemblyFixture`, deferred to
+**v1-b**, which now has a measured justification rather than a predicted one. Until then the
+honest guidance is: a generated suite expects a reset database per run, and adopters should use
+`{{runId}}` wherever the uniqueness constraint is free-form.
+
+### F8 — `ITestTokenProvider` has no consumers · **open**
+
+The scaffold's `TestStartup.cs` says "Add configuration providers and an ITestTokenProvider
+implementation here", and getting-started Phase 3 tells adopters to implement it. Nothing calls
+it. Every reference to the interface in `src/`:
+
+```
+src/InTest.Cli/Commands/InitCommand.cs:113:  /// ITestTokenProvider implementation here.</summary>
+src/InTest.Runtime/Neutral/ITestTokenProvider.cs:7:   public interface ITestTokenProvider
+src/InTest.Runtime/Neutral/StaticTokenProvider.cs:4:  public sealed class StaticTokenProvider(…) : ITestTokenProvider
+src/InTest.Runtime/Neutral/StaticTokenProvider.cs:15:  "Implement ITestTokenProvider with more than one identity…"
+```
+
+`GetTokenAsync` is declared and implemented, and called from nowhere. The generated template
+sends `Client.SendAsync(request, …)` with no `Authorization` header, so **implementing the
+interface has no effect on any generated request**.
+
+Every Orders operation declares `security`. **Measured as a negative control** — the same suite,
+same fixtures, same live server, with only the handler registration commented out:
+
+```
+GET    http://localhost:5082/api/customers      → expected 200, got 401 (3ms)
+POST   http://localhost:5082/api/customers      → expected 201, got 401 (3ms)
+GET    http://localhost:5082/api/orders         → expected 200, got 401 (1ms)
+POST   http://localhost:5082/api/orders         → expected 201, got 401 (1ms)
+DELETE http://localhost:5082/api/orders/dddddddd-…  → expected 204, got 401 (1ms)
+…
+Failed!  - Failed: 7, Passed: 0, Skipped: 0, Total: 7 - Orders.ApiTests.dll (net10.0)
+```
+
+Restoring the registration returns it to 7 of 7. So the entire Orders result rests on ~40 lines
+of hand-written `DelegatingHandler` in `TestStartup.Register`. That handler is legitimate
+team-owned code, but the adopter has no way to know it is required: the documented extension
+point is a dead end, and the failure mode is a uniformly 401 suite.
+
+Auth *tests* are correctly v1-c. **Reaching a secured endpoint at all is not an auth test** —
+it is the precondition for every other test on a secured API, and v1-a generates suites for
+such APIs today.
+
+## v1-a actions
+
+| # | Action | Owner phase | Status |
+|---|---|---|---|
+| 1 | F6 — navigate `oneOf`/`anyOf` in `ComposeFromSchema`, choosing the single non-null branch | v1-b | Open |
+| 2 | F8 — either consume `ITestTokenProvider` from the generated template, or stop advertising it in the scaffold and getting-started until v1-c does | v1-c, or sooner | Open |
+| 3 | F7 — `{{fixture:…}}` / `IAssemblyFixture`, so create-then-delete and constrained-unique values stop depending on a reset database | v1-b | Open, now measured |
+| 4 | Document that a generated suite assumes a reset database per run, and that `{{runId}}` is the v1-a tool for free-form uniqueness | v1-b docs | Open |
+| 5 | `intest survey` should predict from **total request-body leaf properties + path parameters**, not operation count and not `required` count | v1-f | Open, input recorded above |
+
+## Carried forward — not covered by either run
+
+Closed by v1-a:
+
+- ~~Orders and Inventory were generated and compiled, but not run live.~~ Both now run live,
+  7 of 7 and 6 of 6.
+- ~~Operations with a request body cannot send one.~~ Closed — that was the point of v1-a.
+
+Still open, stated rather than glossed:
+
+- **No auth tests were generated**, because v1-a does not generate them. Orders declares
+  `security` on all 7 operations, so it is ready for v1-c — but see F8: the token plumbing
+  those tests will need does not exist yet either.
+- **No pipeline run.** Both runs were local. "In a real pipeline" remains unmet.
+- **`X-Test-Run-Id` was not verified in server-side telemetry.** The header is sent, but no
+  sink was configured to confirm arrival.
+- **The Duende trial-mode startup warning was not observed.** The identity server was exercised
+  this time — it issued a client-credentials token that Orders accepted — but the run reused an
+  already-running instance, so its startup output was never seen.
+- **`survey`, `generate --check`, YAML input, and variation tests** are unbuilt, so nothing
+  about them was exercised.
+- **One sample was measured per producer.** The corpus is deliberate but small; nothing here
+  says how the composer behaves on a large real-world document.

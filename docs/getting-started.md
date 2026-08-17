@@ -7,10 +7,10 @@ integration test suite running as a post-deployment gate.
 > below, including fixtures (Phase 5), does.**
 >
 > `init`, `generate`, and `fixtures repair` (Phase 5) all work: together they produce a
-> compiling MSTest project, complete with the fixture files every operation needs. `init` and
-> `generate` are verified end to end against a live API
-> ([`v0-acceptance.md`](v0-acceptance.md)); a live run exercising fixture-sourced request bodies
-> and parameters is the next update to that record, not yet done. Not yet built: `survey`
+> compiling MSTest project, complete with the fixture files every operation needs. All three
+> are verified end to end against live APIs, request bodies included — the three sample suites
+> pass **22 of 22** against running servers, with 44 fixture sentinels filled by hand
+> ([`v0-acceptance.md`](v0-acceptance.md), which also records what that run found). Not yet built: `survey`
 > (Phase 0), `generate --check` (Phase 8), variation and auth tests, `{{fixture:…}}` and
 > `IAssemblyFixture` (both v1-b, see Phase 5), and YAML input. Nothing is published to NuGet, so
 > build from source for now.

@@ -1673,14 +1673,14 @@ git commit -m "docs: fixtures are built; validation blocks operations rather tha
 
 Per the standing decision, every phase ends by regenerating against `samples/` and updating the acceptance record.
 
-- [ ] **Step 1: Regenerate all three sample suites**
+- [x] **Step 1: Regenerate all three sample suites**
 
 ```bash
 dotnet build samples/Catalog.Api samples/Orders.Api samples/Inventory.Api
 # for each: intest init (fresh temp project) → intest generate → intest fixtures repair
 ```
 
-- [ ] **Step 2: Fill the sentinels using seeded data**
+- [x] **Step 2: Fill the sentinels using seeded data**
 
 The seeded identifiers, so the implementer does not have to read the seed code:
 
@@ -1702,7 +1702,7 @@ from a real unique index, which is a valid thing to assert but not what the 201 
 **Record how many sentinels needed filling per API.** That number is the fixture workload a
 real adopter faces, and it is the measurement `intest survey` will eventually predict.
 
-- [ ] **Step 3: Run Catalog live and record the result**
+- [x] **Step 3: Run Catalog live and record the result**
 
 ```bash
 dotnet run --project samples/Catalog.Api &   # http://localhost:5081
@@ -1711,15 +1711,15 @@ dotnet test <generated Catalog suite>
 
 **Expected: 9 of 9 passing.** The three v0 failures were `POST`/`PUT` returning 415 for want of a body; if they do not turn green, that is the finding.
 
-- [ ] **Step 4: Run Orders and Inventory too**
+- [x] **Step 4: Run Orders and Inventory too**
 
 Orders needs `samples/Identity.Server` running. Auth tests are not generated until v1-c, so Orders exercises bodies under a bearer token, not the 401/403 paths.
 
-- [ ] **Step 5: Update `docs/v0-acceptance.md` into a living record**
+- [x] **Step 5: Update `docs/v0-acceptance.md` into a living record**
 
 Rename the heading to cover v0 **and** v1-a, add a v1-a results section, record every new defect in the existing F-numbered style, and close or carry forward the "Not covered" list.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git commit -m "docs: v1-a acceptance run against the sample APIs"
