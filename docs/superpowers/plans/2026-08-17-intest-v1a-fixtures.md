@@ -193,24 +193,42 @@ public class FixtureDocumentTests
     [DataRow("Orders/Create", "/", DisplayName = "path separator")]
     [DataRow("Orders?Create", "?", DisplayName = "wildcard character")]
     [DataRow("orders:create", ":", DisplayName = "stream separator")]
-    public void RejectsAnOperationKeyThatCannotBeAFileName(string key, string offending)
+    [DataRow("Orders\\Create", "\\", DisplayName = "backslash — invalid on Windows, legal on Unix")]
+    public void ReportsAnOperationKeyThatCannotBeAFileName(string key, string offending)
     {
-        // Fail loudly rather than mangle. Sanitising needs a collision story — Orders/Create and
-        // Orders?Create would otherwise both become Orders_Create.json — and a declared
-        // operationId containing these is something the API owner can fix in their own spec,
-        // where it also improves their generated clients.
-        var ex = Should.Throw<FixtureFormatException>(() => FixtureDocument.FileNameFor(key));
+        // Try-pattern, not an exception: an unusable operationId is one operation InTest cannot
+        // serve, not a reason to abandon the other 147 in the document. The caller records a
+        // skip and continues — see Task 2a.
+        FixtureDocument.TryValidateOperationKey(key, out var reason).ShouldBeFalse();
 
-        ex.Message.ShouldContain(key);
-        ex.Message.ShouldContain(offending);
-        ex.Message.ShouldContain("operationId");
+        reason.ShouldContain(key);
+        reason.ShouldContain(offending);
+        reason.ShouldContain("operationId");
     }
 
     [TestMethod]
-    public void RejectsAWindowsReservedDeviceName()
+    public void RejectsBackslashOnEveryPlatformNotJustWindows()
     {
-        Should.Throw<FixtureFormatException>(() => FixtureDocument.FileNameFor("CON"))
-              .Message.ShouldContain("reserved");
+        // Path.GetInvalidFileNameChars() is platform-specific: 41 characters on Windows
+        // (verified), but only NUL and '/' on Unix. Delegating to it would accept
+        // Orders\Create on Linux and write a file literally named Orders\Create.json, so the
+        // explicit list carries the separators rather than trusting the framework's per-OS answer.
+        FixtureDocument.TryValidateOperationKey("Orders\\Create", out _).ShouldBeFalse();
+    }
+
+    [TestMethod]
+    public void ReportsAWindowsReservedDeviceName()
+    {
+        FixtureDocument.TryValidateOperationKey("CON", out var reason).ShouldBeFalse();
+        reason.ShouldContain("reserved");
+    }
+
+    [TestMethod]
+    public void FileNameForStillThrowsBecauseCallersMustValidateFirst()
+    {
+        // FileNameFor is only reached for keys the plan already accepted. Throwing here is an
+        // invariant violation, not flow control — the flow-control path is TryValidateOperationKey.
+        Should.Throw<FixtureFormatException>(() => FixtureDocument.FileNameFor("Orders/Create"));
     }
 
 }
@@ -259,30 +277,55 @@ public sealed class FixtureDocument
     /// Operation keys become fixture filenames. Synthesized keys are safe by construction, but
     /// a declared operationId is used verbatim and OpenAPI permits any string.
     /// <para>
-    /// Unsafe keys are rejected rather than mangled. Sanitising would need a collision story —
-    /// <c>Orders/Create</c> and <c>Orders?Create</c> both reduce to the same name — and a
-    /// declared operationId containing a path separator is something the API owner can fix in
-    /// their own spec, where it also improves any generated client.
+    /// Returns false with a reason rather than throwing, because an unusable operationId is one
+    /// operation InTest cannot serve — not grounds for abandoning a whole document. The caller
+    /// records a skip and carries on, the same route non-JSON request bodies already take.
     /// </para>
+    /// </summary>
+    public static bool TryValidateOperationKey(string operationKey, out string reason)
+    {
+        if (string.IsNullOrWhiteSpace(operationKey))
+        {
+            reason = "operationId is empty.";
+            return false;
+        }
+
+        // Explicit, not Path.GetInvalidFileNameChars(): that returns 41 characters on Windows
+        // but only NUL and '/' on Unix, so trusting it would make generation depend on the
+        // developer's operating system.
+        char[] separators = ['/', '\\', '?', '*', ':', '"', '<', '>', '|'];
+        var invalid = separators.Concat(Path.GetInvalidFileNameChars()).ToHashSet();
+
+        var offending = operationKey.Where(invalid.Contains).Distinct().ToArray();
+        if (offending.Length > 0)
+        {
+            reason = $"operationId '{operationKey}' cannot be a fixture filename: it contains " +
+                     $"{string.Join(", ", offending.Select(c => $"'{c}'"))}. Change the operationId " +
+                     "in the OpenAPI document — it also names generated client methods, so a " +
+                     "filename-safe value is worth having anyway.";
+            return false;
+        }
+
+        if (ReservedNames.Contains(operationKey, StringComparer.OrdinalIgnoreCase))
+        {
+            reason = $"operationId '{operationKey}' is a reserved device name on Windows and cannot " +
+                     "be a filename. Change the operationId in the OpenAPI document.";
+            return false;
+        }
+
+        reason = string.Empty;
+        return true;
+    }
+
+    /// <summary>
+    /// Only valid for a key that has already passed <see cref="TryValidateOperationKey"/>.
+    /// Throws otherwise, because reaching here with an unusable key means a caller skipped
+    /// validation — an invariant violation rather than a condition to handle.
     /// </summary>
     public static string FileNameFor(string operationKey)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(operationKey);
-
-        var invalid = Path.GetInvalidFileNameChars().Concat(['/', '?', '*', ':', '"', '<', '>', '|']).ToHashSet();
-        var offending = operationKey.Where(invalid.Contains).Distinct().ToArray();
-
-        if (offending.Length > 0)
-            throw new FixtureFormatException(
-                $"operationId '{operationKey}' cannot be used as a fixture filename: it contains " +
-                $"{string.Join(", ", offending.Select(c => $"'{c}'"))}. " +
-                "Change the operationId in the OpenAPI document — it is also used for generated " +
-                "client method names, so a filename-safe value is worth having anyway.");
-
-        if (ReservedNames.Contains(operationKey, StringComparer.OrdinalIgnoreCase))
-            throw new FixtureFormatException(
-                $"operationId '{operationKey}' is a reserved device name on Windows and cannot be " +
-                "a filename. Change the operationId in the OpenAPI document.");
+        if (!TryValidateOperationKey(operationKey, out var reason))
+            throw new FixtureFormatException(reason);
 
         return operationKey + ".json";
     }
@@ -352,7 +395,7 @@ git add src/InTest.Cli/Fixtures/FixtureDocument.cs tests/InTest.Cli.Tests/Fixtur
 git commit -m "feat(cli): fixture document model"
 ```
 
-Expected: `Passed! - Failed: 0, Passed: 11` — 7 test methods, two of which carry 3 `DataRow`s each, so 5 plain results plus 6 rows.
+Expected: `Passed! - Failed: 0, Passed: 14` — 9 test methods; one carries 3 `DataRow`s and one carries 4, so 7 plain results plus 7 rows.
 
 ---
 
@@ -1368,12 +1411,29 @@ The three that would have produced a failed acceptance run:
 3. **Fixtures never reached the output directory** — F1 exactly, and it would have surfaced
    live at Task 10 after nine tasks of green. Task 4a now owns the scaffold.
 
+Round two found Task 1 could not pass at all — its filename tests contradicted each other, its
+doc comment described hash-suffixing that neither tests nor code implemented, and its character
+list contained an unterminated escape that would not compile. Resolved by not sanitising: an
+unusable operationId is **reported**, which needs no collision story. Round two also found Task
+4a's proof asserted a fixture reached the output directory using a spec that composes no fixture,
+and that `InTestUrl.BuildQuery` was asserted by Task 8 but created by no task.
+
+Round three found the blast radius of that rejection was wrong. Throwing would abandon an entire
+document for one bad operationId, where v0 already skips a single operation and records why —
+hence Task 2a, and `TryValidateOperationKey` alongside `FileNameFor`. It also caught that fixing
+the unterminated `'\'` had silently **removed** backslash from the invalid set rather than
+escaping it, which would have made generation depend on the developer's operating system:
+`Path.GetInvalidFileNameChars()` returns 41 characters on Windows (verified here) but only NUL
+and `/` on Unix, so `Orders\Create` would be rejected on one and written as a literal filename
+on the other.
+
 The rest, corrected in place: Task 4 names the two v0 tests it breaks and how they reconcile;
 Task 2's recursion test asserts observable output instead of racing a timeout it could never
-reach against synchronous code; `FileNameFor` is genuinely sanitised rather than only claimed to
-be; Task 6 pins raw-vs-resolved access so `{{utcNow}}` can be per-call while `{{config:}}` is
-cached; Task 3 asserts stale properties are *reported* as well as retained, and iterates the
-test plan so `repair` and `generate` cannot disagree about which operations exist.
+reach against synchronous code; Task 6 pins raw-vs-resolved access so `{{utcNow}}` can be
+per-call while `{{config:}}` is cached; Task 3 asserts stale properties are *reported* as well as
+retained, and iterates the test plan so `repair` and `generate` cannot disagree about which
+operations exist; both commands take an optional `TextWriter` so their reports are asserted
+without capturing `Console` globally in a test assembly.
 
 **One risk that remains.** `repair` merges by property name. A fixture whose body a human has
 restructured — say wrapping fields in an envelope the spec later adopted — will have properties
