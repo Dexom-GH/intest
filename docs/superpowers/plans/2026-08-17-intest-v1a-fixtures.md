@@ -131,7 +131,7 @@ mangled — see Task 1.
 - Create: `src/InTest.Cli/Fixtures/FixtureDocument.cs`
 - Test: `tests/InTest.Cli.Tests/FixtureDocumentTests.cs`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```csharp
 using InTest.Cli.Fixtures;
@@ -247,7 +247,7 @@ public class FixtureDocumentTests
 }
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 ```bash
 dotnet test tests/InTest.Cli.Tests --filter "FullyQualifiedName~FixtureDocumentTests"
@@ -255,7 +255,7 @@ dotnet test tests/InTest.Cli.Tests --filter "FullyQualifiedName~FixtureDocumentT
 
 Expected: FAIL — `The type or namespace name 'FixtureDocument' could not be found`.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 ```csharp
 using System.Text.Json;
@@ -400,7 +400,7 @@ public sealed class FixtureDocument
 }
 ```
 
-- [ ] **Step 4: Run tests to verify they pass, then commit**
+- [x] **Step 4: Run tests to verify they pass, then commit**
 
 ```bash
 dotnet test tests/InTest.Cli.Tests --filter "FullyQualifiedName~FixtureDocumentTests"
