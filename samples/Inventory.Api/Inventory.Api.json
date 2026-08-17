@@ -1,0 +1,412 @@
+{
+  "x-generator": "NSwag v14.7.1.0 (NJsonSchema v11.6.1.0 (Newtonsoft.Json v13.0.0.0))",
+  "openapi": "3.0.0",
+  "info": {
+    "title": "Inventory API",
+    "version": "v1"
+  },
+  "paths": {
+    "/api/stock": {
+      "get": {
+        "tags": [
+          "Stock"
+        ],
+        "operationId": "Stock_GetAll",
+        "parameters": [
+          {
+            "name": "warehouseId",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "nullable": true
+            },
+            "x-position": 1
+          },
+          {
+            "name": "condition",
+            "in": "query",
+            "schema": {
+              "nullable": true,
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/StockCondition"
+                }
+              ]
+            },
+            "x-position": 2
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StockItemResponse"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/stock/{sku}": {
+      "get": {
+        "tags": [
+          "Stock"
+        ],
+        "operationId": "Stock_GetBySku",
+        "parameters": [
+          {
+            "name": "sku",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "x-position": 1
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StockItemResponse"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/stock/{sku}/adjustments": {
+      "post": {
+        "tags": [
+          "Stock"
+        ],
+        "operationId": "Stock_Adjust",
+        "parameters": [
+          {
+            "name": "sku",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "x-position": 1
+          }
+        ],
+        "requestBody": {
+          "x-name": "request",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StockAdjustmentRequest"
+              }
+            }
+          },
+          "required": true,
+          "x-position": 2
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StockItemResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/stock/items/{id}": {
+      "delete": {
+        "tags": [
+          "Stock"
+        ],
+        "operationId": "Stock_Delete",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "x-position": 1
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/warehouses": {
+      "get": {
+        "tags": [
+          "Warehouses"
+        ],
+        "operationId": "Warehouses_GetAll",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/WarehouseResponse"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/warehouses/{id}": {
+      "get": {
+        "tags": [
+          "Warehouses"
+        ],
+        "operationId": "Warehouses_GetById",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "x-position": 1
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WarehouseResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "StockItemResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "sku",
+          "warehouseId",
+          "quantityOnHand",
+          "quantityReserved",
+          "condition",
+          "lastCountedAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "sku": {
+            "type": "string"
+          },
+          "warehouseId": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "quantityOnHand": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "quantityReserved": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "condition": {
+            "$ref": "#/components/schemas/StockCondition"
+          },
+          "lastCountedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "unitCost": {
+            "type": "number",
+            "format": "decimal",
+            "nullable": true
+          },
+          "notes": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "StockCondition": {
+        "type": "integer",
+        "description": "",
+        "x-enumNames": [
+          "New",
+          "Refurbished",
+          "Damaged"
+        ],
+        "enum": [
+          0,
+          1,
+          2
+        ]
+      },
+      "ProblemDetails": {
+        "type": "object",
+        "additionalProperties": {
+          "nullable": true
+        },
+        "properties": {
+          "type": {
+            "type": "string",
+            "nullable": true
+          },
+          "title": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "detail": {
+            "type": "string",
+            "nullable": true
+          },
+          "instance": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "StockAdjustmentRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "warehouseId",
+          "delta"
+        ],
+        "properties": {
+          "warehouseId": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "delta": {
+            "type": "integer",
+            "format": "int32",
+            "maximum": 10000.0,
+            "minimum": -10000.0
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 500,
+            "nullable": true
+          }
+        }
+      },
+      "WarehouseResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "name",
+          "countryCode",
+          "isOperational"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "name": {
+            "type": "string"
+          },
+          "countryCode": {
+            "type": "string"
+          },
+          "isOperational": {
+            "type": "boolean"
+          }
+        }
+      }
+    }
+  }
+}

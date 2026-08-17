@@ -55,6 +55,10 @@ public static class InitCommand
           </ItemGroup>
           <ItemGroup>
             <Content Include="Generated/spec-schemas.json" Link="spec-schemas.json" CopyToOutputDirectory="PreserveNewest" />
+            <!-- TestHost resolves configuration from AppContext.BaseDirectory, so these must
+                 travel to the output directory. Without them every generated project fails at
+                 AssemblyInitialize with a FileNotFoundException for appsettings.json. -->
+            <Content Include="appsettings*.json" CopyToOutputDirectory="PreserveNewest" />
           </ItemGroup>
           <!-- Parallelization intent lives in AssemblyInfo.cs. The MSBuild properties below
                generate a second assembly attribute, which fails as CS0579 inside obj/. -->

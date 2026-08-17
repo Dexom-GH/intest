@@ -15,4 +15,20 @@
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.9.0" />
     <PackageVersion Include="Shouldly" Version="4.3.0" />
   </ItemGroup>
+
+  <!-- samples/ only. These are fixtures for the acceptance run and the round-trip corpus;
+       nothing here is in the dependency closure of InTest.Cli or InTest.Runtime. -->
+  <ItemGroup>
+    <PackageVersion Include="Microsoft.AspNetCore.OpenApi" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.Extensions.ApiDescription.Server" Version="10.0.11" />
+    <PackageVersion Include="Swashbuckle.AspNetCore" Version="10.2.3" />
+    <PackageVersion Include="NSwag.AspNetCore" Version="14.7.1" />
+    <PackageVersion Include="NSwag.MSBuild" Version="14.7.1" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.11" />
+    <!-- Duende requires a paid licence for PRODUCTION use only; development, testing and
+         personal projects are free. This is a test fixture and is never in the closure of
+         a shipped InTest package. See samples/README.md. -->
+    <PackageVersion Include="Duende.IdentityServer" Version="8.0.6" />
+  </ItemGroup>
 </Project>

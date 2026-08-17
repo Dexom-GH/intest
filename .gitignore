@@ -68,3 +68,7 @@ caveman.*
 .opencode/
 .windsurf/
 .github/copilot-instructions.md
+## Sample API databases — recreated and seeded on startup
+samples/**/*.db
+samples/**/*.db-shm
+samples/**/*.db-wal
