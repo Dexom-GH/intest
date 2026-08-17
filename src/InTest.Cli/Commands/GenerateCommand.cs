@@ -16,12 +16,6 @@ public static class GenerateCommand
     public const int ExitWorkOutstanding = 1;
     public const int ExitToolError = 2;
 
-    // Hardcoded to match InitCommand's current scaffolding and FixturesRepairCommand's own copy
-    // of this constant (both will read one source once Task 4a lands — see "Decisions this plan
-    // encodes" §5's note in the plan document). Used only to compose a comparison fixture in
-    // memory for drift detection below; generate never writes one to disk.
-    private const string CliVersion = "0.1.0";
-
     /// <summary>Longest leading run of path segments shared by every generated operation.</summary>
     internal static string CommonPathPrefix(Planning.TestPlan plan)
     {
@@ -141,7 +135,7 @@ public static class GenerateCommand
     {
         var messages = new List<string>();
         var fixturesDir = Path.Combine(projectRoot, "fixtures");
-        var generatedBy = $"intest {CliVersion}";
+        var generatedBy = $"intest {CliVersion.Current}";
 
         foreach (var testCase in plan.Classes.SelectMany(c => c.Cases)
                                               .Where(c => c.NeedsFixture)

@@ -98,7 +98,10 @@ public class GeneratedSuiteExecutionTests
         // This spec's only operation is a bare GET with no body and no parameters, so today it
         // composes no fixture at all (decision 1) and this call is a no-op — but it mirrors what
         // an adopter actually runs, and it is what keeps this test realistic if the spec ever
-        // grows an operation that does need one (see Task 4a).
+        // grows an operation that does need one. (Deliberately not done here — see Task 4a's
+        // final report: the generated template still emits TestData.Require for every path
+        // parameter until Task 8 rewires it to consume fixtures, so a fixture-needing operation
+        // added to this spec today would fail at `dotnet test`, not prove the fixture pipeline.)
         (await FixturesRepairCommand.RunAsync(_root, CancellationToken.None)).ShouldBe(0);
 
         (await GenerateCommand.RunAsync(_root, CancellationToken.None)).ShouldBe(0);

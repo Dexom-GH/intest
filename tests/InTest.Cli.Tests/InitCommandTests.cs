@@ -70,4 +70,23 @@ public class InitCommandTests
         InitCommand.Run(_root, "Orders.ApiTests", "orders.json").ShouldBe(0);
         InitCommand.Run(_root, "Orders.ApiTests", "orders.json").ShouldBe(3);
     }
+
+    [TestMethod]
+    public void CsprojCopiesFixturesToTheOutputDirectory()
+    {
+        InitCommand.Run(_root, "Orders.ApiTests", "orders.json");
+
+        File.ReadAllText(Path.Combine(_root, "Orders.ApiTests.csproj"))
+            .ShouldContain("fixtures/**/*.json",
+                customMessage: "FixtureStore loads from AppContext.BaseDirectory — this is the F1 defect repeating");
+    }
+
+    [TestMethod]
+    public void TestStartupDoesNotReferenceTheDeletedTestDataType()
+    {
+        InitCommand.Run(_root, "Orders.ApiTests", "orders.json");
+
+        File.ReadAllText(Path.Combine(_root, "TestStartup.cs"))
+            .ShouldNotContain("TestData", customMessage: "Task 8 deletes it; a scaffold must not teach a dead API");
+    }
 }

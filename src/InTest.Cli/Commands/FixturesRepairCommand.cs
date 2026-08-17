@@ -19,10 +19,6 @@ public static class FixturesRepairCommand
     public const int ExitOk = 0;
     public const int ExitToolError = 2;
 
-    // Hardcoded to match InitCommand's current scaffolding (both will read one source once
-    // Task 4a lands — see "Decisions this plan encodes" §5's note in the plan document).
-    private const string CliVersion = "0.1.0";
-
     public static async Task<int> RunAsync(
         string projectRoot, CancellationToken cancellationToken, TextWriter? report = null)
     {
@@ -49,7 +45,7 @@ public static class FixturesRepairCommand
             // create fixtures `generate`'s drift check disagrees with — see the plan's Task 3 note.
             var plan = TestPlanBuilder.Build(spec.Document);
             var fixturesDir = Path.Combine(projectRoot, "fixtures");
-            var generatedBy = $"intest {CliVersion}";
+            var generatedBy = $"intest {CliVersion.Current}";
 
             var created = 0;
             var updated = 0;

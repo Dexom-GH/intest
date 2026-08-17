@@ -23,7 +23,7 @@ public static class InitCommand
         Write(projectRoot, "intest.json", $$"""
         {
           "schemaVersion": 1,
-          "intestVersion": "0.1.0",
+          "intestVersion": "{{CliVersion.Current}}",
           "spec": { "source": "{{specSource.Replace("\\", "/")}}", "producer": "auto" },
           "project": {
             "name": "{{projectName}}",
@@ -60,6 +60,10 @@ public static class InitCommand
                  travel to the output directory. Without them every generated project fails at
                  AssemblyInitialize with a FileNotFoundException for appsettings.json. -->
             <Content Include="appsettings*.json" CopyToOutputDirectory="PreserveNewest" />
+            <!-- FixtureStore also loads from AppContext.BaseDirectory. Without this every
+                 fixture is invisible at runtime — every operation that needs one 400s or sends
+                 literal "TODO:..." sentinels, and nothing at compile time catches it. -->
+            <Content Include="fixtures/**/*.json" CopyToOutputDirectory="PreserveNewest" />
           </ItemGroup>
           <!-- Parallelization intent lives in AssemblyInfo.cs. The MSBuild properties below
                generate a second assembly attribute, which fails as CS0579 inside obj/. -->
@@ -105,12 +109,14 @@ public static class InitCommand
                 await TestHost.InitializeAsync(context, context.CancellationToken);
             }
 
-            /// <summary>Team-owned registrations. Add configuration providers, an
-            /// ITestTokenProvider implementation, and path-parameter test data here.</summary>
+            /// <summary>Team-owned registrations. Add configuration providers and an
+            /// ITestTokenProvider implementation here.</summary>
             private static void Register(IServiceCollection services, IConfiguration configuration)
             {
-                // Example — replace with a real identifier that exists in the target environment:
-                // TestData.Set("getOrderById", "id", configuration["TestData:OrderId"]!);
+                // Path and query parameters live in fixtures/, not here — each operation that
+                // needs one has a fixture with a "TODO:" sentinel for every value it requires.
+                // Fill those in by hand, or run `intest fixtures repair` after a spec change to
+                // add sentinels for anything newly required.
             }
         }
         """);
@@ -164,12 +170,12 @@ public static class InitCommand
         </RunSettings>
         """);
 
-        Write(projectRoot, Path.Combine(".config", "dotnet-tools.json"), """
+        Write(projectRoot, Path.Combine(".config", "dotnet-tools.json"), $$"""
         {
           "version": 1,
           "isRoot": true,
           "tools": {
-            "intest.cli": { "version": "0.1.0", "commands": ["intest"] }
+            "intest.cli": { "version": "{{CliVersion.Current}}", "commands": ["intest"] }
           }
         }
         """);
