@@ -385,7 +385,7 @@ honest guidance is: a generated suite expects a reset database per run, and adop
 `{{runId}}` wherever the uniqueness constraint is free-form. That guidance is now written down,
 with this second-run result as its evidence, under getting-started Phase 5.
 
-### F8 — `ITestTokenProvider` has no consumers · **documented; code fix is v1-c**
+### F8 — `ITestTokenProvider` has no consumers · **scaffold and docs fixed; wiring it up is v1-c**
 
 The scaffold's `TestStartup.cs` says "Add configuration providers and an ITestTokenProvider
 implementation here", and getting-started Phase 3 tells adopters to implement it. Nothing calls
@@ -424,16 +424,27 @@ Auth *tests* are correctly v1-c. **Reaching a secured endpoint at all is not an 
 it is the precondition for every other test on a secured API, and v1-a generates suites for
 such APIs today.
 
-Documented rather than left as a trap: getting-started Phase 3 now opens with the fact that
-nothing calls `GetTokenAsync`, and shows the `DelegatingHandler` that does work. The interface
-still has no consumers — closing that is v1-c's job.
+Documented rather than left as a trap, in both places an adopter looks. getting-started Phase 3
+now opens with the fact that nothing calls `GetTokenAsync`, and shows the `DelegatingHandler`
+that does work. More importantly the **scaffold itself** was fixed (`40fd2cb`, `32e23a6`): the
+`Register` doc comment in every generated `TestStartup.cs` used to say "add … an
+`ITestTokenProvider` implementation here", which is the version an adopter actually reads,
+sitting in their own file. It now names the `DelegatingHandler` on `InTestClients.Api` and is
+honest that `ITestTokenProvider` is not wired up yet.
+
+That is guarded by a test in the same shape as the one next to it, whose message —
+*a scaffold must not teach a dead API* — is exactly the principle this violated.
+**Negative control performed**: restoring the old comment makes it fail with that message.
+
+The interface still has no consumers. Closing that is v1-c's job; this only stops the scaffold
+from pointing adopters at it.
 
 ## v1-a actions
 
 | # | Action | Owner phase | Status |
 |---|---|---|---|
 | 1 | F6 — navigate `oneOf`/`anyOf`/`allOf` in `ComposeFromSchema`, choosing the single non-null branch | v1-a | **Closed** — `8d0367a` + `6952aeb`; suite 226 → 234, including a negative-controlled guard on the check's ordering |
-| 2 | F8 — document that `ITestTokenProvider` is unwired and that a secured API needs a hand-written `DelegatingHandler` today | v1-a docs | **Closed** — getting-started Phase 3 |
+| 2 | F8 — stop the scaffold and the docs telling adopters to register an `ITestTokenProvider` that nothing calls; point both at the `DelegatingHandler` that works today | v1-a | **Closed** — getting-started Phase 3, plus `40fd2cb` + `32e23a6` fixing the generated `TestStartup.cs` comment, guarded by a negative-controlled test |
 | 3 | F8 — actually consume `ITestTokenProvider` from the generated template, so the documented extension point stops being a dead end | v1-c | Open |
 | 4 | F7 — document that a generated suite assumes a reset environment, and that `{{runId}}` is the v1-a tool for free-form uniqueness | v1-a docs | **Closed** — getting-started Phase 5 |
 | 5 | F7 — `{{fixture:…}}` / `IAssemblyFixture`, so create-then-delete and constrained-unique values stop depending on a reset database | v1-b | Open, now measured |
