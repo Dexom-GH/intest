@@ -89,4 +89,18 @@ public class InitCommandTests
         File.ReadAllText(Path.Combine(_root, "TestStartup.cs"))
             .ShouldNotContain("TestData", customMessage: "Task 8 deletes it; a scaffold must not teach a dead API");
     }
+
+    [TestMethod]
+    public void RegisterCommentPointsAtTheAuthMechanismThatActuallyWorks()
+    {
+        InitCommand.Run(_root, "Orders.ApiTests", "orders.json");
+
+        // ITestTokenProvider has no consumers (F8): nothing calls GetTokenAsync, so telling an
+        // adopter to implement it teaches a dead extension point. The comment must instead
+        // point at the DelegatingHandler-on-InTestClients.Api mechanism that getting-started's
+        // Phase 3 "Auth" section documents as working today.
+        File.ReadAllText(Path.Combine(_root, "TestStartup.cs"))
+            .ShouldContain("DelegatingHandler appended to InTestClients.Api",
+                customMessage: "a scaffold must not teach a dead API; it must point at the auth mechanism that works");
+    }
 }

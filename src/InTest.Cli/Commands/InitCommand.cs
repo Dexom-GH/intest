@@ -109,8 +109,10 @@ public static class InitCommand
                 await TestHost.InitializeAsync(context, context.CancellationToken);
             }
 
-            /// <summary>Team-owned registrations. Add configuration providers and an
-            /// ITestTokenProvider implementation here.</summary>
+            /// <summary>Team-owned registrations. Add configuration providers here. A secured
+            /// API needs a DelegatingHandler appended to InTestClients.Api — ITestTokenProvider
+            /// isn't wired up yet. See "Auth" in Phase 3 of getting-started.md for a worked
+            /// example.</summary>
             private static void Register(IServiceCollection services, IConfiguration configuration)
             {
                 // Path and query parameters live in fixtures/, not here — each operation that
