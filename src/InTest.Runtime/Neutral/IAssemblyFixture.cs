@@ -21,9 +21,11 @@ public interface IAssemblyFixture
     Type[] DependsOn { get; }
 
     /// <summary>
-    /// The operation keys this fixture's data is relevant to, or empty to apply to every
-    /// operation. Purely informational for <see cref="FixtureRunner"/> today; it exists so a
-    /// fixture's intent is documented next to its seeding code rather than only in a comment.
+    /// The profiles this fixture should run for, or empty (the default) to run for every
+    /// profile. <see cref="FixtureRunner.RunAsync"/> compares this against the profile it is
+    /// given and skips — logging why — a fixture whose non-empty <see cref="AppliesTo"/> does not
+    /// contain the current one, so a fixture meant only for, say, a QA seed does not run (and
+    /// does not silently do nothing without a trace) against local or production.
     /// </summary>
     string[] AppliesTo { get; }
 

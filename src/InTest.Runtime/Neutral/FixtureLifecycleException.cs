@@ -11,4 +11,19 @@ namespace InTest.Runtime;
 /// must fail loudly rather than turn into one more line in a table of resolved-but-blocked
 /// operations.
 /// </summary>
-public sealed class FixtureLifecycleException(string message) : Exception(message);
+public sealed class FixtureLifecycleException : Exception
+{
+    public FixtureLifecycleException(string message) : base(message)
+    {
+    }
+
+    /// <summary>
+    /// Preserves <paramref name="innerException"/> — a fixture's own bug (a bare
+    /// <see cref="NullReferenceException"/>, say) or a teardown action's — so an adopter reading
+    /// a CI log gets that exception's real stack trace and type, not just its
+    /// <see cref="Exception.Message"/> folded into a string built by <c>FixtureRunner</c>.
+    /// </summary>
+    public FixtureLifecycleException(string message, Exception innerException) : base(message, innerException)
+    {
+    }
+}
