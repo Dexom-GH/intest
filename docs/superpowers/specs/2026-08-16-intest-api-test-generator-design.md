@@ -1281,16 +1281,15 @@ nothing needs. Revisit if a provider ever makes reads expensive — a remote sec
 `{{config:}}` and `{{secret:}}` are **how credentials stay out of committed fixtures.**
 Generation warns on any literal value matching credential heuristics.
 
-**`{{fixture:…}}` is v1-b, not v1-a.** No `IAssemblyFixture` publishes anything yet for it to
-resolve against, so the row above describes the finished design, not what v1-a resolves. Writing
-`{{fixture:seededCustomer.id}}` into a v1-a fixture does not pass through as literal text and
-does not silently succeed — it fails the same aggregated validation as an unfilled `TODO:`
-sentinel, naming the token and stating that it is not supported until v1-b. Anything gentler
-would be exactly the plausible-but-fake value this section spends most of its words warning
-against: a fixture that *reads* as wired up to referential integrity while actually sending a
-literal, meaningless string. Until v1-b ships, referential integrity is solved by hand — point a
-sentinel at data seeded some other way, or at a value already known to exist in the target
-environment.
+**`{{fixture:…}}` is live.** An `IAssemblyFixture` publishes a value with
+`FixtureContext.Publish` (§13) during assembly initialisation, and every `{{fixture:…}}` token in
+a fixture resolves against that published set once every registered fixture has run. Referencing
+a key nothing published does not pass through as literal text and does not silently succeed — it
+fails the same aggregated validation as an unfilled `TODO:` sentinel, naming the requested key and
+listing every key that *was* published, so a typo is obvious rather than a mystery. Referential
+integrity solved by hand — pointing a sentinel at data seeded some other way, or at a value
+already known to exist in the target environment — is still the right call for anything an
+assembly fixture does not seed.
 
 ### Environment overlays
 
@@ -1514,11 +1513,13 @@ public static class TestHost
     {
         Configuration = BuildConfiguration(profile);
         RunId         = InTest.RunId.Create(Configuration);
-        Root          = BuildServiceProvider();          // TestStartup registrations
-        Schemas       = await LoadSchemaBundleAsync();   // spec.json beside the DLL
+        Fixtures      = FixtureStore.Load();              // fixtures/, before anything needs it
+        Root          = BuildServiceProvider();           // TestStartup registrations
+        Schemas       = await LoadSchemaBundleAsync();    // spec.json beside the DLL
+        EnsureNoBaseUrlPrefixDuplication();                // fails fast, before any request
         await AwaitReadinessAsync(ctx);
-        await RunFixturesAsync(ctx);
-        await ValidateFixturesAsync();                   // aggregated — §10
+        await RunFixturesAsync(ctx);                       // seeds, then builds the token resolver
+        await ValidateFixturesAsync();                     // aggregated — §10
     }
 
     [AssemblyCleanup]
@@ -1526,6 +1527,34 @@ public static class TestHost
         => await DrainCleanupAsync();
 }
 ```
+
+**Order is load-bearing.** In full: profile and configuration, then the run ID, then the fixture
+store, then the service provider — with the team's own `TestStartup` registrations already
+composed in, so a fixture can take a constructor dependency on anything it registered,
+`IHttpClientFactory` included — then the schema bundle, then a check that the configured base
+URL does not repeat a path prefix the spec's operations already carry (failing here, naming both
+halves, beats every request 404ing for a reason nobody can see), then readiness, then fixtures
+(topologically ordered, `AppliesTo`-filtered), then the token resolver built from whatever
+fixtures just published, and only then validation.
+
+**Validation runs last because it depends on what seeding produces.** Seeding needs an
+`HttpClient` and a service that has passed readiness, and `{{fixture:…}}` cannot be checked
+until seeding has published the keys it resolves against — validation cannot run any earlier
+than this without checking against information that does not exist yet (Appendix).
+
+**On a dead API, only the readiness failure surfaces.** Readiness throws before fixtures run, so
+the fixture-validation report — which would otherwise flag every sentinel and unresolved token —
+is never built. This is deliberate: an unreachable service is the more actionable error to see
+first. The cost is that anyone debugging fixtures against a service that happens to be down sees
+only the readiness failure, not the fixture report, until the service is reachable again.
+
+**Diagnostics from a *passing* `[AssemblyInitialize]` need `DisplayMessage`, not `WriteLine`
+(§18, New findings).** VSTest buffers `TestContext.WriteLine`, `Console.Out`, and `Console.Error`
+written during assembly initialisation into the result they would attach to, and only flushes
+that buffer on failure — so all three are invisible on a passing run. `TestContext.DisplayMessage`
+at `MessageLevel.Warning` escapes that buffering without failing the run, which is why the
+fixture-validation report and `FixtureRunner`'s skip lines go through it, and why a drain failure
+during `AssemblyCleanup` is additionally written to `Console.Error`.
 
 Signatures must satisfy MSTEST0012/MSTEST0013. `TestContext` on `[AssemblyCleanup]` requires
 3.8+, satisfied by the 4.3 floor.
@@ -1549,6 +1578,17 @@ public interface IAssemblyFixture
 Integer ordering is the thing everyone regrets — someone always needs to slot between 15 and
 20.
 
+**`AppliesTo` and `DependsOn` interact.** A fixture skipped because its `AppliesTo` excludes the
+current profile also skips every fixture that transitively depends on it, and the skip log names
+the dependency that caused it, not just the profile check. Running a dependent against state its
+skipped dependency never created would be exactly the silent-wrong-state failure `AppliesTo`
+exists to prevent, and a fixture that genuinely does not need its dependency's state should not
+declare `DependsOn` in the first place. The rejected alternative was validating, inside
+`FixtureGraph`, that a dependent's `AppliesTo` is no broader than its dependency's — that would
+make `FixtureGraph` profile-aware, and it is deliberately a pure ordering function that knows
+nothing about profiles; only the runner, which has both the order and the active profile, can
+make this call.
+
 **Cleanup is registration-based, not a symmetric second method.** Teardown is written next to
 the thing that created it and drained in reverse:
 
@@ -1559,6 +1599,12 @@ ctx.OnCleanup(() => _api.DeleteTenantAsync(tenant.Id));
 ```
 
 Wrap fixture execution so failures surface clearly.
+
+**Only `AddSingleton` is a supported registration for `IAssemblyFixture`.** A fixture registered
+`AddScoped` or `AddTransient` that also implements `IDisposable` is disposed when
+`AssemblyInit`'s own DI scope ends, while any `OnCleanup` closure it registered survives on the
+`FixtureContext` until `AssemblyCleanup` runs — a disposed-object trap for anything that strays
+from the scaffolded shape.
 
 ### Readiness
 
@@ -2094,6 +2140,9 @@ Apache-2.0 · .NET 8 and 9 EOL 10 November 2026 · `WithOpenApi` deprecated in .
 | Rev 2's provisional name `Jig` is taken on nuget.org (0.2.0–0.3.1) | nuget.org |
 | `InTest`, `InTest.Cli`, `InTest.Runtime`, `InTest.Core` are all free on nuget.org; zero search hits | nuget.org, *measured* |
 | GitHub org `intest` is **not** free — held by a personal account | GitHub API |
+| **`TestContext.WriteLine`, `Console.Out`, and `Console.Error` written during a *passing* `[AssemblyInitialize]` reach no visible sink under VSTest** — not stdout, not stderr, not the `.trx`. Buffered into the `UnitTestResult` they would attach to; flushed only when a failure synthesises a result to carry them | *Measured*, VSTest via MSTest.TestAdapter 4.3.3, .NET 10 |
+| **`TestContext.DisplayMessage` escapes that buffering**: `MessageLevel.Warning` reaches real stdout and the `.trx` without failing the run; `Informational` reaches the `.trx` only; `Error` fails the run | *Measured* |
+| **`[AssemblyCleanup]` does not share `[AssemblyInitialize]`'s buffering** — its output reaches the `.trx` (attached to the last test result) and the console with `--logger "console;verbosity=detailed"` | *Measured* |
 
 ---
 
@@ -2194,3 +2243,6 @@ answers it will never receive.
 | Weak-but-true default assertions | Guessed strict assertions get bulk-ignored |
 | Base class in `InTest.Runtime` | Fixes ship without regeneration |
 | Two packages, not three | `Cli`/`Core` split had no consumer |
+| Fixture validation runs after seeding, not before | Seeding needs an `HttpClient` and a service that passed readiness; `{{fixture:…}}` cannot be checked until seeding has published the keys it resolves against. Cost: a dead API now surfaces only the readiness failure, since readiness throws before the fixture report is built |
+| A fixture skipped by `AppliesTo` also skips its transitive dependents | Running a dependent against state a skipped dependency never built is the silent-wrong-state failure `AppliesTo` exists to prevent; a fixture that does not need that state should not declare the dependency. Kept out of `FixtureGraph`, which stays profile-agnostic, and left to the runner, which has both the order and the active profile |
+| `IAssemblyFixture` registration: `AddSingleton` only | `AddScoped`/`AddTransient` plus `IDisposable` disposes the fixture when `AssemblyInit`'s DI scope ends, while its `OnCleanup` closure survives on `FixtureContext` until `AssemblyCleanup` — a disposed-object trap |

@@ -11,9 +11,8 @@ integration test suite running as a post-deployment gate.
 > are verified end to end against live APIs, request bodies included — the three sample suites
 > pass **22 of 22** against running servers, with 44 fixture sentinels filled by hand
 > ([`v0-acceptance.md`](v0-acceptance.md), which also records what that run found). Not yet built: `survey`
-> (Phase 0), `generate --check` (Phase 8), variation and auth tests, `{{fixture:…}}` and
-> `IAssemblyFixture` (both v1-b, see Phase 5), and YAML input. Nothing is published to NuGet, so
-> build from source for now.
+> (Phase 0), `generate --check` and `intest upgrade` (Phase 8), variation and auth tests, and
+> YAML input. Nothing is published to NuGet, so build from source for now.
 >
 > The walkthrough is kept whole rather than trimmed to what ships, because tracing it end to end
 > is what finds gaps — it is how the unowned creation of the first fixture files was caught, and
@@ -255,8 +254,9 @@ Replace sentinels with real values, or with tokens:
 | `{{config:Orders:ApiKey}}` | Once per run, from configuration — keeps credentials out of committed files |
 | `{{runId}}` | Once per run |
 | `{{utcNow}}` | Per request |
+| `{{fixture:seededCustomer.id}}` | After every registered `IAssemblyFixture` completes — see below |
 
-### A generated suite expects a reset environment
+### Running a suite more than once
 
 A fixture holds one literal value, so an operation that **creates** something creates the same
 thing every run, and an operation that **deletes** something can only delete it once. Run the
@@ -264,36 +264,87 @@ sample Catalog suite twice against the same database and the second run drops fr
 6 of 9: two 409s on a duplicate name and a duplicate unique key, and a 404 deleting a row the
 first run removed.
 
-Plan for a reset target — a database restored per run, an ephemeral environment, a container
-started fresh. Where that is not possible, `{{runId}}` is the tool available today:
+Plan for a reset target first — a database restored per run, an ephemeral environment, a
+container started fresh. It needs no fixture work at all, and it is still the simplest fix.
+Where that is not possible, two tools make a suite repeatable without one: `{{runId}}` for
+free-form uniqueness, and `{{fixture:…}}` (next) for the two cases it cannot reach.
+
+Every run mints a fresh `{{runId}}`, so any field with no format constraint can just include it:
 
 ```jsonc
 "body": { "name": "Accessories-{{runId}}" }   // unique per run, so the 201 stays a 201
 ```
 
-That covers uniqueness constraints on **free-form** fields. It cannot help where the value must
-match a fixed format — a SKU constrained to `^[A-Z]{3}-[0-9]{4}$` has no room for a run id — and
-it cannot help an operation that deletes seeded data, because nothing creates that row first.
-Both are what `{{fixture:…}}` and `IAssemblyFixture` are for, below; until v1-b ships they are a
-reset environment's job.
+This is the right tool for free-form uniqueness, and it needs nothing beyond the token itself —
+no registration, no code.
 
-> **`{{fixture:…}}` is designed, not yet built (v1-b).** §10 defines it as resolving a value an
-> `IAssemblyFixture` published — for referential integrity, e.g. a `customerId` that exists in
-> *this* environment — after all assembly fixtures complete. Neither the token nor
-> `IAssemblyFixture` exist today. Writing `{{fixture:…}}` into a fixture now does not pass
-> through as literal text; it fails validation loudly, naming the token. Until v1-b ships,
-> referential integrity is a fixture author's problem to solve by hand: point a sentinel at data
-> seeded some other way, or at a value already known to exist in the target environment. The
-> `IAssemblyFixture` example below is the target design for when it lands.
+### Seeding data with IAssemblyFixture
+
+`{{runId}}` cannot reach two cases: a field constrained to a fixed format — a SKU matching
+`^[A-Z]{3}-[0-9]{4}$` has no room for a run id like `tjay-20260816T142233Z-a3f91c2e` — and an
+operation that deletes seeded data, because nothing creates that row first. Both need something
+seeded once, by code, before any test runs — an `IAssemblyFixture`:
 
 ```csharp
-var customer = await _api.CreateCustomerAsync(ct);
-ctx.Publish("seededCustomer.id", customer.Id);        // now available to {{fixture:…}}
-ctx.OnCleanup(() => _api.DeleteCustomerAsync(customer.Id));
+public sealed class SeededCustomerFixture(OrdersApiClient api) : IAssemblyFixture
+{
+    public Type[] DependsOn { get; } = [];
+    public string[] AppliesTo { get; } = [];   // empty = every profile
+
+    public async Task InitializeAsync(FixtureContext ctx, CancellationToken ct)
+    {
+        var customer = await api.CreateCustomerAsync(ct);
+        ctx.Publish("seededCustomer.id", customer.Id);       // now available to {{fixture:…}}
+        ctx.OnCleanup(() => api.DeleteCustomerAsync(customer.Id));
+    }
+}
 ```
 
-Cleanup is registered next to what created it and drained in reverse. Make every cleanup
-idempotent — it will sometimes not run at all (§14).
+Register it in `TestStartup.cs`'s `Register` method:
+
+```csharp
+services.AddSingleton<IAssemblyFixture, SeededCustomerFixture>();
+```
+
+**Only `AddSingleton` is supported.** Registering a fixture `AddScoped` or `AddTransient` while
+it also implements `IDisposable` sets a trap: the DI scope that resolves it during
+`AssemblyInit` disposes it before the run really starts, while any `OnCleanup` closure it
+registered lives on and still runs at `AssemblyCleanup` — against a fixture object that is
+already disposed.
+
+Then, wherever a fixture needs that seeded value:
+
+```jsonc
+"body": { "customerId": "{{fixture:seededCustomer.id}}" }
+```
+
+`{{fixture:…}}` resolves once every registered `IAssemblyFixture` has finished — `DependsOn`
+orders fixtures that depend on each other's published values, and `AppliesTo` restricts a
+fixture to specific profiles (a fixture skipped this way also skips anything that transitively
+depends on it, logged by name). Reference a key nothing published, and it is reported the same
+way an unfilled `TODO:` sentinel is (above): once, in the aggregated report —
+
+```
+Fixture validation failed (3 fixtures, 5 problems):
+  update-order.json    {{fixture:seededTenant.id}} — key not published
+                       available: seededCustomer.id, seededRegion.code
+```
+
+— naming the requested key and every key that *was* published, and only the operations that
+actually depend on it fail, not the rest of the suite.
+
+Cleanup is registered next to what created it (`ctx.OnCleanup`, above) and drained in reverse
+when `AssemblyCleanup` runs. Make every cleanup idempotent.
+
+**Cleanup is best-effort, not guaranteed.** `AssemblyCleanup` does not run on a crash, a
+cancelled pipeline, or an agent timeout (§14), and `IAssemblyFixture` does not remove the need
+for the out-of-band sweeper described under "Things that will bite you" below — write one
+regardless of whether you adopt fixtures.
+
+**This does not make a suite runnable twice *concurrently*.** Two runs seeding at the same time
+still collide on the same unique constraints — cross-process coordination is not solved at this
+layer (§11). What this buys is sequential repeatability: run, then run again, without
+hand-editing fixtures or resetting the environment in between.
 
 ### Reducing this work permanently
 
@@ -315,7 +366,8 @@ dotnet test
 ```
 
 Startup order: build configuration → mint the run ID → build the service provider → load the
-schema bundle → wait for readiness → run assembly fixtures → validate every fixture.
+schema bundle → check the base URL for a repeated path prefix → wait for readiness → run
+assembly fixtures → validate every fixture (§13).
 
 Readiness matters more than it sounds. Post-deploy cold start is the largest single source of
 flaky gates, so InTest polls until the service answers — by default requiring two consecutive
@@ -364,7 +416,8 @@ dotnet test
 `--check` compares `Generated/` and `coverage-report.json` against a fresh run. Exit codes:
 `0` identical, `1` output differs, `2` tool error, `4` the tool version does not match
 `intestVersion` in `intest.json`. That last one exists so a tool upgrade is never mistaken for
-spec drift — adopt a new version deliberately with `intest upgrade`.
+spec drift — `intest upgrade` is designed to adopt a new version deliberately, but it is not
+built yet (see the preamble above).
 
 Cross-repo, the API build step means cloning the API repo. That is a real cost and worth
 knowing before you start.
@@ -426,6 +479,13 @@ clear `INTEST0001` error rather than letting you meet `CS0579`. The default is s
 Before enabling parallelism, make sure every test creates its own data — and note that two
 concurrent pipelines against one environment cannot coordinate at all.
 
+**Fixture diagnostics go missing during a *passing* run.** `TestContext.WriteLine`,
+`Console.Out`, and `Console.Error` written during `[AssemblyInitialize]` are invisible on a
+passing run — not stdout, not the `.trx` (mechanics: spec §18, New findings). That is why the
+fixture-validation report and `FixtureRunner`'s skip lines (Phase 5) go through
+`TestContext.DisplayMessage` instead. Do the same in your own `IAssemblyFixture` logging, and
+pick `Warning` or `Informational` — `MessageLevel.Error` fails the run.
+
 **Cleanup is best-effort.** `AssemblyCleanup` does not run on a crash, a cancelled pipeline, or
 an agent timeout. Everything is tagged with a run ID whose timestamp is UTC, so an out-of-band
 sweeper can delete anything older than a day using the ID alone. Write one. Without it,
@@ -433,3 +493,54 @@ cancelled pipelines slowly fill your environment with orphans nobody can reprodu
 
 **This is for pre-production.** InTest adds no guard rails against being pointed at production,
 deliberately. Pointing it there is your decision and your consequences.
+
+---
+
+## Adding fixture cleanup to an existing project
+
+> **Check first:** open `TestStartup.cs` and search for `AssemblyCleanup`. If it is not there,
+> this section is for you. If it is, you already have it.
+
+`TestStartup.cs` is yours, and Phase 2's table already says it: **never regenerated.** No
+command adds this for you. `intest upgrade` is designed to bump `intestVersion` in
+`intest.json` and the pinned version in `.config/dotnet-tools.json`, then re-run `generate`, but
+it is not built yet — and even once it is, its job stops at `Generated/` and `intest.json`. It
+was never going to touch `TestStartup.cs`, because nothing is allowed to touch a file `init`
+marks yours to keep.
+
+The concrete cost of skipping this: no `[AssemblyCleanup]` means whatever `OnCleanup` a fixture
+registers never drains. That is not a build error and not a test failure — it is the failure
+mode with no failure in it, just a database that fills up a little more with every run, noticed
+months later as "why do we have four thousand test customers."
+
+Paste this into your `TestStartup` class, alongside `[AssemblyInitialize]`. MSTest allows only
+one `[AssemblyCleanup]` per assembly — if your project already has one, add the
+`TestHost.CleanupAsync(context)` call inside it instead of pasting a second method:
+
+```csharp
+[AssemblyCleanup]
+public static async Task AssemblyCleanup(TestContext context)
+{
+    await TestHost.CleanupAsync(context);
+}
+```
+
+That is the entire fix — `TestHost.CleanupAsync` does the actual draining; this method only has
+to exist so MSTest calls it. Add it even if you have not written an `IAssemblyFixture` yet —
+with nothing registered, it's a safe no-op.
+
+**Confirm it worked.** Unlike a passing `[AssemblyInitialize]` (above), `[AssemblyCleanup]`'s
+output is not swallowed. Once a fixture registers at least one `OnCleanup` action, run
+`dotnet test --logger "console;verbosity=detailed"` and look for
+`InTest fixture cleanup: drained N action(s).` — that line reaches the console at that
+verbosity and the `.trx`'s last test result either way, so seeing neither means the paste did
+not take, not that cleanup silently succeeded. Before your first fixture exists there is nothing
+to drain and nothing to see yet; the method compiling and the run staying green is the whole
+signal until then.
+
+If you are about to write your first `IAssemblyFixture`, also add the registration hook to the
+`Register` method in the same file:
+
+```csharp
+services.AddSingleton<IAssemblyFixture, YourFixture>();
+```
