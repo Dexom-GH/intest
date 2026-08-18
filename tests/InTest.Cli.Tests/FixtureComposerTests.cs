@@ -200,6 +200,131 @@ public class FixtureComposerTests
         fixture.Body["child"].ShouldBeNull("a repeated reference emits null and stops");
     }
 
+    [TestMethod]
+    public async Task OneOfWithANullBranchComposesTheOtherBranchesSkeleton()
+    {
+        // OpenAPI 3.1's idiom for a nullable reference, and exactly what the built-in
+        // Microsoft.AspNetCore.OpenApi producer emits for a nullable request-body property.
+        const string spec = """
+        {
+          "openapi":"3.1.0","info":{"title":"T","version":"1"},
+          "paths":{"/p":{"post":{
+            "requestBody":{"content":{"application/json":{"schema":{"type":"object",
+              "properties":{"dimensions":{"oneOf":[{"type":"null"},{"$ref":"#/components/schemas/Dimensions"}]}}}}}},
+            "responses":{"201":{"description":"ok"}}}}},
+          "components":{"schemas":{"Dimensions":{"type":"object","properties":{
+            "length":{"type":"number"},"width":{"type":"number"}}}}}
+        }
+        """;
+
+        var fixture = await ComposeAsync(spec, "/p", "POST");
+
+        fixture.Body!["dimensions"]!["length"]!.GetValue<string>().ShouldBe("TODO:length");
+        fixture.Body["dimensions"]!["width"]!.GetValue<string>().ShouldBe("TODO:width");
+    }
+
+    [TestMethod]
+    public async Task AnyOfWithANullBranchComposesTheOtherBranchesSkeleton()
+    {
+        const string spec = """
+        {
+          "openapi":"3.1.0","info":{"title":"T","version":"1"},
+          "paths":{"/p":{"post":{
+            "requestBody":{"content":{"application/json":{"schema":{"type":"object",
+              "properties":{"dimensions":{"anyOf":[{"type":"null"},{"$ref":"#/components/schemas/Dimensions"}]}}}}}},
+            "responses":{"201":{"description":"ok"}}}}},
+          "components":{"schemas":{"Dimensions":{"type":"object","properties":{
+            "length":{"type":"number"},"width":{"type":"number"}}}}}
+        }
+        """;
+
+        var fixture = await ComposeAsync(spec, "/p", "POST");
+
+        fixture.Body!["dimensions"]!["length"]!.GetValue<string>().ShouldBe("TODO:length");
+        fixture.Body["dimensions"]!["width"]!.GetValue<string>().ShouldBe("TODO:width");
+    }
+
+    [TestMethod]
+    public async Task AllOfWithASingleBranchComposesThatSchema()
+    {
+        const string spec = """
+        {
+          "openapi":"3.1.0","info":{"title":"T","version":"1"},
+          "paths":{"/p":{"post":{
+            "requestBody":{"content":{"application/json":{"schema":{"type":"object",
+              "properties":{"dimensions":{"allOf":[{"$ref":"#/components/schemas/Dimensions"}]}}}}}},
+            "responses":{"201":{"description":"ok"}}}}},
+          "components":{"schemas":{"Dimensions":{"type":"object","properties":{
+            "length":{"type":"number"}}}}}
+        }
+        """;
+
+        var fixture = await ComposeAsync(spec, "/p", "POST");
+
+        fixture.Body!["dimensions"]!["length"]!.GetValue<string>().ShouldBe("TODO:length");
+    }
+
+    [TestMethod]
+    public async Task AGenuinelyAmbiguousUnionStillEmitsASentinel()
+    {
+        // Two non-null branches: guessing which one applies would produce a value that looks
+        // deliberate but is not. A sentinel is the honest answer.
+        const string spec = """
+        {
+          "openapi":"3.1.0","info":{"title":"T","version":"1"},
+          "paths":{"/p":{"post":{
+            "requestBody":{"content":{"application/json":{"schema":{"type":"object",
+              "properties":{"value":{"oneOf":[{"type":"string"},{"type":"integer"}]}}}}}},
+            "responses":{"201":{"description":"ok"}}}}}
+        }
+        """;
+
+        var fixture = await ComposeAsync(spec, "/p", "POST");
+
+        fixture.Body!["value"]!.GetValue<string>().ShouldBe("TODO:value");
+    }
+
+    [TestMethod]
+    public async Task AUnionOfOnlyNullBranchesStillEmitsASentinel()
+    {
+        const string spec = """
+        {
+          "openapi":"3.1.0","info":{"title":"T","version":"1"},
+          "paths":{"/p":{"post":{
+            "requestBody":{"content":{"application/json":{"schema":{"type":"object",
+              "properties":{"value":{"oneOf":[{"type":"null"}]}}}}}},
+            "responses":{"201":{"description":"ok"}}}}}
+        }
+        """;
+
+        var fixture = await ComposeAsync(spec, "/p", "POST");
+
+        fixture.Body!["value"]!.GetValue<string>().ShouldBe("TODO:value");
+    }
+
+    [TestMethod]
+    public async Task ASelfReferencingUnionTerminatesInsteadOfRecursingForever()
+    {
+        const string spec = """
+        {
+          "openapi":"3.1.0","info":{"title":"T","version":"1"},
+          "paths":{"/p":{"post":{
+            "requestBody":{"content":{"application/json":{"schema":{"$ref":"#/components/schemas/Node"}}}},
+            "responses":{"201":{"description":"ok"}}}}},
+          "components":{"schemas":{"Node":{"type":"object","properties":{
+            "name":{"type":"string"},
+            "next":{"oneOf":[{"type":"null"},{"$ref":"#/components/schemas/Node"}]}}}}}
+        }
+        """;
+
+        var fixture = await ComposeAsync(spec, "/p", "POST");
+
+        // Asserted on observable output, not by racing a timeout — see
+        // StopsAtARepeatedSchemaReference above for why a timeout guard would be unsound here.
+        fixture.Body!["name"]!.GetValue<string>().ShouldBe("TODO:name");
+        fixture.Body["next"].ShouldBeNull("a self-referencing union branch emits null and stops");
+    }
+
     private const string NeedsFixtureSpec = """
     {
       "openapi":"3.0.3","info":{"title":"T","version":"1"},
