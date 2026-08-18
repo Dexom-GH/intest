@@ -161,6 +161,7 @@ public static class FixtureRunner
 
         var actions = context.TakeCleanupActions();
         var causes = new List<Exception>();
+        var causeMessages = new List<string>();
 
         for (var i = actions.Count - 1; i >= 0; i--)
         {
@@ -171,6 +172,13 @@ public static class FixtureRunner
             catch (Exception ex)
             {
                 causes.Add(ex);
+                // Read here, inside this action's own catch, rather than later when the
+                // aggregate message below is built: a cause whose own Message getter throws
+                // must not let that second exception escape this method unwrapped — every
+                // failure DrainAsync reports must arrive as FixtureLifecycleException, which is
+                // this method's own contract and the one TestHost.CleanupAsync's narrow catch
+                // (Task 5) relies on holding.
+                causeMessages.Add(SafeMessage(ex));
             }
         }
 
@@ -193,9 +201,27 @@ public static class FixtureRunner
 
             throw new FixtureLifecycleException(
                 $"{causes.Count} of {actions.Count} cleanup action(s) threw while draining: " +
-                string.Join(" | ", causes.Select(c => c.Message)) +
+                string.Join(" | ", causeMessages) +
                 ". " + remediation,
                 cause);
+        }
+    }
+
+    /// <summary>
+    /// <see cref="Exception.Message"/>, tolerating a cause whose own getter throws. Unlikely,
+    /// but if it happened while <see cref="DrainAsync"/> was building its aggregate message
+    /// rather than here, that second exception would escape unwrapped, breaking this method's
+    /// promise to only ever throw <see cref="FixtureLifecycleException"/>.
+    /// </summary>
+    private static string SafeMessage(Exception exception)
+    {
+        try
+        {
+            return exception.Message;
+        }
+        catch (Exception)
+        {
+            return $"<{TypeName(exception.GetType())} threw while reading its own Message>";
         }
     }
 

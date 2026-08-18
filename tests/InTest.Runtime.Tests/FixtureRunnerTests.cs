@@ -466,6 +466,35 @@ public class FixtureRunnerTests
 
     // --- DrainAsync ---
 
+    /// <summary>
+    /// A cause that misbehaves in a different way than "throws when invoked": its own
+    /// <see cref="Message"/> getter throws. <see cref="DrainAsync"/>'s doc comment promises
+    /// every failure is aggregated into a single <see cref="FixtureLifecycleException"/>, and
+    /// <c>TestHost.CleanupAsync</c> (Task 5) narrows its catch to exactly that type on the
+    /// strength of that promise — so this type exists to prove the promise holds even when
+    /// building the aggregate message (which reads each cause's <see cref="Message"/>) is
+    /// itself what could break it.
+    /// </summary>
+    private sealed class ExceptionWithThrowingMessage : Exception
+    {
+        public override string Message => throw new InvalidOperationException("message boom");
+    }
+
+    [TestMethod]
+    public async Task DrainWrapsACauseEvenWhenItsOwnMessageGetterThrows()
+    {
+        var context = new FixtureContext();
+        context.OnCleanup(() => throw new ExceptionWithThrowingMessage());
+
+        // If DrainAsync read Exception.Message only when building the final aggregate string,
+        // a cause whose own getter throws would let that second exception escape unwrapped —
+        // silently breaking the "only ever throws FixtureLifecycleException" contract this
+        // method's own doc comment promises.
+        var ex = await Should.ThrowAsync<FixtureLifecycleException>(() => FixtureRunner.DrainAsync(context));
+
+        ex.InnerException.ShouldBeOfType<ExceptionWithThrowingMessage>();
+    }
+
     [TestMethod]
     public async Task DrainRunsActionsInReverseRegistrationOrder()
     {

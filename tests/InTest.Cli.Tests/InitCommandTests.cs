@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using InTest.Cli.Commands;
 using Shouldly;
 
@@ -107,5 +108,40 @@ public class InitCommandTests
             customMessage: "a scaffold must not teach a dead API; it must point at the auth mechanism that works");
         scaffold.ShouldContain("InTestClients.Api",
             customMessage: "a scaffold must not teach a dead API; it must point at the auth mechanism that works");
+    }
+
+    [TestMethod]
+    public void ScaffoldedStartupDrainsFixtureCleanup()
+    {
+        InitCommand.Run(_root, "Orders.ApiTests", "orders.json");
+        var startup = File.ReadAllText(Path.Combine(_root, "TestStartup.cs"));
+
+        // Task 5: without an [AssemblyCleanup] calling TestHost.CleanupAsync, DrainAsync ships
+        // with no caller and a fixture's teardown never runs in a generated project. One regex
+        // ties the attribute, the method signature, and the call together as a single unit,
+        // rather than two independent ShouldContain checks: independent checks would still pass
+        // if the call were moved into AssemblyInit and AssemblyCleanup were left empty, which is
+        // exactly the failure mode this test exists to catch. The call is pinned with its
+        // parenthesised invocation, "TestHost.CleanupAsync(context)", not the bare
+        // "TestHost.CleanupAsync" substring: that bare form also appears in the method's own doc
+        // comment, so it would stay present even if the method body were gutted.
+        Regex.IsMatch(
+                startup,
+                @"\[AssemblyCleanup\]\s+public\s+static\s+async\s+Task\s+AssemblyCleanup\(TestContext\s+context\)" +
+                @"\s*\{\s*await\s+TestHost\.CleanupAsync\(context\);\s*\}",
+                RegexOptions.Singleline)
+            .ShouldBeTrue("expected [AssemblyCleanup] to directly wrap a call to TestHost.CleanupAsync(context)");
+    }
+
+    [TestMethod]
+    public void RegisterMethodShowsACommentedFixtureRegistrationExample()
+    {
+        InitCommand.Run(_root, "Orders.ApiTests", "orders.json");
+        var startup = File.ReadAllText(Path.Combine(_root, "TestStartup.cs"));
+
+        // Commented, not live: `init` never discovers fixtures by reflection (decision 2), and a
+        // live call here would reference a fixture type that does not exist yet, breaking every
+        // fresh scaffold's build before a team has written one.
+        startup.ShouldContain("// services.AddSingleton<IAssemblyFixture,");
     }
 }
