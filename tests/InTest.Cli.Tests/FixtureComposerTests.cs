@@ -207,16 +207,17 @@ public class FixtureComposerTests
     [TestMethod]
     [DataRow("oneOf")]
     [DataRow("anyOf")]
-    [DataRow("allOf")]
     public async Task AUnionWithANullBranchComposesTheRemainingSchemaSkeleton(string keyword)
     {
         // OpenAPI 3.1's idiom for a nullable reference, and exactly what the built-in
-        // Microsoft.AspNetCore.OpenApi producer emits for a nullable request-body property. All
-        // three union keywords are treated identically once null-only branches are discarded, so
-        // one parameterized spec covers all three rather than restating the same shape per
-        // keyword — see SoleUnionBranch in FixtureComposer.cs. A plain token substitution, not
-        // string interpolation, sidesteps the raw string literal's brace-counting rules against
-        // this much literal JSON.
+        // Microsoft.AspNetCore.OpenApi producer emits for a nullable request-body property. oneOf
+        // and anyOf are both real 3.1 documents for this shape — a $ref alongside `type: null` —
+        // and SoleUnionBranch filters and counts them identically, so one parameterized spec
+        // covers both rather than restating the same shape per keyword. allOf gets its own test
+        // below: `allOf: [{type: null}, {$ref: ...}]` would mean "satisfies both null and this
+        // object" — a document no producer emits and no schema can satisfy — so it is deliberately
+        // not a third row here. A plain token substitution, not string interpolation, sidesteps
+        // the raw string literal's brace-counting rules against this much literal JSON.
         const string specTemplate = """
         {
           "openapi":"3.1.0","info":{"title":"T","version":"1"},
@@ -229,6 +230,32 @@ public class FixtureComposerTests
         }
         """;
         var spec = specTemplate.Replace("__KEYWORD__", keyword);
+
+        var fixture = await ComposeAsync(spec, "/p", "POST");
+
+        fixture.Meta.Tier.ShouldBe(4);
+        fixture.Body!["dimensions"]!["length"]!.GetValue<string>().ShouldBe("TODO:length");
+        fixture.Body["dimensions"]!["width"]!.GetValue<string>().ShouldBe("TODO:width");
+    }
+
+    [TestMethod]
+    public async Task AllOfWithASingleRefBranchComposesThatSchema()
+    {
+        // allOf's realistic single-branch form: no null branch, since allOf means every branch's
+        // constraints must hold simultaneously and a null branch alongside a $ref would be
+        // unsatisfiable (see the comment above). One branch, already non-null, so SoleUnionBranch
+        // finds it without needing to discard anything.
+        const string spec = """
+        {
+          "openapi":"3.1.0","info":{"title":"T","version":"1"},
+          "paths":{"/p":{"post":{
+            "requestBody":{"content":{"application/json":{"schema":{"type":"object",
+              "properties":{"dimensions":{"allOf":[{"$ref":"#/components/schemas/Dimensions"}]}}}}}},
+            "responses":{"201":{"description":"ok"}}}}},
+          "components":{"schemas":{"Dimensions":{"type":"object","properties":{
+            "length":{"type":"number"},"width":{"type":"number"}}}}}
+        }
+        """;
 
         var fixture = await ComposeAsync(spec, "/p", "POST");
 
@@ -348,7 +375,14 @@ public class FixtureComposerTests
         var fixture = await ComposeAsync(spec, "/p", "POST");
 
         fixture.Meta.Tier.ShouldBe(4);
-        fixture.Body!["item"]!["sku"]!.GetValue<string>().ShouldBe("TODO:sku");
+        // Split so a regression here names the invariant instead of throwing a bare
+        // NullReferenceException: under the broken (hoisted) ordering, "item" composes from
+        // "Base" instead of its own properties, "sku" is absent, and a combined `!.GetValue<>()`
+        // would fail with only a line number to go on.
+        fixture.Body!["item"]!["sku"].ShouldNotBeNull(
+            "the union check must stay after the object check — a schema with both type: object "
+            + "and an allOf composes its own declared properties (F6)");
+        fixture.Body["item"]!["sku"]!.GetValue<string>().ShouldBe("TODO:sku");
     }
 
     private const string NeedsFixtureSpec = """

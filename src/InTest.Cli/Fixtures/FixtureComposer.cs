@@ -116,6 +116,11 @@ public static class FixtureComposer
     /// document's singular <c>example</c> keyword, <c>Examples</c> is left empty; <c>Example</c>
     /// is the one actually populated. Confirmed against the installed package rather than
     /// assumed. <c>Example</c> is read deliberately, so the suppression is scoped to this line.
+    /// An OpenAPI 3.1 document's singular <c>example</c> keyword populates <c>Example</c> the
+    /// same way — confirmed the same way, by
+    /// <c>FixtureComposerTests.AUnionBranchWithAnExampleRecordsTier2NotASentinel</c>, which is a
+    /// 3.1 document (3.1 is the dialect F6 exists for). If a future package version routes 3.1's
+    /// <c>example</c> into <c>Examples</c> instead, that test goes red here.
     /// </summary>
     private static JsonNode? FirstExample(IOpenApiSchema? schema)
     {
