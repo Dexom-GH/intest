@@ -112,9 +112,11 @@ public static class FixtureValidation
     }
 
     /// <summary>
-    /// One validation pass over every loaded fixture. <see cref="Message"/> is written to
-    /// <c>TestContext</c> exactly once by <c>TestHost</c> so every problem is visible in the
-    /// <c>.trx</c> and the CI summary even though only the affected operations actually fail.
+    /// One validation pass over every loaded fixture. <see cref="Message"/> is reported to
+    /// <c>TestContext</c> exactly once by <c>TestHost</c> so every problem is visible even though
+    /// only the affected operations actually fail (decision 2) — see <c>TestHost</c>'s own
+    /// <c>InitializeAsync</c> for which <c>TestContext</c> method actually makes that true on a
+    /// passing run, which turned out not to be the obvious one.
     /// </summary>
     public sealed class Report
     {
@@ -128,6 +130,13 @@ public static class FixtureValidation
 
         /// <summary>The full aggregated report, every problem across every fixture in one message.</summary>
         public string Message { get; }
+
+        /// <summary>
+        /// Whether any operation's fixture has at least one unresolved value. <c>TestHost</c>
+        /// uses this to pick <see cref="Message"/>'s <c>TestContext.DisplayMessage</c> severity —
+        /// there is something worth surfacing prominently only when this is true.
+        /// </summary>
+        public bool HasProblems => _problemsByOperation.Count > 0;
 
         /// <summary>Whether this operation's fixture has at least one unresolved value.</summary>
         public bool IsBlocked(string operationKey) => _problemsByOperation.ContainsKey(operationKey);

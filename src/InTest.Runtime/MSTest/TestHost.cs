@@ -1,3 +1,4 @@
+using System.Text;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -37,14 +38,23 @@ public static class TestHost
     public static Action<IServiceCollection, IConfiguration>? ConfigureServices { get; set; }
 
     /// <summary>
-    /// The one <see cref="FixtureContext"/> instance Task 6's <see cref="InitializeAsync"/> will
-    /// create and pass to every fixture, retained here so <see cref="CleanupAsync"/> can drain
-    /// the exact instance the fixtures wrote to rather than a fresh, empty one (decision 4). Null
-    /// until Task 6 populates it, and null again whenever <see cref="InitializeAsync"/> threw
-    /// before reaching that point (e.g. a readiness failure). <see cref="CleanupAsync"/> treats
-    /// null as "nothing to drain," not an error. Internal because only <see cref="CleanupAsync"/>
-    /// reads it and only <see cref="InitializeAsync"/> should write it; a generated project has
-    /// no business touching it directly.
+    /// The one <see cref="FixtureContext"/> instance <see cref="InitializeAsync"/> creates and
+    /// passes to every fixture, retained here so <see cref="CleanupAsync"/> can drain the exact
+    /// instance the fixtures wrote to rather than a fresh, empty one (decision 4). Reset to null
+    /// at the top of every <see cref="InitializeAsync"/> call and set again just before
+    /// <see cref="FixtureRunner.RunAsync"/> runs, not after: <see cref="FixtureRunner.RunAsync"/>
+    /// deliberately does not drain a cancellation that lands between fixtures (its own doc calls
+    /// this out — decision 4 does not guarantee cleanup across a cancellation, crash, or agent
+    /// timeout), so whatever already-succeeded fixtures registered before that point only reaches
+    /// <see cref="CleanupAsync"/>'s later, unconditional drain if this field was already pointing
+    /// at the live context when the cancellation happened. An ordinary fixture failure does not
+    /// depend on this ordering — <see cref="FixtureRunner.RunAsync"/> drains the context it was
+    /// given directly, before the exception it throws ever reaches this method. Null whenever
+    /// <see cref="InitializeAsync"/> threw before reaching the assignment (e.g. a readiness
+    /// failure) or has not run yet this process. <see cref="CleanupAsync"/> treats null as
+    /// "nothing to drain," not an error. Internal because only <see cref="CleanupAsync"/> reads
+    /// it and only <see cref="InitializeAsync"/> should write it; a generated project has no
+    /// business touching it directly.
     /// </summary>
     internal static FixtureContext? RetainedFixtureContext { get; set; }
 
@@ -52,17 +62,19 @@ public static class TestHost
     {
         ArgumentNullException.ThrowIfNull(context);
 
+        // Reset rather than relying on the field's default: MSTest runs [AssemblyInitialize]
+        // once per process in practice, but the doc on RetainedFixtureContext promises null
+        // "whenever InitializeAsync threw before reaching that point" — a promise a bare field
+        // default cannot keep on a second call within one process, and TestHostTests.cs already
+        // resets this field by hand between tests for the same reason.
+        RetainedFixtureContext = null;
+
         Profile = ResolveProfile(context);
         Configuration = BuildConfiguration(Profile);
         RunIdValue = RunId.Create(Configuration["InTest:RunId:Prefix"]);
         context.WriteLine($"InTest run id: {RunIdValue} (profile '{Profile}')");
 
         Fixtures = FixtureStore.Load(AppContext.BaseDirectory, Profile);
-        FixtureTokens = new TokenResolver(Configuration, RunIdValue);
-        FixtureValidationReport = FixtureValidation.Build(Fixtures, FixtureTokens);
-        // Written once here so every problem across every fixture lands in the .trx and the CI
-        // summary, even though only the operations actually blocked go on to fail (decision 2).
-        context.WriteLine(FixtureValidationReport.Message);
 
         var services = new ServiceCollection();
         services.AddSingleton(Configuration);
@@ -92,6 +104,80 @@ public static class TestHost
         using var scope = Root.CreateScope();
         var client = scope.ServiceProvider.GetRequiredService<IHttpClientFactory>().CreateClient(InTestClients.Api);
         await Readiness.WaitAsync(client, readiness, cancellationToken).ConfigureAwait(false);
+
+        // The reorder that is this task's whole substance (decision 1): seeding needs a service
+        // provider and a reachable API, so it runs here — after both — and before TokenResolver,
+        // which needs seeding's published keys to resolve {{fixture:...}} at all. One visible
+        // consequence: a dead API now fails on readiness before the fixture report is ever built
+        // (previously validation ran first); that trade is intentional, not an oversight.
+        var fixtureContext = new FixtureContext();
+
+        // See RetainedFixtureContext's own doc for exactly which failure mode this ordering
+        // protects — an ordinary fixture failure does not depend on it.
+        RetainedFixtureContext = fixtureContext;
+
+        // FixtureGraph.Order is deliberately not called here — RunAsync orders fixtures itself
+        // (see its own doc for why splitting that responsibility across two callers is a risk
+        // nothing in the existing suite would catch), so the guarantee stays unbypassable.
+        //
+        // Resolved from the scope readiness already opened, so a fixture can take a constructor
+        // dependency on anything ConfigureServices registered, including IHttpClientFactory
+        // (Task 6's own golden proof, SeedIdFixture, does exactly this). Only AddSingleton is a
+        // documented, supported registration for IAssemblyFixture (see TestStartup.cs's scaffold
+        // comment): an AddScoped or AddTransient fixture that also implements IDisposable would
+        // be disposed when this scope ends below, at the end of this method, while any OnCleanup
+        // closure it registered survives on fixtureContext until AssemblyCleanup — a
+        // disposed-object trap for anyone who strays from the scaffolded shape.
+        var fixtures = scope.ServiceProvider.GetServices<IAssemblyFixture>();
+        await FixtureRunner.RunAsync(fixtures, fixtureContext, Profile, new ContextTextWriter(context), cancellationToken)
+            .ConfigureAwait(false);
+
+        // Built only now, with the published keys FixtureRunner just seeded — TokenResolver's own
+        // doc explains why an empty snapshot here would fail every {{fixture:...}} token.
+        FixtureTokens = new TokenResolver(Configuration, RunIdValue, publishedFixtureValues: fixtureContext.PublishedValues);
+        FixtureValidationReport = FixtureValidation.Build(Fixtures, FixtureTokens);
+
+        // DisplayMessage, not WriteLine: see ContextTextWriter's doc for the full, confirmed
+        // story, but the short version is that WriteLine alone is invisible in exactly the case
+        // decision 2 exists for — a passing run with a non-blocking fixture problem. Warning
+        // reaches real stdout and the trx without failing a run nothing here is blocking;
+        // Informational still lands in the trx but skips stdout, so a clean run stays quiet.
+        context.DisplayMessage(
+            FixtureValidationReport.HasProblems ? MessageLevel.Warning : MessageLevel.Informational,
+            FixtureValidationReport.Message);
+    }
+
+    /// <summary>
+    /// Forwards <see cref="FixtureRunner.RunAsync"/>'s skip lines to
+    /// <see cref="TestContext.DisplayMessage(MessageLevel, string)"/> at <see cref="MessageLevel.Warning"/>
+    /// — confirmed to be the one call that survives a <em>passing</em> [AssemblyInitialize] under
+    /// this project's actual runner: VSTest via MSTest.TestAdapter 4.3.3, <em>not</em>
+    /// Microsoft.Testing.Platform (no <c>EnableMSTestRunner</c> anywhere here; forcing MTP fails
+    /// outright on the .NET 10 SDK, and its native host prints nothing on a pass either). VSTest
+    /// buffers an [AssemblyInitialize]'s <see cref="TestContext.WriteLine(string)"/>,
+    /// <see cref="Console.Out"/> and <see cref="Console.Error"/> into the
+    /// <c>UnitTestResult</c> it would attach them to, and only flushes that buffer when a
+    /// failure synthesises a result to carry it — so all three reach nowhere on a passing run,
+    /// confirmed by direct probe, not assumed. <see cref="MessageLevel.Warning"/> escapes anyway:
+    /// real process stdout plus the trx's run-level output, and the run still exits 0 — unlike
+    /// <see cref="MessageLevel.Error"/>, which would fail it, wrong for a mere skip.
+    /// <para>
+    /// Only <see cref="WriteLine(string?)"/> is overridden — <see cref="FixtureRunner"/> never
+    /// calls anything else on this <see cref="TextWriter"/> today — so every other member
+    /// (<c>Write(char)</c>, <c>Write(string)</c>, the parameterless <c>WriteLine()</c>,
+    /// <c>WriteLine(int)</c>) silently no-ops via <see cref="TextWriter"/>'s own empty-bodied
+    /// <c>Write(char)</c>. That is a real trap for a future caller, since this class is handed
+    /// out typed as <see cref="TextWriter"/>; pinned rather than fixed by
+    /// <c>TestHostTests.ContextTextWriterSwallowsEveryWriteExceptWriteLineOfString</c>. Internal
+    /// so <c>InTest.Runtime.Tests</c> can exercise this class's own forwarding directly.
+    /// </para>
+    /// </summary>
+    internal sealed class ContextTextWriter(TestContext context) : TextWriter
+    {
+        public override Encoding Encoding => Encoding.UTF8;
+
+        public override void WriteLine(string? value) =>
+            context.DisplayMessage(MessageLevel.Warning, value ?? string.Empty);
     }
 
     /// <summary>
@@ -104,8 +190,8 @@ public static class TestHost
     /// <see cref="InitializeAsync"/> succeeded. That is exactly the composition
     /// <see cref="FixtureRunner.DrainAsync"/>'s idempotency exists for: a fixture failure during
     /// <see cref="InitializeAsync"/> already triggers one drain inside
-    /// <see cref="FixtureRunner.RunAsync"/> (Task 6 wires that call), so this second,
-    /// unconditional drain finds nothing left and is a safe no-op rather than a repeat failure.
+    /// <see cref="FixtureRunner.RunAsync"/>, so this second, unconditional drain finds nothing
+    /// left and is a safe no-op rather than a repeat failure.
     /// </para>
     /// <para>
     /// <see cref="FixtureRunner.DrainAsync"/> throws <see cref="FixtureLifecycleException"/> by
@@ -146,6 +232,17 @@ public static class TestHost
     /// second, unrelated failure stacked on top of whatever <see cref="InitializeAsync"/> already
     /// reported.
     /// </para>
+    /// <para>
+    /// A successful drain also writes one line to <paramref name="context"/> naming how many
+    /// actions ran, but only when there was at least one: today, a drain that ran zero actions
+    /// and a context nobody ever registered a fixture against (<see cref="RetainedFixtureContext"/>
+    /// is null for every scaffolded suite until a team writes its first fixture) both write
+    /// nothing, and the reader cannot tell which happened from the log alone. The count is read
+    /// from <see cref="FixtureContext.CleanupActions"/> before draining, since
+    /// <see cref="FixtureRunner.DrainAsync"/> takes and clears the list as it runs — reading after
+    /// would always see zero. Written only on success, since a failed drain already gets its own,
+    /// more specific message below naming how many of how many threw.
+    /// </para>
     /// </summary>
     public static async Task CleanupAsync(TestContext context)
     {
@@ -156,9 +253,16 @@ public static class TestHost
             return;
         }
 
+        var pendingActions = RetainedFixtureContext.CleanupActions.Count;
+
         try
         {
             await FixtureRunner.DrainAsync(RetainedFixtureContext).ConfigureAwait(false);
+
+            if (pendingActions > 0)
+            {
+                context.WriteLine($"InTest fixture cleanup: drained {pendingActions} action(s).");
+            }
         }
         catch (FixtureLifecycleException ex)
         {

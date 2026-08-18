@@ -31,6 +31,12 @@ public class TestHostTests
     {
         public List<string> Lines { get; } = [];
 
+        /// <summary>Calls to <see cref="DisplayMessage"/>, in order — the sink
+        /// <c>TestHost.ContextTextWriter</c> and the fixture-validation report now actually use,
+        /// since <see cref="WriteLine(string?)"/> was confirmed to be invisible on a passing
+        /// [AssemblyInitialize] under VSTest (see <c>TestHost.ContextTextWriter</c>'s doc).</summary>
+        public List<(MessageLevel Level, string Message)> DisplayedMessages { get; } = [];
+
         public override IDictionary<string, object?> Properties { get; } = new Dictionary<string, object?>();
 
         public override void WriteLine(string? message) => Lines.Add(message ?? "");
@@ -47,9 +53,8 @@ public class TestHostTests
         {
         }
 
-        public override void DisplayMessage(MessageLevel messageLevel, string message)
-        {
-        }
+        public override void DisplayMessage(MessageLevel messageLevel, string message) =>
+            DisplayedMessages.Add((messageLevel, message));
     }
 
     // TestHost.RetainedFixtureContext is process-wide static state. Reset both before and after
@@ -178,6 +183,41 @@ public class TestHostTests
     }
 
     [TestMethod]
+    public async Task CleanupAsyncWritesHowManyActionsItDrainedOnSuccess()
+    {
+        var context = new FixtureContext();
+        context.OnCleanup(() => Task.CompletedTask);
+        context.OnCleanup(() => Task.CompletedTask);
+        TestHost.RetainedFixtureContext = context;
+        var testContext = new FakeTestContext();
+
+        await TestHost.CleanupAsync(testContext);
+
+        // Before this, a drain that ran two actions and a context nobody ever registered
+        // anything against both wrote nothing at all — a reader of the .trx could not tell
+        // "cleanup ran and succeeded" from "cleanup was never wired up" from the log alone.
+        testContext.Lines.ShouldContain(line => line.Contains("drained 2 action(s)"),
+            "a successful drain must say how many actions it drained");
+    }
+
+    [TestMethod]
+    public async Task CleanupAsyncWritesNothingWhenThereWasNothingToDrain()
+    {
+        var context = new FixtureContext();
+        TestHost.RetainedFixtureContext = context;
+        var testContext = new FakeTestContext();
+
+        await TestHost.CleanupAsync(testContext);
+
+        // RetainedFixtureContext is non-null here (InitializeAsync always creates one now), but
+        // no fixture registered any teardown against it — the overwhelmingly common case for a
+        // suite with no fixtures at all. Announcing "drained 0 action(s)" every run would be
+        // noise; staying silent keeps the log free of the null-vs-zero distinction that already
+        // requires no announcement.
+        testContext.Lines.ShouldBeEmpty();
+    }
+
+    [TestMethod]
     public async Task CleanupAsyncIsANoOpWhenNoFixtureContextWasRetained()
     {
         TestHost.RetainedFixtureContext = null;
@@ -193,5 +233,66 @@ public class TestHostTests
     public async Task CleanupAsyncRejectsANullTestContext()
     {
         await Should.ThrowAsync<ArgumentNullException>(() => TestHost.CleanupAsync(null!));
+    }
+
+    /// <summary>
+    /// Covers <c>TestHost.ContextTextWriter</c> — the <see cref="TextWriter"/>
+    /// <see cref="TestHost.InitializeAsync"/> hands to <c>FixtureRunner.RunAsync</c> for its skip
+    /// lines. This is as close to that wiring as a cheap, in-process test can get: it proves the
+    /// writer class itself forwards correctly. It cannot prove that
+    /// <see cref="TestHost.InitializeAsync"/> actually constructs and passes <em>this</em> writer
+    /// rather than, say, <see cref="TextWriter.Null"/> — that is an implementation detail of a
+    /// private call site inside a method this repo deliberately does not build an in-process
+    /// harness for (it needs <c>AppContext.BaseDirectory</c>, a real <see cref="TestContext"/>,
+    /// and live HTTP). See <c>TestHost.ContextTextWriter</c>'s own doc for why
+    /// <see cref="TestContext.DisplayMessage"/> at <see cref="MessageLevel.Warning"/>, not
+    /// <see cref="TestContext.WriteLine(string)"/>, is what it forwards to.
+    /// </summary>
+    [TestMethod]
+    public void ContextTextWriterForwardsWriteLineToDisplayMessageAtWarning()
+    {
+        var testContext = new FakeTestContext();
+        var writer = new TestHost.ContextTextWriter(testContext);
+
+        writer.WriteLine("Skipping fixture 'Some.Fixture': its AppliesTo does not include profile 'local'.");
+
+        testContext.DisplayedMessages.ShouldContain(
+            (MessageLevel.Warning, "Skipping fixture 'Some.Fixture': its AppliesTo does not include profile 'local'."));
+    }
+
+    [TestMethod]
+    public void ContextTextWriterTreatsANullLineAsEmpty()
+    {
+        var testContext = new FakeTestContext();
+        var writer = new TestHost.ContextTextWriter(testContext);
+
+        writer.WriteLine((string?)null);
+
+        testContext.DisplayedMessages.ShouldContain((MessageLevel.Warning, ""));
+    }
+
+    /// <summary>
+    /// Pins, rather than fixes, the restriction <c>TestHost.ContextTextWriter</c>'s own doc
+    /// names: only <see cref="TextWriter.WriteLine(string?)"/> is overridden, so every other
+    /// <see cref="TextWriter"/> member silently no-ops via the base type's empty-bodied
+    /// <c>Write(char)</c>. Harmless today — <c>FixtureRunner</c> never calls anything else on
+    /// this writer — but a regression test for the doc's own claim, so a future caller who adds
+    /// one of these calls to <c>FixtureRunner</c> gets a failing test here rather than silently
+    /// losing output the way the doc warns about.
+    /// </summary>
+    [TestMethod]
+    public void ContextTextWriterSwallowsEveryWriteExceptWriteLineOfString()
+    {
+        var testContext = new FakeTestContext();
+        var writer = new TestHost.ContextTextWriter(testContext);
+
+        writer.Write('x');
+        writer.Write("a string");
+        writer.WriteLine();
+        writer.WriteLine(42);
+
+        testContext.DisplayedMessages.ShouldBeEmpty(
+            "if this now fails, ContextTextWriter has started forwarding more than WriteLine(string) — " +
+            "update its doc comment rather than treating this test as the bug.");
     }
 }

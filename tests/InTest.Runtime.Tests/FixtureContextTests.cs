@@ -68,6 +68,36 @@ public class FixtureContextTests
     }
 
     [TestMethod]
+    public void PublishedValuesReturnsEveryPublishedKeyAndValue()
+    {
+        var context = new FixtureContext();
+        context.Publish("seededTenant.id", "tenant-1");
+        context.Publish("seededUser.id", "user-1");
+
+        context.PublishedValues.ShouldBe(
+            new Dictionary<string, string>
+            {
+                ["seededTenant.id"] = "tenant-1",
+                ["seededUser.id"] = "user-1",
+            });
+    }
+
+    [TestMethod]
+    public void PublishedValuesIsAFreshSnapshotEachCall()
+    {
+        var context = new FixtureContext();
+        context.Publish("seededTenant.id", "tenant-1");
+        var before = context.PublishedValues;
+
+        context.Publish("seededUser.id", "user-1");
+
+        // Same freshness contract as PublishedKeys and CleanupActions: a caller holding an
+        // earlier snapshot must not see it grow as more fixtures publish.
+        before.Count.ShouldBe(1);
+        context.PublishedValues.Count.ShouldBe(2);
+    }
+
+    [TestMethod]
     public void OnCleanupRecordsMultipleActionsInRegistrationOrder()
     {
         var context = new FixtureContext();

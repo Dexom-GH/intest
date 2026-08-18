@@ -23,6 +23,17 @@ public sealed class FixtureContext
     public IReadOnlyList<string> PublishedKeys => _published.Keys.Order(StringComparer.Ordinal).ToList();
 
     /// <summary>
+    /// Every published key and its value, as a fresh snapshot — same freshness contract as
+    /// <see cref="PublishedKeys"/> and <see cref="CleanupActions"/>: a caller holding an earlier
+    /// snapshot must not see it change as more fixtures publish. Exists so <c>TestHost</c> can
+    /// hand <see cref="TokenResolver"/> the whole map in one call instead of rebuilding one from
+    /// <see cref="PublishedKeys"/> with an O(n) <see cref="Get"/> lookup per key — that lookup
+    /// would rebuild, one entry at a time, exactly the dictionary already sitting behind
+    /// <see cref="_published"/>.
+    /// </summary>
+    public IReadOnlyDictionary<string, string> PublishedValues => new Dictionary<string, string>(_published, StringComparer.Ordinal);
+
+    /// <summary>
     /// Teardown registered so far and not yet taken for draining, in registration order — the
     /// order <see cref="FixtureRunner"/> must drain in reverse (decision 4). A fresh snapshot on
     /// every read, like <see cref="PublishedKeys"/>: the backing list can shrink once draining

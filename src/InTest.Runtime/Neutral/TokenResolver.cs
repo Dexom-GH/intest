@@ -14,9 +14,9 @@ namespace InTest.Runtime;
 /// see <c>FixtureStore.ResolvedBody</c>, which relies on that to differ between requests.
 /// <c>{{fixture:...}}</c> resolves from an immutable snapshot of published values handed in at
 /// construction; a miss throws <see cref="FixtureResolutionException"/>, deliberately not the
-/// lifecycle exception type — see that type's doc for why. Until Task 6 reorders construction to
-/// run after fixture seeding, <c>TestHost</c> passes no published values at all, so today every
-/// <c>{{fixture:...}}</c> token fails with an empty available-keys list.
+/// lifecycle exception type — see that type's doc for why. <c>TestHost</c> constructs this after
+/// <c>FixtureRunner.RunAsync</c> has seeded, passing every key fixtures published, so
+/// <c>{{fixture:...}}</c> resolves against the real set rather than an empty one.
 /// </summary>
 public sealed class TokenResolver(
     IConfiguration configuration,
