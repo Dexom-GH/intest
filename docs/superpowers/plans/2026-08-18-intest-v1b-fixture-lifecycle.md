@@ -57,27 +57,31 @@ profile → configuration → run id → FixtureStore.Load → services → read
         → FixtureValidation.Build
 ```
 
-Validation still happens exactly once and still reports everything in one aggregated message — v1-a decision 2 is unchanged. It simply happens later, when it has the information it needs. **Every existing test touching the current order needs revisiting;** Task 6 owns that and starts by finding them.
+Validation still happens exactly once and still reports everything in one aggregated message — v1-a decision 2 is unchanged. It simply happens later, when it has the information it needs.
+
+**This changes behaviour on a dead API, and the change is intended.** Today validation runs first, so an unreachable service still prints every fixture problem before readiness fails. After the reorder, readiness throws first and the fixture report is never built. That is the better trade — an unreachable service is the more actionable error, and §13's own sketch has this order — but it is a visible regression in diagnostics for anyone debugging fixtures against a service that happens to be down. Task 6 must expect it rather than discover it.
 
 **2. Fixtures are discovered by DI registration, never by reflection.**
 
-A team writes `services.AddSingleton<IAssemblyFixture, DatabaseSeed>()` in the `TestStartup.cs` they already own. Assembly scanning would be less typing and more magic: it would run a class the moment someone writes it, make ordering depend on reflection order, and offer no way to register one conditionally. The `ConfigureServices` hook exists for exactly this.
+A team writes `services.AddSingleton<IAssemblyFixture, DatabaseSeed>()` in the `TestStartup.cs` they already own; `TestHost` resolves `IEnumerable<IAssemblyFixture>` from the built provider. Assembly scanning would be less typing and more magic: it would run a class the moment someone writes it, make ordering depend on reflection order, and offer no way to register one conditionally. The `ConfigureServices` hook exists for exactly this.
 
 **3. Ordering is topological over `DependsOn`, and a cycle fails loudly.**
 
 §13 is explicit that integer ordering is the thing everyone regrets — someone always needs to slot between 15 and 20. `DependsOn` is `Type[]`. A cycle, or a dependency on a type nobody registered, fails at `AssemblyInitialize` naming the types involved rather than silently running in some arbitrary order.
 
-**4. Cleanup is registration-based and best-effort, and says so.**
+**4. Cleanup is registration-based and best-effort, and something must actually call it.**
 
-`ctx.OnCleanup(...)` registers teardown next to the thing that created it; `AssemblyCleanup` drains in reverse registration order. Three properties are not optional:
+`ctx.OnCleanup(...)` registers teardown next to the thing that created it; the drain runs in reverse registration order. **One `FixtureContext` instance is created by `TestHost`, passed to every fixture, and retained in a static field** so `AssemblyCleanup` can drain the same instance the fixtures wrote to.
+
+Three properties are not optional:
 
 - **One failing teardown must not strand the others.** Every remaining action still runs; failures aggregate into one report.
 - **Teardown must be idempotent.** §14 already requires this of consumers, and the drain does not retry.
 - **`AssemblyCleanup` does not run on crash, cancellation or agent timeout.** §14 already says so, v1-b does not change it, and the docs must not imply otherwise. The out-of-band sweeper is still the answer for leaked data.
 
-**5. An unresolvable `{{fixture:…}}` is a validation failure, not a crash.**
+**5. An unresolvable `{{fixture:…}}` throws `FixtureResolutionException` — not the new lifecycle type.**
 
-An unpublished key produces §10's message — naming the key, and listing what *is* available — and blocks only the operations whose fixtures reference it, exactly as an unfilled `TODO:` sentinel does today. v1-a's per-operation blocking extends to this unchanged.
+`FixtureValidation.CheckLeaf` catches `FixtureResolutionException` and nothing else (`FixtureValidation.cs:104`). That single catch is what turns a bad token into a blocked operation instead of a dead run. Tasks 1–3 introduce `FixtureLifecycleException` for *lifecycle* errors — cycles, duplicate publishes, failing fixtures — which is the right separation, and it means Task 4 must be deliberate: an unpublished key is a **resolution** failure and must keep the existing type, or it escapes the aggregator and kills the whole run, defeating this decision.
 
 **6. Out of scope, deliberately.**
 
@@ -95,9 +99,9 @@ An unpublished key produces §10's message — naming the key, and listing what 
 | `FixtureGraph.cs` | Topological ordering over `DependsOn`; cycle and missing-dependency detection |
 | `FixtureRunner.cs` | Runs ordered fixtures, honours `AppliesTo`, wraps failures, drains cleanup |
 | **Modified** | |
-| `Neutral/TokenResolver.cs` | `{{fixture:…}}` resolves from published keys instead of always failing |
-| `MSTest/TestHost.cs` | The reordering (decision 1), plus `AssemblyCleanup` draining |
-| `Commands/InitCommand.cs` | Scaffold shows registering an `IAssemblyFixture` |
+| `Neutral/TokenResolver.cs` | `{{fixture:…}}` resolves from published keys; `SupportedTokens` and class doc updated |
+| `MSTest/TestHost.cs` | The reordering, the retained `FixtureContext`, and `CleanupAsync` |
+| `Commands/InitCommand.cs` | Scaffold registers a fixture **and calls `TestHost.CleanupAsync` from `[AssemblyCleanup]`** |
 
 Everything new is under `Neutral/`, so §3's portability boundary holds — the architecture test asserting no MSTest type appears there must stay green.
 
@@ -168,7 +172,7 @@ git commit -m "feat(runtime): assembly fixture interface and context"
 
 - [ ] **Step 1: Write the failing tests**
 
-Cover: independent fixtures keep registration order · a dependency runs before its dependent · a diamond resolves each node once · a cycle throws naming every type in it · a `DependsOn` entry nobody registered throws naming both the dependent and the missing type · an empty set is not an error.
+Cover: independent fixtures keep registration order · a dependency runs before its dependent · a diamond resolves each node once · a cycle throws naming every type in it · a `DependsOn` entry nobody registered throws naming both ends · an empty set is not an error.
 
 ```csharp
 [TestMethod]
@@ -190,13 +194,6 @@ public void IndependentFixturesKeepRegistrationOrder()
     // reproduced. Independent nodes must not be reordered arbitrarily.
     FixtureGraph.Order([new A(), new C()]).Select(f => f.GetType()).ShouldBe([typeof(A), typeof(C)]);
 }
-
-[TestMethod]
-public void AMissingDependencyNamesBothEnds()
-{
-    Should.Throw<FixtureLifecycleException>(() => FixtureGraph.Order([new DependsOnUnregistered()]))
-          .Message.ShouldContain(nameof(DependsOnUnregistered));
-}
 ```
 
 - [ ] **Step 2–4: Run, implement, re-run, commit**
@@ -215,18 +212,43 @@ git commit -m "feat(runtime): topological fixture ordering with cycle detection"
 - Create: `src/InTest.Runtime/Neutral/FixtureRunner.cs`
 - Test: `tests/InTest.Runtime.Tests/FixtureRunnerTests.cs`
 
+**Shape, stated so the two halves fit together.** The caller owns the context and passes it to both:
+
+```csharp
+public static Task RunAsync(
+    IEnumerable<IAssemblyFixture> fixtures, FixtureContext context,
+    string profile, TextWriter log, CancellationToken cancellationToken);
+
+public static Task DrainAsync(FixtureContext context);
+```
+
+`TestHost` creates the `FixtureContext`, keeps it in a static field, passes it to `RunAsync` during `AssemblyInitialize` and to `DrainAsync` during `AssemblyCleanup` (Task 5). `log` is where skip and progress lines go — `TestHost` passes a writer over `TestContext`.
+
 - [ ] **Step 1: Write the failing tests**
 
-**Execution:** runs in `FixtureGraph` order · a fixture whose `AppliesTo` excludes the current profile is skipped · an empty `AppliesTo` runs for every profile · a throwing fixture fails the run with a message naming **which fixture** · a throwing fixture stops later ones (they may depend on it) but still drains what already registered cleanup.
+**Execution:** runs in `FixtureGraph` order · a fixture whose `AppliesTo` excludes the current profile is skipped **and a line naming it is written to the log** · an empty `AppliesTo` runs for every profile · a throwing fixture fails the run with a message naming **which fixture** · a throwing fixture stops later ones (they may depend on it) but still drains what already registered cleanup.
 
 **Cleanup:** drains in reverse registration order · one throwing action does not prevent the rest · failures aggregate into one message · draining twice runs each action once.
 
 ```csharp
 [TestMethod]
+public async Task ASkippedFixtureSaysSo()
+{
+    var log = new StringWriter();
+    await FixtureRunner.RunAsync([new QaOnlyFixture()], new FixtureContext(), "local", log, default);
+
+    // A fixture silently not running because the profile did not match is indistinguishable
+    // from one that ran and did nothing — and the second-run acceptance in Task 8 would pass
+    // for the wrong reason.
+    log.ToString().ShouldContain(nameof(QaOnlyFixture));
+    log.ToString().ShouldContain("local");
+}
+
+[TestMethod]
 public async Task AFailingFixtureSaysWhichOne()
 {
     var ex = await Should.ThrowAsync<FixtureLifecycleException>(
-        () => FixtureRunner.RunAsync([new ThrowingFixture()], "local", CancellationToken.None));
+        () => FixtureRunner.RunAsync([new ThrowingFixture()], new FixtureContext(), "local", TextWriter.Null, default));
 
     // §13: an unhandled exception in AssemblyInitialize otherwise fails every test with an
     // error that does not say "setup broke".
@@ -269,9 +291,21 @@ git commit -m "feat(runtime): fixture execution and reverse cleanup drain"
 
 - [ ] **Step 1: Write the failing tests**
 
-Cover: a published key resolves · an unpublished key fails with §10's message, naming the key **and listing the available ones** · the available list is sorted so the message is stable · a resolver with no published keys still fails usefully · resolution is cached per run, matching §10's timing table · a published value containing another token is **not** re-expanded (no recursive substitution).
+Cover: a published key resolves · an unpublished key fails with §10's message, naming the key **and listing the available ones** · the available list is sorted so the message is stable · a resolver with no published keys still fails usefully · a published value containing another token is **not** re-expanded.
+
+**The exception type is load-bearing** (decision 5) and needs its own test:
 
 ```csharp
+[TestMethod]
+public void AnUnpublishedKeyThrowsAResolutionFailureNotALifecycleFailure()
+{
+    // FixtureValidation.CheckLeaf catches FixtureResolutionException and nothing else. Throw
+    // FixtureLifecycleException here and an unresolvable key stops being a blocked operation
+    // and becomes a dead run, defeating v1-a's per-operation blocking.
+    Should.Throw<FixtureResolutionException>(
+        () => ResolverWith().Resolve("{{fixture:missing}}", "create-order.json"));
+}
+
 [TestMethod]
 public void AnUnpublishedKeyListsWhatIsAvailable()
 {
@@ -286,11 +320,28 @@ public void AnUnpublishedKeyListsWhatIsAvailable()
     ex.Message.ShouldContain("seededCustomer.id");
     ex.Message.ShouldContain("seededRegion.code");
 }
+
+[TestMethod]
+public void TheUnknownTokenMessageAdvertisesFixtureToo()
+{
+    // SupportedTokens (TokenResolver.cs:29) omits {{fixture:…}}. Left alone, the "Unknown
+    // token" message keeps recommending a list missing the token that now works.
+    Should.Throw<FixtureResolutionException>(() => ResolverWith().Resolve("{{nope}}", "f.json"))
+          .Message.ShouldContain("{{fixture:");
+}
 ```
 
-- [ ] **Step 2–4: Run, implement, re-run, commit**
+**Do not add a "cached per run" test.** For `{{fixture:…}}` caching falls out for free — the published dictionary is immutable once seeding finishes — so such a test asserts nothing a reader could break. v1-a already found that this row of §10's timing table lies about `{{config:}}`; a second decorative test would make it worse, not better.
 
-**Repoint the existing "not supported until v1-b" test rather than deleting it.** If it still passes unchanged after this task, the new branch is unreachable and something is wrong.
+- [ ] **Step 2: Update `SupportedTokens` and the class doc**
+
+`SupportedTokens` (line 29) and the class-level doc comment both still say `{{fixture:…}}` is out of scope for v1-a and always fails. Both are now wrong and belong in this task, not Task 7 — a stale message ships with the code that contradicts it.
+
+- [ ] **Step 3: Repoint the old test, do not delete it**
+
+If the existing "not supported until v1-b" test still passes unchanged after this task, the new branch is unreachable and something is wrong.
+
+- [ ] **Step 4: Run, commit**
 
 ```bash
 git commit -m "feat(runtime): resolve fixture tokens from published keys"
@@ -298,22 +349,40 @@ git commit -m "feat(runtime): resolve fixture tokens from published keys"
 
 ---
 
-## Task 5: Scaffold registers a fixture
+## Task 5: Wire the drain, and scaffold both halves
+
+**This task is why `DrainAsync` is not dead code.** `AssemblyCleanup` appears in **zero** tracked `.cs` files today — verified with `git grep`. `TestHost` is a plain static class, not a `[TestClass]`, so it cannot carry the attribute itself; the scaffolded `TestStartup.cs` declares only `[AssemblyInitialize]`. Without this task, Task 3's drain ships with no caller and Task 8 Step 3 cannot pass.
 
 **Files:**
-- Modify: `src/InTest.Cli/Commands/InitCommand.cs`
+- Modify: `src/InTest.Runtime/MSTest/TestHost.cs` (add `CleanupAsync`), `src/InTest.Cli/Commands/InitCommand.cs`
 - Test: `tests/InTest.Cli.Tests/InitCommandTests.cs` (extend)
 
 - [ ] **Step 1: Write the failing tests**
 
-The scaffolded `TestStartup.cs` shows `services.AddSingleton<IAssemblyFixture, …>()` commented out with a worked example, and must not imply reflection-based discovery.
+The scaffolded `TestStartup.cs` must contain both an `[AssemblyCleanup]` method calling `TestHost.CleanupAsync` and a commented `services.AddSingleton<IAssemblyFixture, …>()` example.
 
-**Assert on the registration call and the interface name, never on prose.** v1-a's F8 fix learned this the hard way: a test pinning comment wording breaks on rewording and teaches nothing.
+**Assert on the attribute and the call, never on prose.** v1-a's F8 fix learned this: a test pinning comment wording breaks on rewording and teaches nothing.
 
-- [ ] **Step 2–4: Run, implement, re-run, commit**
+```csharp
+[TestMethod]
+public void ScaffoldedStartupDrainsFixtureCleanup()
+{
+    InitCommand.Run(_root, "Orders.ApiTests", "orders.json");
+    var startup = File.ReadAllText(Path.Combine(_root, "TestStartup.cs"));
+
+    startup.ShouldContain("[AssemblyCleanup]");
+    startup.ShouldContain("TestHost.CleanupAsync");
+}
+```
+
+- [ ] **Step 2: Implement**
+
+`TestHost.CleanupAsync(TestContext context)` drains the retained `FixtureContext` via `FixtureRunner.DrainAsync` and writes any aggregated failure to `TestContext`. Its signature must satisfy MSTEST0012/MSTEST0013; `TestContext` on `[AssemblyCleanup]` needs 3.8+, satisfied by the 4.3 floor.
+
+- [ ] **Step 3: Run, commit**
 
 ```bash
-git commit -m "feat(cli): scaffold shows registering an assembly fixture"
+git commit -m "feat: drain fixture cleanup from the scaffolded AssemblyCleanup"
 ```
 
 ---
@@ -322,34 +391,31 @@ git commit -m "feat(cli): scaffold shows registering an assembly fixture"
 
 Everything before this task is inert until `TestHost` runs it.
 
+**`InitializeAsync` has no direct test coverage today** — `git grep -l 'TestHost' -- 'tests/*.cs'` returns nothing. An earlier draft of this plan warned that the reorder would ripple through many existing tests and made Step 1 a discovery grep; that was wrong in the reassuring direction. There is nothing to discover, and nothing protecting this method. The first real test of it is the one you are about to write.
+
+**Build it on the seam that exists, not a new one.** `tests/InTest.Golden.Tests/GeneratedSuiteExecutionTests.cs` already scaffolds, generates, builds and runs a suite against an `HttpListener` stub, and `FixtureParameterReachesALiveRequestEndToEnd` already hand-edits a fixture the way an adopter would. Extend that rather than inventing an in-process harness for a method that reads `AppContext.BaseDirectory`, takes an MSTest `TestContext`, and awaits real HTTP.
+
 **Files:**
 - Modify: `src/InTest.Runtime/MSTest/TestHost.cs`
-- Test: `tests/InTest.Runtime.Tests/`, `tests/InTest.Golden.Tests/GeneratedSuiteExecutionTests.cs`
+- Test: `tests/InTest.Golden.Tests/GeneratedSuiteExecutionTests.cs` (extend)
 
-- [ ] **Step 1: Find every test that depends on the current order — before changing anything**
+- [ ] **Step 1: Write the failing end-to-end test**
 
-```bash
-cd D:/TestGen && grep -rln "TestHost\|FixtureValidationReport\|FixtureTokens" tests/
-```
-
-Name each in your report with what it assumes. A test asserting validation happens before the service provider exists is asserting the bug this task fixes, and changes. A test asserting validation happens *once* does not.
-
-- [ ] **Step 2: Write the failing test for the new order**
+Register a fake `IAssemblyFixture` in the generated project's `TestStartup.cs`, have it publish a key, point a fixture value at `{{fixture:…}}`, and assert the live request carries the published value. That proves the whole order in one test: services exist before seeding, seeding precedes resolution, resolution precedes validation.
 
 ```csharp
 [TestMethod]
-public async Task SeedingRunsAfterReadinessAndBeforeValidation()
+public async Task APublishedFixtureKeyReachesALiveRequest()
 {
-    // The whole ordering constraint in one assertion. Seeding needs a client and a live
-    // service; validation needs the keys seeding publishes. Getting this backwards makes
-    // {{fixture:…}} unresolvable no matter how correct Task 4 is.
-    var order = await RunInitializeRecordingOrder();
-
-    order.ShouldBe(["services", "readiness", "fixtures", "validation"]);
+    // The ordering constraint, asserted through observable behaviour rather than by
+    // instrumenting InitializeAsync. If seeding ran after validation, or before the service
+    // provider existed, this token could not resolve and the suite would fail.
+    ...
+    test.Output.ShouldContain("Passed!", customMessage: test.Output);
 }
 ```
 
-- [ ] **Step 3: Implement the reorder**
+- [ ] **Step 2: Implement the reorder**
 
 New sequence in `InitializeAsync`:
 
@@ -357,21 +423,19 @@ New sequence in `InitializeAsync`:
 2. `FixtureStore.Load` — unchanged
 3. Build the service provider, including team registrations via `ConfigureServices`
 4. `Readiness.WaitAsync`
-5. Resolve every registered `IAssemblyFixture`, order via `FixtureGraph`, run via `FixtureRunner`
+5. Create the `FixtureContext`, retain it, resolve `IEnumerable<IAssemblyFixture>`, order via `FixtureGraph`, run via `FixtureRunner`
 6. Build `TokenResolver` **with the published keys**
 7. `FixtureValidation.Build`, writing the one aggregated message to `TestContext`
 
-`AssemblyCleanup` calls `FixtureRunner.DrainAsync`. **A drain failure must not mask a test failure that already happened** — report it rather than throwing over the top of a more interesting error.
-
-- [ ] **Step 4: Run the full suite**
+- [ ] **Step 3: Run the full suite**
 
 ```bash
 cd D:/TestGen && dotnet test --nologo
 ```
 
-Every previously-passing test stays green except those you deliberately changed in Step 1. Report anything you did not anticipate rather than adjusting it to fit.
+Expect everything still green. **One deliberate behaviour change to confirm rather than be surprised by** (decision 1): a suite pointed at a dead API now fails on readiness *without* printing the fixture report, where before it printed the report first. If a test asserts the old sequencing, it is asserting the behaviour this task intentionally changes — say so in your report rather than quietly editing it.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
 git commit -m "feat(runtime): seed fixtures between readiness and validation"
@@ -379,11 +443,11 @@ git commit -m "feat(runtime): seed fixtures between readiness and validation"
 
 ---
 
-## Task 7: Amend the spec and the walkthrough
+## Task 7: Amend the spec, the walkthrough, and tell existing adopters
 
 - [ ] **Step 1: §13 — record the initialisation order**
 
-It is now load-bearing and undocumented. Add it with decision 1's reasoning: validation moved because it needs what seeding publishes, not because validation itself changed.
+It is now load-bearing and undocumented. Add it with decision 1's reasoning: validation moved because it needs what seeding publishes, not because validation itself changed. Include the readiness-suppression consequence.
 
 - [ ] **Step 2: §10 — `{{fixture:…}}` is live**
 
@@ -395,10 +459,16 @@ It currently tells adopters a suite expects a reset database and to reach for `{
 
 **Do not claim cleanup is guaranteed.** §14 says `AssemblyCleanup` does not run on crash, cancellation or agent timeout. v1-b does not change that, and the sweeper is still required.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 4: Write the upgrade note**
+
+`TestStartup.cs` is team-owned and **never regenerated**. Every project scaffolded before v1-b therefore has no `[AssemblyCleanup]`, and will silently leak everything its fixtures create — the failure mode being no failure at all, just a slowly filling database.
+
+Add an upgrade section to `docs/getting-started.md` giving the exact method to paste, and say plainly that regeneration will not do it for them.
+
+- [ ] **Step 5: Commit**
 
 ```bash
-git commit -m "docs: fixture lifecycle is built; record the initialisation order"
+git commit -m "docs: fixture lifecycle is built; record the order and the upgrade step"
 ```
 
 ---
@@ -421,7 +491,7 @@ dotnet test <generated Catalog suite>          # first run
 dotnet test <generated Catalog suite>          # second run, same database
 ```
 
-**Expected: 9 of 9 both times.** The first run alone is not the result — v1-a already achieved that. If the second run does not match the first, F7 is not closed, and it stays open with the new evidence attached.
+**Expected: 9 of 9 both times.** The first run alone is not the result — v1-a already achieved that. If the second run does not match, F7 is not closed and stays open with the new evidence attached.
 
 - [ ] **Step 3: Confirm cleanup actually ran**
 
@@ -443,12 +513,51 @@ git commit -m "docs: v1-b acceptance run — the suite runs twice"
 
 ---
 
+## Task 8a: An automated guard for repeatability
+
+Task 8 is a transcript in a document. Every other claim of this weight in this repo earned a test — the appsettings-not-copied defect, F1's live-fixture proof — because a manual result regresses silently and nobody notices until the next acceptance run.
+
+**Files:**
+- Modify: `tests/InTest.Golden.Tests/GeneratedSuiteExecutionTests.cs`
+
+- [ ] **Step 1: Make the stub stateful**
+
+The stub currently answers from a `switch` over the path. Give it a small in-memory store so it behaves like the API whose behaviour F7 exposed: a duplicate create returns **409**, and a delete followed by a fetch returns **404**.
+
+- [ ] **Step 2: Write the failing test**
+
+```csharp
+[TestMethod]
+public async Task TheGeneratedSuitePassesTwiceAgainstTheSameStore()
+{
+    // F7 in one test. Against a stateful service the first run passed and the second did not,
+    // because literal fixture values collide with unique constraints and deleted rows do not
+    // come back. This is the guard that keeps that closed.
+    await ScaffoldGenerateAndBuildWithSeedingFixture();
+
+    (await RunAsync("dotnet", $"test \"{_root}\" --no-build --nologo")).Output.ShouldContain("Passed!");
+    (await RunAsync("dotnet", $"test \"{_root}\" --no-build --nologo")).Output.ShouldContain("Passed!");
+}
+```
+
+- [ ] **Step 3: Prove it can fail**
+
+Point the fixture value at a literal instead of `{{fixture:…}}` and confirm the **second** run fails while the first passes — the exact shape of F7. Restore, confirm both pass. Report both results; a guard nobody has watched fail is not a guard.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git commit -m "test: guard that a generated suite passes twice against one store"
+```
+
+---
+
 ## Self-review
 
-**Spec coverage.** §13's `IAssemblyFixture` is covered end to end: `DependsOn` as `Type[]` with topological ordering (Task 2), `AppliesTo` profile filtering (Task 3), `ctx.Publish` feeding `{{fixture:…}}` (Tasks 1 and 4), registration-based cleanup drained in reverse (Tasks 1 and 3), and failures naming the fixture rather than failing every test unhelpfully (Task 3). §10's `{{fixture:…}}` timing row and its available-keys message are Task 4.
+**Spec coverage.** §13's `IAssemblyFixture` is covered end to end: `DependsOn` as `Type[]` with topological ordering (Task 2), `AppliesTo` filtering with a logged skip (Task 3), `ctx.Publish` feeding `{{fixture:…}}` (Tasks 1 and 4), registration-based cleanup drained in reverse (Tasks 1 and 3) **and actually invoked** (Task 5), and failures naming the fixture rather than failing every test unhelpfully (Task 3). §10's `{{fixture:…}}` timing row and available-keys message are Task 4.
+
+**Corrections from review, recorded so they are not re-introduced.** An earlier draft had `DrainAsync` with no caller anywhere — `AssemblyCleanup` appears in zero tracked `.cs` files, and `TestHost` cannot carry the attribute itself — so Task 5 now owns wiring it and Task 7 owes existing adopters an upgrade note, since `TestStartup.cs` is never regenerated. That draft also warned Task 6 would ripple through many tests; the opposite is true, `InitializeAsync` has no coverage at all, so Task 6 now builds on `GeneratedSuiteExecutionTests` rather than an imagined in-process harness. Decision 5 exists because `FixtureValidation.CheckLeaf` catches exactly one exception type, and getting Task 4's type wrong would silently convert per-operation blocking into a dead run.
 
 **Deliberately deferred, with reasons.** `IControllerFixture` — §13 calls it optional and nothing has needed it. Auth wiring, F8's remaining half — same file, different concern, and mixing it would blur Task 8's criterion. Retry and partial re-seeding — no measured need.
 
-**The risk worth stating.** Task 6 reorders code every existing runtime test touches, and this plan cannot list which tests break without running them. Step 1 exists to discover that rather than pretend it is known. If the count is large, that is information about coupling in `TestHost`, not a reason to push through — report it before proceeding.
-
-**What this plan does not fix.** A suite still cannot run twice *concurrently* against one environment: two runs seeding simultaneously collide on the same unique constraints, and §11 already states cross-process coordination is unsolvable at this layer. Task 8 proves sequential repeatability only, and the acceptance record must say so plainly rather than letting "runs twice" be read as "runs in parallel".
+**What this plan does not fix.** A suite still cannot run twice *concurrently* against one environment: two runs seeding simultaneously collide on the same unique constraints, and §11 already states cross-process coordination is unsolvable at this layer. Tasks 8 and 8a prove sequential repeatability only, and the acceptance record must say so plainly rather than letting "runs twice" be read as "runs in parallel".
