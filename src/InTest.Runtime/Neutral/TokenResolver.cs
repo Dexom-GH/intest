@@ -12,18 +12,41 @@ namespace InTest.Runtime;
 /// this resolver. Only <c>{{utcNow}}</c> must vary per call: it invokes the clock (real time in
 /// production, injectable for tests) every time <see cref="Resolve"/> runs, never once and reused —
 /// see <c>FixtureStore.ResolvedBody</c>, which relies on that to differ between requests.
-/// <c>{{fixture:...}}</c> is out of scope for v1-a (decision 4) and always fails, naming the token
-/// rather than being left as literal text.
+/// <c>{{fixture:...}}</c> resolves from an immutable snapshot of published values handed in at
+/// construction; a miss throws <see cref="FixtureResolutionException"/>, deliberately not the
+/// lifecycle exception type — see that type's doc for why. Until Task 6 reorders construction to
+/// run after fixture seeding, <c>TestHost</c> passes no published values at all, so today every
+/// <c>{{fixture:...}}</c> token fails with an empty available-keys list.
 /// </summary>
-public sealed class TokenResolver(IConfiguration configuration, string runId, Func<DateTimeOffset>? utcNowProvider = null)
+public sealed class TokenResolver(
+    IConfiguration configuration,
+    string runId,
+    Func<DateTimeOffset>? utcNowProvider = null,
+    IReadOnlyDictionary<string, string>? publishedFixtureValues = null)
 {
-    private const string SupportedTokens = "{{config:...}}, {{secret:...}}, {{runId}}, {{utcNow}}";
+    private const string SupportedTokens = "{{config:...}}, {{secret:...}}, {{runId}}, {{utcNow}}, {{fixture:...}}";
 
     private static readonly Regex TokenPattern = new(@"\{\{(?<token>[^{}]+)\}\}", RegexOptions.Compiled);
 
     private readonly IConfiguration _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
     private readonly string _runId = runId ?? throw new ArgumentNullException(nameof(runId));
     private readonly Func<DateTimeOffset> _utcNow = utcNowProvider ?? (() => DateTimeOffset.UtcNow);
+
+    /// <summary>
+    /// Copied rather than referenced, for two reasons. The one that matters for correctness:
+    /// <c>new(source, StringComparer.Ordinal)</c> normalises the comparer regardless of what the
+    /// caller built the dictionary with, so a caller that handed in an
+    /// <see cref="StringComparer.OrdinalIgnoreCase"/> dictionary cannot make
+    /// <c>{{fixture:SeededCustomer.Id}}</c> match a key actually published as
+    /// <c>seededCustomer.id</c> — key lookup here is always case-sensitive, not whatever the
+    /// caller's dictionary happened to be built with. Secondarily: <c>publishedFixtureValues</c>
+    /// stays in scope for the life of this instance, same as <c>configuration</c> and
+    /// <c>runId</c> above, so without a copy a caller still holding the original mutable
+    /// dictionary could change what this resolver sees as published after construction.
+    /// </summary>
+    private readonly Dictionary<string, string> _publishedFixtures = publishedFixtureValues is null
+        ? new Dictionary<string, string>(StringComparer.Ordinal)
+        : new Dictionary<string, string>(publishedFixtureValues, StringComparer.Ordinal);
 
     /// <summary>
     /// Resolves every <c>{{...}}</c> token in <paramref name="value"/>. <paramref name="fileName"/>
@@ -60,8 +83,7 @@ public sealed class TokenResolver(IConfiguration configuration, string runId, Fu
 
         if (token.StartsWith("fixture:", StringComparison.Ordinal))
         {
-            throw new FixtureResolutionException(
-            $"'{{{{{token}}}}}' in '{fileName}' is not supported until v1-b.");
+            return ResolveFixture(token["fixture:".Length..], fileName);
         }
 
         throw new FixtureResolutionException(
@@ -77,5 +99,28 @@ public sealed class TokenResolver(IConfiguration configuration, string runId, Fu
             $"Configuration key '{key}' required by '{fileName}' is not set.");
         }
         return value;
+    }
+
+    /// <summary>
+    /// Looks up <paramref name="key"/> in the published-fixture snapshot. On failure the message
+    /// names both halves, per §10: the key that was requested, so a typo is obvious, and every
+    /// key actually published, ordinal-sorted so the list reads identically from one run to the
+    /// next regardless of which fixture happened to publish first.
+    /// </summary>
+    private string ResolveFixture(string key, string fileName)
+    {
+        if (_publishedFixtures.TryGetValue(key, out var value))
+        {
+            return value;
+        }
+
+        var available = _publishedFixtures.Count == 0
+            ? "(none)"
+            : string.Join(", ", _publishedFixtures.Keys.Order(StringComparer.Ordinal));
+
+        throw new FixtureResolutionException(
+            $"Fixture key '{key}' required by '{fileName}' is not published. Published keys: {available}. " +
+            "Check the key name for a typo, or confirm the fixture that publishes it is registered and " +
+            "its AppliesTo includes the active profile.");
     }
 }
