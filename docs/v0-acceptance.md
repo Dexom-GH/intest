@@ -285,7 +285,7 @@ Three shapes cost **nothing**, and all three are decisions working as designed:
 
 ## Defects found
 
-### F6 — a nullable object property composes a scalar sentinel, losing its shape · **open**
+### F6 — a nullable object property composes a scalar sentinel, losing its shape · **fixed**
 
 `CreateProductRequest.dimensions` is a nullable reference to another schema. The built-in
 producer emits OpenAPI 3.1's idiom for that:
@@ -319,6 +319,37 @@ sub-object hits this.
 Not blocking — the sentinel still fails loudly and the property here was optional — but it
 under-reports the workload, and a required nullable sub-object would leave an adopter guessing.
 
+**Fixed in `8d0367a`, hardened in `6952aeb`.** `ComposeFromSchema` now resolves a
+`oneOf`/`anyOf`/`allOf` union by discarding branches that declare the JSON `null` type and
+recursing into the single survivor. Zero or more than one remaining branch is genuine ambiguity
+and still falls through to a sentinel rather than guessing — so the OpenAPI 3.0 composition
+idiom `allOf: [{$ref: Base}, {…}]` is unchanged, not silently half-composed.
+
+The check sits *after* the object and array checks, so a schema carrying both `type: object` and
+an `allOf` still composes its declared properties. **That ordering is the fragile part of the
+fix**, and review caught it stated only in a commit message: moving the check up beside the
+`$ref` navigation reads as a tidy-up, leaves every test green, and silently drops those declared
+properties. It is now pinned by a comment at the call site and by a regression test —
+**negative control performed**: hoisting the check above the object check makes that test fail,
+restoring it returns the suite to green.
+
+This **changes the measurement above**: `dimensions` becomes three sentinels instead of one, so
+Catalog goes from 23 to **25** and the corpus total from 44 to **46**. Orders (14) and Inventory
+(7) are unchanged — verified by re-running `init` → `generate` → `fixtures repair` against all
+three specs. The workload table and totals earlier in this section record the run **as it was
+measured**, before the fix; they are left as-run rather than retconned.
+
+Existing hand-filled fixtures are undisturbed: against the filled Catalog set the new composer
+leaves `generate` at exit 0 and `repair` reporting `Nothing to repair`.
+
+**One residual limitation, accepted deliberately.** OpenAPI 3.0's *composition* idiom —
+`allOf: [{$ref: Base}, {type: object, properties: {…}}]` — has two non-null branches, so it is
+ambiguous under the rule above and still composes to one opaque sentinel. Resolving it properly
+means genuinely merging the branches' properties, not picking one, which is a different
+operation from selecting a nullable union's single real branch. None of the three sample specs
+uses it, so it is recorded here rather than guessed at; it is the natural follow-up if 3.0-style
+composition shows up in a real document.
+
 ### F7 — the generated suite is not idempotent against a persistent store · **open, by construction**
 
 Running the Catalog suite a second time against the same database, changing nothing:
@@ -351,9 +382,10 @@ matters is how much of it v1-a can already solve, which was measured rather than
 The designed answer to the remaining two is `{{fixture:…}}` with `IAssemblyFixture`, deferred to
 **v1-b**, which now has a measured justification rather than a predicted one. Until then the
 honest guidance is: a generated suite expects a reset database per run, and adopters should use
-`{{runId}}` wherever the uniqueness constraint is free-form.
+`{{runId}}` wherever the uniqueness constraint is free-form. That guidance is now written down,
+with this second-run result as its evidence, under getting-started Phase 5.
 
-### F8 — `ITestTokenProvider` has no consumers · **open**
+### F8 — `ITestTokenProvider` has no consumers · **documented; code fix is v1-c**
 
 The scaffold's `TestStartup.cs` says "Add configuration providers and an ITestTokenProvider
 implementation here", and getting-started Phase 3 tells adopters to implement it. Nothing calls
@@ -392,15 +424,21 @@ Auth *tests* are correctly v1-c. **Reaching a secured endpoint at all is not an 
 it is the precondition for every other test on a secured API, and v1-a generates suites for
 such APIs today.
 
+Documented rather than left as a trap: getting-started Phase 3 now opens with the fact that
+nothing calls `GetTokenAsync`, and shows the `DelegatingHandler` that does work. The interface
+still has no consumers — closing that is v1-c's job.
+
 ## v1-a actions
 
 | # | Action | Owner phase | Status |
 |---|---|---|---|
-| 1 | F6 — navigate `oneOf`/`anyOf` in `ComposeFromSchema`, choosing the single non-null branch | v1-b | Open |
-| 2 | F8 — either consume `ITestTokenProvider` from the generated template, or stop advertising it in the scaffold and getting-started until v1-c does | v1-c, or sooner | Open |
-| 3 | F7 — `{{fixture:…}}` / `IAssemblyFixture`, so create-then-delete and constrained-unique values stop depending on a reset database | v1-b | Open, now measured |
-| 4 | Document that a generated suite assumes a reset database per run, and that `{{runId}}` is the v1-a tool for free-form uniqueness | v1-b docs | Open |
-| 5 | `intest survey` should predict from **total request-body leaf properties + path parameters**, not operation count and not `required` count | v1-f | Open, input recorded above |
+| 1 | F6 — navigate `oneOf`/`anyOf`/`allOf` in `ComposeFromSchema`, choosing the single non-null branch | v1-a | **Closed** — `8d0367a` + `6952aeb`; suite 226 → 234, including a negative-controlled guard on the check's ordering |
+| 2 | F8 — document that `ITestTokenProvider` is unwired and that a secured API needs a hand-written `DelegatingHandler` today | v1-a docs | **Closed** — getting-started Phase 3 |
+| 3 | F8 — actually consume `ITestTokenProvider` from the generated template, so the documented extension point stops being a dead end | v1-c | Open |
+| 4 | F7 — document that a generated suite assumes a reset environment, and that `{{runId}}` is the v1-a tool for free-form uniqueness | v1-a docs | **Closed** — getting-started Phase 5 |
+| 5 | F7 — `{{fixture:…}}` / `IAssemblyFixture`, so create-then-delete and constrained-unique values stop depending on a reset database | v1-b | Open, now measured |
+| 6 | `intest survey` should predict from **total request-body leaf properties + path parameters**, not operation count and not `required` count | v1-f | Open, input recorded above |
+| 7 | Merge `allOf` composition (`[{$ref: Base}, {…}]`) rather than treating it as an ambiguous union | when a real spec needs it | Open, recorded under F6 |
 
 ## Carried forward — not covered by either run
 

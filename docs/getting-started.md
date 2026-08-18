@@ -141,8 +141,42 @@ locally, whatever your organisation uses in CI — and reference them from fixtu
 
 ### Auth
 
-Implement `ITestTokenProvider` if your API needs a token. InTest ships only a static-token
-provider — no cloud SDK, no identity library.
+> **`ITestTokenProvider` is designed, not yet wired up.** The interface ships and
+> `StaticTokenProvider` implements it, but **nothing calls `GetTokenAsync`** — not the runtime,
+> not the generated tests. Registering a provider today has no effect on any request. Until the
+> generated template consumes it (v1-c, with the auth tests), a secured API needs a
+> `DelegatingHandler` you write yourself. This was found by running a generated suite against a
+> secured sample API: without the handler below, every operation returns 401.
+
+Append the handler to the same named client `TestHost` configures — registrations in
+`TestStartup.Register` compose with InTest's, so `AddHttpClient` with the same name adds to it
+rather than replacing it:
+
+```csharp
+private static void Register(IServiceCollection services, IConfiguration configuration)
+{
+    services.AddTransient<BearerTokenHandler>();
+    services.AddHttpClient(InTestClients.Api).AddHttpMessageHandler<BearerTokenHandler>();
+}
+
+public sealed class BearerTokenHandler(IConfiguration configuration) : DelegatingHandler
+{
+    protected override async Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request, CancellationToken ct)
+    {
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", await GetTokenAsync(ct));
+        return await base.SendAsync(request, ct);
+    }
+
+    /// Fetch once and cache — this runs on every request, not once per run.
+    private Task<string> GetTokenAsync(CancellationToken ct) => /* your identity provider */;
+}
+```
+
+Readiness probes the health endpoint before any of this, so keep that endpoint anonymous or
+readiness will fail before the first test runs.
+
+The design this is standing in for, for when v1-c lands:
 
 ```csharp
 public sealed class OrdersTokenProvider : ITestTokenProvider
@@ -154,8 +188,9 @@ public sealed class OrdersTokenProvider : ITestTokenProvider
 }
 ```
 
-`Identities` decides which auth tests run. Return one and the "wrong scope → 403" tests skip
+`Identities` will decide which auth tests run. Return one and the "wrong scope → 403" tests skip
 with a stated reason. Return more and they run. No-token → 401 tests always run regardless.
+InTest ships only a static-token provider — no cloud SDK, no identity library.
 
 ---
 
@@ -220,6 +255,27 @@ Replace sentinels with real values, or with tokens:
 | `{{config:Orders:ApiKey}}` | Once per run, from configuration — keeps credentials out of committed files |
 | `{{runId}}` | Once per run |
 | `{{utcNow}}` | Per request |
+
+### A generated suite expects a reset environment
+
+A fixture holds one literal value, so an operation that **creates** something creates the same
+thing every run, and an operation that **deletes** something can only delete it once. Run the
+sample Catalog suite twice against the same database and the second run drops from 9 of 9 to
+6 of 9: two 409s on a duplicate name and a duplicate unique key, and a 404 deleting a row the
+first run removed.
+
+Plan for a reset target — a database restored per run, an ephemeral environment, a container
+started fresh. Where that is not possible, `{{runId}}` is the tool available today:
+
+```jsonc
+"body": { "name": "Accessories-{{runId}}" }   // unique per run, so the 201 stays a 201
+```
+
+That covers uniqueness constraints on **free-form** fields. It cannot help where the value must
+match a fixed format — a SKU constrained to `^[A-Z]{3}-[0-9]{4}$` has no room for a run id — and
+it cannot help an operation that deletes seeded data, because nothing creates that row first.
+Both are what `{{fixture:…}}` and `IAssemblyFixture` are for, below; until v1-b ships they are a
+reset environment's job.
 
 > **`{{fixture:…}}` is designed, not yet built (v1-b).** §10 defines it as resolving a value an
 > `IAssemblyFixture` published — for referential integrity, e.g. a `customerId` that exists in
