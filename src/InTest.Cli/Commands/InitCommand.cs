@@ -111,7 +111,7 @@ public static class InitCommand
 
             /// <summary>Team-owned registrations. Add configuration providers here. A secured
             /// API needs a DelegatingHandler appended to InTestClients.Api — ITestTokenProvider
-            /// isn't wired up yet. See "Auth" in Phase 3 of getting-started.md for a worked
+            /// is not wired up yet. See "Auth" in Phase 3 of getting-started.md for a worked
             /// example.</summary>
             private static void Register(IServiceCollection services, IConfiguration configuration)
             {

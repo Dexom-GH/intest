@@ -99,8 +99,11 @@ public class InitCommandTests
         // adopter to implement it teaches a dead extension point. The comment must instead
         // point at the DelegatingHandler-on-InTestClients.Api mechanism that getting-started's
         // Phase 3 "Auth" section documents as working today.
-        File.ReadAllText(Path.Combine(_root, "TestStartup.cs"))
-            .ShouldContain("DelegatingHandler appended to InTestClients.Api",
-                customMessage: "a scaffold must not teach a dead API; it must point at the auth mechanism that works");
+        var scaffold = File.ReadAllText(Path.Combine(_root, "TestStartup.cs"));
+
+        scaffold.ShouldContain("DelegatingHandler",
+            customMessage: "a scaffold must not teach a dead API; it must point at the auth mechanism that works");
+        scaffold.ShouldContain("InTestClients.Api",
+            customMessage: "a scaffold must not teach a dead API; it must point at the auth mechanism that works");
     }
 }
