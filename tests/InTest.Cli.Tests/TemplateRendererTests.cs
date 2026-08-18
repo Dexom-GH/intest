@@ -1,6 +1,5 @@
 using InTest.Cli.Planning;
 using InTest.Cli.Rendering;
-using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Shouldly;
 
 namespace InTest.Cli.Tests;

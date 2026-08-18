@@ -1,4 +1,3 @@
-using System.ComponentModel.DataAnnotations;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -30,9 +29,14 @@ public class OrdersController(OrdersDbContext database) : ControllerBase
     {
         var query = database.Orders.Include(o => o.Lines).Include(o => o.Customer).AsQueryable();
 
-        if (status is not null) query = query.Where(o => o.Status == status);
+        if (status is not null)
+        {
+            query = query.Where(o => o.Status == status);
+        }
         if (!string.IsNullOrWhiteSpace(customerEmail))
+        {
             query = query.Where(o => o.Customer!.Email == customerEmail);
+        }
 
         var orders = await query.OrderBy(o => o.Reference).ToListAsync(cancellationToken);
         return Ok(orders.Select(OrderResponse.From).ToList());
@@ -63,10 +67,14 @@ public class OrdersController(OrdersDbContext database) : ControllerBase
         [FromBody] CreateOrderRequest request, CancellationToken cancellationToken)
     {
         if (!await database.Customers.AnyAsync(c => c.Id == request.CustomerId, cancellationToken))
+        {
             return BadRequest(new ProblemDetails { Title = $"Customer '{request.CustomerId}' does not exist." });
+        }
 
         if (await database.Orders.AnyAsync(o => o.Reference == request.Reference, cancellationToken))
+        {
             return Conflict(new ProblemDetails { Title = $"Order '{request.Reference}' already exists." });
+        }
 
         var order = new Order
         {
@@ -106,85 +114,18 @@ public class OrdersController(OrdersDbContext database) : ControllerBase
     public async Task<IActionResult> Cancel(Guid id, CancellationToken cancellationToken)
     {
         var order = await database.Orders.FirstOrDefaultAsync(o => o.Id == id, cancellationToken);
-        if (order is null) return NotFound();
+        if (order is null)
+        {
+            return NotFound();
+        }
 
         if (order.Status is OrderStatus.Shipped or OrderStatus.Delivered)
+        {
             return Conflict(new ProblemDetails { Title = $"Order in status '{order.Status}' cannot be cancelled." });
+        }
 
         order.Status = OrderStatus.Cancelled;
         await database.SaveChangesAsync(cancellationToken);
         return NoContent();
     }
-}
-
-public record OrderResponse
-{
-    public required Guid Id { get; init; }
-    public required string Reference { get; init; }
-    public required Guid CustomerId { get; init; }
-    public required OrderStatus Status { get; init; }
-    public required decimal TotalAmount { get; init; }
-    public required string CurrencyCode { get; init; }
-    public required DateTimeOffset PlacedAt { get; init; }
-    public DateTimeOffset? ShippedAt { get; init; }
-    public DateOnly? RequestedDeliveryDate { get; init; }
-    public string? Notes { get; init; }
-    public required IReadOnlyList<OrderLineResponse> Lines { get; init; }
-
-    public static OrderResponse From(Order order) => new()
-    {
-        Id = order.Id,
-        Reference = order.Reference,
-        CustomerId = order.CustomerId,
-        Status = order.Status,
-        TotalAmount = order.TotalAmount,
-        CurrencyCode = order.CurrencyCode,
-        PlacedAt = order.PlacedAt,
-        ShippedAt = order.ShippedAt,
-        RequestedDeliveryDate = order.RequestedDeliveryDate,
-        Notes = order.Notes,
-        Lines = order.Lines.Select(OrderLineResponse.From).ToList()
-    };
-}
-
-public record OrderLineResponse
-{
-    public required int Id { get; init; }
-    public required string Sku { get; init; }
-    public required int Quantity { get; init; }
-    public required decimal UnitPrice { get; init; }
-
-    public static OrderLineResponse From(OrderLine line)
-        => new() { Id = line.Id, Sku = line.Sku, Quantity = line.Quantity, UnitPrice = line.UnitPrice };
-}
-
-public record CreateOrderRequest
-{
-    [Required, MaxLength(20)]
-    public required string Reference { get; init; }
-
-    public required Guid CustomerId { get; init; }
-
-    [Required, MinLength(3), MaxLength(3)]
-    public string CurrencyCode { get; init; } = "GBP";
-
-    public DateOnly? RequestedDeliveryDate { get; init; }
-
-    [MaxLength(1000)]
-    public string? Notes { get; init; }
-
-    [MinLength(1)]
-    public required IReadOnlyList<CreateOrderLineRequest> Lines { get; init; }
-}
-
-public record CreateOrderLineRequest
-{
-    [Required, MaxLength(32)]
-    public required string Sku { get; init; }
-
-    [Range(1, 1000)]
-    public required int Quantity { get; init; }
-
-    [Range(0.01, 1_000_000)]
-    public required decimal UnitPrice { get; init; }
 }

@@ -1,4 +1,3 @@
-using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Shouldly;
 
 namespace InTest.Architecture.Tests;
@@ -16,7 +15,10 @@ public class NeutralityTests
     private static string NeutralDirectory()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "InTest.sln"))) dir = dir.Parent;
+        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "InTest.sln")))
+        {
+            dir = dir.Parent;
+        }
         dir.ShouldNotBeNull("Could not locate the repository root (InTest.sln).");
         return Path.Combine(dir!.FullName, "src", "InTest.Runtime", "Neutral");
     }
@@ -30,7 +32,9 @@ public class NeutralityTests
         {
             var text = File.ReadAllText(file);
             if (text.Contains(ForbiddenNamespace, StringComparison.Ordinal))
+            {
                 offenders.Add(Path.GetFileName(file));
+            }
         }
 
         offenders.ShouldBeEmpty(

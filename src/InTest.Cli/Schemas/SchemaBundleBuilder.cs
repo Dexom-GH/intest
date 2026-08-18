@@ -50,13 +50,22 @@ public static class SchemaBundleBuilder
             {
                 foreach (var (code, response) in operation.Responses ?? [])
                 {
-                    if (!int.TryParse(code, out var status)) continue;
-                    if (!wanted.TryGetValue((path, method.Method.ToUpperInvariant(), status), out var key)) continue;
+                    if (!int.TryParse(code, out var status))
+                    {
+                        continue;
+                    }
+                    if (!wanted.TryGetValue((path, method.Method.ToUpperInvariant(), status), out var key))
+                    {
+                        continue;
+                    }
                     // An 'out var' declared inside a null-conditional access is not definitely
                     // assigned afterwards; test the receiver separately, as TestPlanBuilder does.
                     if (response.Content is null
                         || !response.Content.TryGetValue(JsonMediaType, out var media)
-                        || media.Schema is null) continue;
+                        || media.Schema is null)
+                    {
+                        continue;
+                    }
 
                     yield return (key, media.Schema);
                 }

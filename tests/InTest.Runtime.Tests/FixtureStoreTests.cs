@@ -1,6 +1,4 @@
-using InTest.Runtime;
 using Microsoft.Extensions.Configuration;
-using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Shouldly;
 
 namespace InTest.Runtime.Tests;
@@ -28,7 +26,10 @@ public class FixtureStoreTests
     [TestCleanup]
     public void RemoveRoot()
     {
-        if (Directory.Exists(_root)) Directory.Delete(_root, recursive: true);
+        if (Directory.Exists(_root))
+        {
+            Directory.Delete(_root, recursive: true);
+        }
     }
 
     private void WriteBase(string operationKey, string json)

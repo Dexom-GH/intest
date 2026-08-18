@@ -29,7 +29,10 @@ public class InventoryDbContext(DbContextOptions<InventoryDbContext> options) : 
     {
         await context.Database.EnsureCreatedAsync(cancellationToken);
 
-        if (await context.Warehouses.AnyAsync(cancellationToken)) return;
+        if (await context.Warehouses.AnyAsync(cancellationToken))
+        {
+            return;
+        }
 
         var london = new Warehouse { Id = 1, Name = "London", CountryCode = "GB", IsOperational = true };
         var leeds = new Warehouse { Id = 2, Name = "Leeds", CountryCode = "GB", IsOperational = false };

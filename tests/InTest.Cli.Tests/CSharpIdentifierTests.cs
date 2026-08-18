@@ -1,5 +1,4 @@
 using InTest.Cli.Naming;
-using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Shouldly;
 
 namespace InTest.Cli.Tests;

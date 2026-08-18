@@ -27,8 +27,14 @@ public class StockController(InventoryDbContext database) : ControllerBase
         CancellationToken cancellationToken = default)
     {
         var query = database.StockItems.AsQueryable();
-        if (warehouseId is not null) query = query.Where(s => s.WarehouseId == warehouseId);
-        if (condition is not null) query = query.Where(s => s.Condition == condition);
+        if (warehouseId is not null)
+        {
+            query = query.Where(s => s.WarehouseId == warehouseId);
+        }
+        if (condition is not null)
+        {
+            query = query.Where(s => s.Condition == condition);
+        }
 
         var items = await query.OrderBy(s => s.Sku).ToListAsync(cancellationToken);
         return Ok(items.Select(StockItemResponse.From).ToList());
@@ -58,11 +64,16 @@ public class StockController(InventoryDbContext database) : ControllerBase
         var item = await database.StockItems
             .FirstOrDefaultAsync(s => s.Sku == sku && s.WarehouseId == request.WarehouseId, cancellationToken);
 
-        if (item is null) return NotFound();
+        if (item is null)
+        {
+            return NotFound();
+        }
 
         var updated = item.QuantityOnHand + request.Delta;
         if (updated < 0)
+        {
             return BadRequest(new ProblemDetails { Title = "Adjustment would take quantity below zero." });
+        }
 
         item.QuantityOnHand = updated;
         item.LastCountedAt = DateTimeOffset.UtcNow;
@@ -87,89 +98,13 @@ public class StockController(InventoryDbContext database) : ControllerBase
     public async Task<IActionResult> Delete(int id, CancellationToken cancellationToken)
     {
         var item = await database.StockItems.FirstOrDefaultAsync(s => s.Id == id, cancellationToken);
-        if (item is null) return NotFound();
+        if (item is null)
+        {
+            return NotFound();
+        }
 
         database.StockItems.Remove(item);
         await database.SaveChangesAsync(cancellationToken);
         return NoContent();
     }
-}
-
-/// <summary>Read-only. No DELETE, no POST — warehouses are managed elsewhere.</summary>
-[ApiController]
-[Route("api/warehouses")]
-[Produces("application/json")]
-public class WarehousesController(InventoryDbContext database) : ControllerBase
-{
-    /// <summary>Lists warehouses.</summary>
-    [HttpGet]
-    [ProducesResponseType<IReadOnlyList<WarehouseResponse>>(StatusCodes.Status200OK)]
-    public async Task<ActionResult<IReadOnlyList<WarehouseResponse>>> GetAll(CancellationToken cancellationToken)
-    {
-        var warehouses = await database.Warehouses.OrderBy(w => w.Name).ToListAsync(cancellationToken);
-        return Ok(warehouses.Select(WarehouseResponse.From).ToList());
-    }
-
-    /// <summary>Gets one warehouse.</summary>
-    [HttpGet("{id:int}")]
-    [ProducesResponseType<WarehouseResponse>(StatusCodes.Status200OK)]
-    [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<WarehouseResponse>> GetById(int id, CancellationToken cancellationToken)
-    {
-        var warehouse = await database.Warehouses.FirstOrDefaultAsync(w => w.Id == id, cancellationToken);
-        return warehouse is null ? NotFound() : Ok(WarehouseResponse.From(warehouse));
-    }
-}
-
-public record StockItemResponse
-{
-    public required int Id { get; init; }
-    public required string Sku { get; init; }
-    public required int WarehouseId { get; init; }
-    public required int QuantityOnHand { get; init; }
-    public required int QuantityReserved { get; init; }
-    public required StockCondition Condition { get; init; }
-    public required DateTimeOffset LastCountedAt { get; init; }
-    public decimal? UnitCost { get; init; }
-    public string? Notes { get; init; }
-
-    public static StockItemResponse From(StockItem item) => new()
-    {
-        Id = item.Id,
-        Sku = item.Sku,
-        WarehouseId = item.WarehouseId,
-        QuantityOnHand = item.QuantityOnHand,
-        QuantityReserved = item.QuantityReserved,
-        Condition = item.Condition,
-        LastCountedAt = item.LastCountedAt,
-        UnitCost = item.UnitCost,
-        Notes = item.Notes
-    };
-}
-
-public record WarehouseResponse
-{
-    public required int Id { get; init; }
-    public required string Name { get; init; }
-    public required string CountryCode { get; init; }
-    public required bool IsOperational { get; init; }
-
-    public static WarehouseResponse From(Warehouse warehouse) => new()
-    {
-        Id = warehouse.Id,
-        Name = warehouse.Name,
-        CountryCode = warehouse.CountryCode,
-        IsOperational = warehouse.IsOperational
-    };
-}
-
-public record StockAdjustmentRequest
-{
-    public required int WarehouseId { get; init; }
-
-    [Range(-10_000, 10_000)]
-    public required int Delta { get; init; }
-
-    [MaxLength(500)]
-    public string? Reason { get; init; }
 }

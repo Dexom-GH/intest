@@ -1,4 +1,3 @@
-using System.Linq;
 using System.Text;
 
 namespace InTest.Runtime;
@@ -13,13 +12,20 @@ public static class InTestUrl
     public static Uri NormalizeBase(string baseUrl)
     {
         if (string.IsNullOrWhiteSpace(baseUrl))
+        {
             throw new ArgumentException("Base URL must not be null or whitespace.", nameof(baseUrl));
+        }
 
         var trimmed = baseUrl.Trim();
-        if (!trimmed.EndsWith('/')) trimmed += "/";
+        if (!trimmed.EndsWith('/'))
+        {
+            trimmed += "/";
+        }
 
         if (!Uri.TryCreate(trimmed, UriKind.Absolute, out var uri))
+        {
             throw new ArgumentException($"Base URL '{baseUrl}' is not an absolute URI.", nameof(baseUrl));
+        }
 
         return uri;
     }
@@ -45,23 +51,29 @@ public static class InTestUrl
 
             var close = pathTemplate.IndexOf('}', open);
             if (close < 0)
+            {
                 throw new ArgumentException($"Unterminated placeholder in path template '{pathTemplate}'.", nameof(pathTemplate));
+            }
 
             result.Append(pathTemplate, i, open - i);
 
             if (valueIndex >= values.Length)
+            {
                 throw new ArgumentException(
-                    $"Path template '{pathTemplate}' has more placeholders than the {values.Length} value(s) supplied.",
-                    nameof(values));
+                $"Path template '{pathTemplate}' has more placeholders than the {values.Length} value(s) supplied.",
+                nameof(values));
+            }
 
             result.Append(Uri.EscapeDataString(values[valueIndex++] ?? string.Empty));
             i = close + 1;
         }
 
         if (valueIndex != values.Length)
+        {
             throw new ArgumentException(
-                $"Path template '{pathTemplate}' has {valueIndex} placeholder(s) but {values.Length} value(s) were supplied.",
-                nameof(values));
+            $"Path template '{pathTemplate}' has {valueIndex} placeholder(s) but {values.Length} value(s) were supplied.",
+            nameof(values));
+        }
 
         var path = result.ToString();
         return path.StartsWith('/') ? path[1..] : path;
@@ -82,19 +94,30 @@ public static class InTestUrl
     {
         ArgumentNullException.ThrowIfNull(baseAddress);
 
-        if (string.IsNullOrWhiteSpace(operationPathPrefix)) return;
+        if (string.IsNullOrWhiteSpace(operationPathPrefix))
+        {
+            return;
+        }
 
         var baseSegments = Segments(baseAddress.AbsolutePath);
-        if (baseSegments.Length == 0) return;
+        if (baseSegments.Length == 0)
+        {
+            return;
+        }
 
         var pathSegments = Segments(operationPathPrefix);
-        if (pathSegments.Length == 0) return;
+        if (pathSegments.Length == 0)
+        {
+            return;
+        }
 
         var overlap = Math.Min(baseSegments.Length, pathSegments.Length);
         for (var i = 0; i < overlap; i++)
         {
             if (!string.Equals(baseSegments[i], pathSegments[i], StringComparison.OrdinalIgnoreCase))
+            {
                 return;
+            }
         }
 
         var duplicated = string.Join("/", baseSegments.Take(overlap));
@@ -116,7 +139,10 @@ public static class InTestUrl
     {
         ArgumentNullException.ThrowIfNull(parameters);
 
-        if (parameters.Count == 0) return string.Empty;
+        if (parameters.Count == 0)
+        {
+            return string.Empty;
+        }
 
         var pairs = parameters
             .OrderBy(kvp => kvp.Key, StringComparer.Ordinal)

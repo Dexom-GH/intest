@@ -3,13 +3,6 @@ using System.Text.Json.Nodes;
 namespace InTest.Runtime;
 
 /// <summary>
-/// Raised by <see cref="FixtureValidation.Report.ThrowIfBlocked"/> for an operation whose fixture
-/// has at least one unresolved sentinel or token. Names the fixture file and the property path so
-/// a reader can go straight to the fix without re-deriving which file is at fault.
-/// </summary>
-public sealed class FixtureUnresolvedException(string message) : Exception(message);
-
-/// <summary>
 /// Scans every fixture <see cref="FixtureStore"/> has loaded for <c>TODO:</c> sentinels
 /// (decision 3) and tokens <see cref="TokenResolver"/> cannot resolve, and aggregates every
 /// problem across every fixture into one report — decision 2. Only operations with an actual
@@ -49,9 +42,14 @@ public static class FixtureValidation
                 CheckLeaf(value, name, fileName, resolver, problems);
 
             if (fixture.Body is not null)
+            {
                 WalkBody(fixture.Body, path: null, fileName, resolver, problems);
+            }
 
-            if (problems.Count > 0) problemsByOperation[key] = problems;
+            if (problems.Count > 0)
+            {
+                problemsByOperation[key] = problems;
+            }
         }
 
         return new Report(problemsByOperation);
@@ -64,7 +62,10 @@ public static class FixtureValidation
             case JsonObject obj:
                 foreach (var (name, child) in obj)
                 {
-                    if (child is null) continue;
+                    if (child is null)
+                    {
+                        continue;
+                    }
                     WalkBody(child, path is null ? name : $"{path}.{name}", fileName, resolver, problems);
                 }
                 break;
@@ -73,7 +74,10 @@ public static class FixtureValidation
                 for (var i = 0; i < array.Count; i++)
                 {
                     var element = array[i];
-                    if (element is null) continue;
+                    if (element is null)
+                    {
+                        continue;
+                    }
                     WalkBody(element, $"{path}[{i}]", fileName, resolver, problems);
                 }
                 break;
@@ -135,7 +139,10 @@ public static class FixtureValidation
         /// </summary>
         public void ThrowIfBlocked(string operationKey)
         {
-            if (!_problemsByOperation.TryGetValue(operationKey, out var problems)) return;
+            if (!_problemsByOperation.TryGetValue(operationKey, out var problems))
+            {
+                return;
+            }
 
             throw new FixtureUnresolvedException(
                 $"Fixture for operation '{operationKey}' has unresolved values:\n" +
@@ -145,7 +152,10 @@ public static class FixtureValidation
         private static string BuildMessage(IReadOnlyDictionary<string, List<string>> problemsByOperation)
         {
             var total = problemsByOperation.Sum(kv => kv.Value.Count);
-            if (total == 0) return "All fixtures resolved cleanly.";
+            if (total == 0)
+            {
+                return "All fixtures resolved cleanly.";
+            }
 
             var lines = new List<string>
             {

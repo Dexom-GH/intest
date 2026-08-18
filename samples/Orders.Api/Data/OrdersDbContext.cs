@@ -39,7 +39,10 @@ public class OrdersDbContext(DbContextOptions<OrdersDbContext> options) : DbCont
     {
         await context.Database.EnsureCreatedAsync(cancellationToken);
 
-        if (await context.Customers.AnyAsync(cancellationToken)) return;
+        if (await context.Customers.AnyAsync(cancellationToken))
+        {
+            return;
+        }
 
         var customer = new Customer
         {

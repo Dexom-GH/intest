@@ -29,7 +29,10 @@ builder.Services.AddSwaggerGen(options =>
     options.SwaggerDoc("v1", new() { Title = "Orders API", Version = "v1" });
 
     var xml = Path.Combine(AppContext.BaseDirectory, "Orders.Api.xml");
-    if (File.Exists(xml)) options.IncludeXmlComments(xml);
+    if (File.Exists(xml))
+    {
+        options.IncludeXmlComments(xml);
+    }
 
     // Declaring the scheme is what puts `security` in the document, which is what makes
     // InTest generate auth contract tests at all.
@@ -78,9 +81,3 @@ await app.RunAsync();
 
 /// <summary>Exposed so the build-time OpenAPI document generator can locate the entry point.</summary>
 public partial class Program;
-
-public static class Policies
-{
-    public const string Read = "orders.read";
-    public const string Write = "orders.write";
-}

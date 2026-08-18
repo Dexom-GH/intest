@@ -27,8 +27,14 @@ public static class InTestId
         var suffix = lossy ? "-h" + ShortHash(displayName) : string.Empty;
 
         var budget = MaxLength - runId.Length - 1 - suffix.Length;
-        if (budget < 1) return runId[..Math.Min(runId.Length, MaxLength)];
-        if (slug.Length > budget) slug = slug[..budget].TrimEnd('-');
+        if (budget < 1)
+        {
+            return runId[..Math.Min(runId.Length, MaxLength)];
+        }
+        if (slug.Length > budget)
+        {
+            slug = slug[..budget].TrimEnd('-');
+        }
 
         return string.Concat(runId, "-", slug, suffix);
     }
@@ -42,22 +48,37 @@ public static class InTestId
         foreach (var ch in value)
         {
             char mapped;
-            if (ch is >= 'a' and <= 'z' or >= '0' and <= '9') mapped = ch;
-            else if (ch is >= 'A' and <= 'Z') mapped = char.ToLowerInvariant(ch);
+            if (ch is >= 'a' and <= 'z' or >= '0' and <= '9')
+            {
+                mapped = ch;
+            }
+            else if (ch is >= 'A' and <= 'Z')
+            {
+                mapped = char.ToLowerInvariant(ch);
+            }
             else
             {
                 // Non-alphanumeric ASCII collapses to a separator without loss of identity;
                 // anything outside ASCII does lose identity and must be recorded as lossy.
-                if (ch >= 128) lossy = true;
+                if (ch >= 128)
+                {
+                    lossy = true;
+                }
                 mapped = '-';
             }
 
             if (mapped == '-')
             {
-                if (lastWasHyphen || sb.Length == 0) continue;
+                if (lastWasHyphen || sb.Length == 0)
+                {
+                    continue;
+                }
                 lastWasHyphen = true;
             }
-            else lastWasHyphen = false;
+            else
+            {
+                lastWasHyphen = false;
+            }
 
             sb.Append(mapped);
         }

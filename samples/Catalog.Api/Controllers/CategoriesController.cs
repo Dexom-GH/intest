@@ -1,4 +1,3 @@
-using System.ComponentModel.DataAnnotations;
 using Catalog.Api.Data;
 using Catalog.Api.Domain;
 using Microsoft.AspNetCore.Mvc;
@@ -41,7 +40,9 @@ public class CategoriesController(CatalogDbContext database) : ControllerBase
         [FromBody] CreateCategoryRequest request, CancellationToken cancellationToken)
     {
         if (await database.Categories.AnyAsync(c => c.Name == request.Name, cancellationToken))
+        {
             return Conflict(new ProblemDetails { Title = $"A category named '{request.Name}' already exists." });
+        }
 
         var category = new Category { Id = Guid.NewGuid(), Name = request.Name, Notes = request.Notes };
 
@@ -62,32 +63,18 @@ public class CategoriesController(CatalogDbContext database) : ControllerBase
     public async Task<IActionResult> Delete(Guid id, CancellationToken cancellationToken)
     {
         var category = await database.Categories.FirstOrDefaultAsync(c => c.Id == id, cancellationToken);
-        if (category is null) return NotFound();
+        if (category is null)
+        {
+            return NotFound();
+        }
 
         if (await database.Products.AnyAsync(p => p.CategoryId == id, cancellationToken))
+        {
             return Conflict(new ProblemDetails { Title = "Category is referenced by one or more products." });
+        }
 
         database.Categories.Remove(category);
         await database.SaveChangesAsync(cancellationToken);
         return NoContent();
     }
-}
-
-public record CategoryResponse
-{
-    public required Guid Id { get; init; }
-    public required string Name { get; init; }
-    public string? Notes { get; init; }
-
-    public static CategoryResponse From(Category category)
-        => new() { Id = category.Id, Name = category.Name, Notes = category.Notes };
-}
-
-public record CreateCategoryRequest
-{
-    [Required, MaxLength(100)]
-    public required string Name { get; init; }
-
-    [MaxLength(1000)]
-    public string? Notes { get; init; }
 }

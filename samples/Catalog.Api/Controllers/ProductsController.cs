@@ -32,14 +32,28 @@ public class ProductsController(CatalogDbContext database) : ControllerBase
         CancellationToken cancellationToken = default)
     {
         if (page < 1 || pageSize is < 1 or > 100)
+        {
             return BadRequest(new ProblemDetails { Title = "page must be >= 1 and pageSize between 1 and 100." });
+        }
 
         var query = database.Products.Include(p => p.Tags).AsQueryable();
 
-        if (!includeInactive) query = query.Where(p => p.IsActive);
-        if (!string.IsNullOrWhiteSpace(name)) query = query.Where(p => p.Name.Contains(name));
-        if (minPrice is not null) query = query.Where(p => p.Price >= minPrice);
-        if (category is not null) query = query.Where(p => p.Category == category);
+        if (!includeInactive)
+        {
+            query = query.Where(p => p.IsActive);
+        }
+        if (!string.IsNullOrWhiteSpace(name))
+        {
+            query = query.Where(p => p.Name.Contains(name));
+        }
+        if (minPrice is not null)
+        {
+            query = query.Where(p => p.Price >= minPrice);
+        }
+        if (category is not null)
+        {
+            query = query.Where(p => p.Category == category);
+        }
 
         var total = await query.CountAsync(cancellationToken);
         var items = await query.OrderBy(p => p.Sku)
@@ -93,10 +107,14 @@ public class ProductsController(CatalogDbContext database) : ControllerBase
         [FromBody] CreateProductRequest request, CancellationToken cancellationToken)
     {
         if (!await database.Categories.AnyAsync(c => c.Id == request.CategoryId, cancellationToken))
+        {
             return BadRequest(new ProblemDetails { Title = $"Category '{request.CategoryId}' does not exist." });
+        }
 
         if (await database.Products.AnyAsync(p => p.Sku == request.Sku, cancellationToken))
+        {
             return Conflict(new ProblemDetails { Title = $"A product with SKU '{request.Sku}' already exists." });
+        }
 
         var product = new Product
         {
@@ -137,7 +155,10 @@ public class ProductsController(CatalogDbContext database) : ControllerBase
         Guid id, [FromBody] UpdateProductRequest request, CancellationToken cancellationToken)
     {
         var product = await database.Products.FirstOrDefaultAsync(p => p.Id == id, cancellationToken);
-        if (product is null) return NotFound();
+        if (product is null)
+        {
+            return NotFound();
+        }
 
         product.Name = request.Name;
         product.Description = request.Description;

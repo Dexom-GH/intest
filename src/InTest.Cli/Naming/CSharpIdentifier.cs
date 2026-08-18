@@ -32,10 +32,18 @@ public static class CSharpIdentifier
 
         var identifier = sb.ToString();
         if (identifier.Length == 0)
+        {
             throw new ArgumentException($"'{value}' contains no characters usable in an identifier.", nameof(value));
+        }
 
-        if (char.IsDigit(identifier[0])) identifier = "_" + identifier;
-        if (Keywords.Contains(identifier)) identifier = "@" + identifier;
+        if (char.IsDigit(identifier[0]))
+        {
+            identifier = "_" + identifier;
+        }
+        if (Keywords.Contains(identifier))
+        {
+            identifier = "@" + identifier;
+        }
 
         return identifier;
     }

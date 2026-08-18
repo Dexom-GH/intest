@@ -21,7 +21,10 @@ public static class Readiness
         ArgumentNullException.ThrowIfNull(client);
         ArgumentNullException.ThrowIfNull(options);
 
-        if (!options.Enabled) return;
+        if (!options.Enabled)
+        {
+            return;
+        }
 
         var deadline = Stopwatch.StartNew();
         var timeout = TimeSpan.FromSeconds(options.TimeoutSeconds);
@@ -41,7 +44,10 @@ public static class Readiness
 
                 if (status == options.ExpectStatus)
                 {
-                    if (++consecutive >= options.ConsecutiveSuccesses) return;
+                    if (++consecutive >= options.ConsecutiveSuccesses)
+                    {
+                        return;
+                    }
                 }
                 else if (TerminalStatuses.Contains(status))
                 {
@@ -51,7 +57,10 @@ public static class Readiness
                         "A path with no leading slash resolves under the API base URL; one with a leading " +
                         "slash resolves against the host root, which is where health endpoints usually live.");
                 }
-                else consecutive = 0;
+                else
+                {
+                    consecutive = 0;
+                }
             }
             catch (HttpRequestException ex)
             {
@@ -60,7 +69,9 @@ public static class Readiness
             }
 
             if (interval > TimeSpan.Zero)
+            {
                 await Task.Delay(interval, cancellationToken).ConfigureAwait(false);
+            }
         }
 
         throw new ReadinessTimeoutException(
@@ -72,7 +83,10 @@ public static class Readiness
     /// <summary>Best-effort absolute form of the probe path, for messages only.</summary>
     private static string Resolve(HttpClient client, string path)
     {
-        if (client.BaseAddress is null) return path;
+        if (client.BaseAddress is null)
+        {
+            return path;
+        }
         return Uri.TryCreate(client.BaseAddress, path, out var absolute) ? absolute.ToString() : path;
     }
 }

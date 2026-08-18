@@ -1,6 +1,5 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 namespace InTest.Runtime;
 
@@ -86,7 +85,10 @@ public static class TestHost
     private static string? ReadOperationPathPrefix()
     {
         var path = Path.Combine(AppContext.BaseDirectory, "spec-paths.json");
-        if (!File.Exists(path)) return null;
+        if (!File.Exists(path))
+        {
+            return null;
+        }
 
         using var document = System.Text.Json.JsonDocument.Parse(File.ReadAllText(path));
         return document.RootElement.TryGetProperty("operationPathPrefix", out var value)
@@ -97,7 +99,9 @@ public static class TestHost
     private static string ResolveProfile(TestContext context)
     {
         if (context.Properties.TryGetValue("profile", out var fromRunSettings) && fromRunSettings is string s && s.Length > 0)
+        {
             return s;
+        }
 
         return Environment.GetEnvironmentVariable("INTEST_PROFILE")
                ?? BuildConfiguration(profile: null)["InTest:DefaultProfile"]
@@ -110,7 +114,10 @@ public static class TestHost
             .SetBasePath(AppContext.BaseDirectory)
             .AddJsonFile("appsettings.json", optional: false);
 
-        if (profile is not null) builder.AddJsonFile($"appsettings.{profile}.json", optional: true);
+        if (profile is not null)
+        {
+            builder.AddJsonFile($"appsettings.{profile}.json", optional: true);
+        }
 
         return builder.AddJsonFile("appsettings.local.json", optional: true)
                       .AddEnvironmentVariables("INTEST_")

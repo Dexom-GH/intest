@@ -32,17 +32,29 @@ public sealed class AuthorizeOperationFilter : IDocumentFilter
 
         foreach (var description in context.ApiDescriptions)
         {
-            if (description.ActionDescriptor is not ControllerActionDescriptor action) continue;
+            if (description.ActionDescriptor is not ControllerActionDescriptor action)
+            {
+                continue;
+            }
 
             var scope = RequiredScope(action);
-            if (scope is null) continue;
+            if (scope is null)
+            {
+                continue;
+            }
 
             var path = "/" + description.RelativePath?.TrimStart('/');
-            if (!swaggerDoc.Paths.TryGetValue(path, out var pathItem)) continue;
+            if (!swaggerDoc.Paths.TryGetValue(path, out var pathItem))
+            {
+                continue;
+            }
 
 
             var method = new HttpMethod(description.HttpMethod ?? "GET");
-            if (pathItem.Operations is null || !pathItem.Operations.TryGetValue(method, out var operation)) continue;
+            if (pathItem.Operations is null || !pathItem.Operations.TryGetValue(method, out var operation))
+            {
+                continue;
+            }
 
             operation.Security =
             [
@@ -57,7 +69,10 @@ public sealed class AuthorizeOperationFilter : IDocumentFilter
     private static string? RequiredScope(ControllerActionDescriptor action)
     {
         var methodAttributes = action.MethodInfo.GetCustomAttributes(inherit: true);
-        if (methodAttributes.OfType<IAllowAnonymous>().Any()) return null;
+        if (methodAttributes.OfType<IAllowAnonymous>().Any())
+        {
+            return null;
+        }
 
         var typeAttributes = action.ControllerTypeInfo.GetCustomAttributes(inherit: true);
 
@@ -68,7 +83,10 @@ public sealed class AuthorizeOperationFilter : IDocumentFilter
                                        .Select(p => p!)
                                        .ToHashSet(StringComparer.Ordinal);
 
-        if (policies.Count == 0) return null;
+        if (policies.Count == 0)
+        {
+            return null;
+        }
 
         // Most specific wins: an action-level [Authorize(Write)] on a controller marked
         // [Authorize(Read)] genuinely needs the write scope.

@@ -2,9 +2,6 @@ using NJsonSchema;
 
 namespace InTest.Runtime;
 
-/// <summary>A single schema violation, flattened for message construction.</summary>
-public sealed record SchemaViolation(string Kind, string Path);
-
 /// <summary>
 /// Response schema validation. Framework-neutral.
 /// Schemas are bundled under 'definitions' and referenced by key rather than inlined,
@@ -29,8 +26,10 @@ public sealed class SchemaBundle
         ArgumentException.ThrowIfNullOrWhiteSpace(schemaKey);
 
         if (!_root.Definitions.TryGetValue(schemaKey, out var schema))
+        {
             throw new KeyNotFoundException(
-                $"Schema '{schemaKey}' is not in the bundle. Available: {string.Join(", ", _root.Definitions.Keys.Order())}");
+            $"Schema '{schemaKey}' is not in the bundle. Available: {string.Join(", ", _root.Definitions.Keys.Order())}");
+        }
 
         try
         {

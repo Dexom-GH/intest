@@ -49,7 +49,10 @@ public class CatalogDbContext(DbContextOptions<CatalogDbContext> options) : DbCo
     {
         await context.Database.EnsureCreatedAsync(cancellationToken);
 
-        if (await context.Categories.AnyAsync(cancellationToken)) return;
+        if (await context.Categories.AnyAsync(cancellationToken))
+        {
+            return;
+        }
 
         var hardware = new Category
         {

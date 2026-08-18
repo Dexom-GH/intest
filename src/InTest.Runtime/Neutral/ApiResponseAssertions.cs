@@ -23,11 +23,15 @@ public static class ApiResponseAssertions
         var body = await ReadBodyAsync(response, cancellationToken).ConfigureAwait(false);
 
         if ((int)response.StatusCode != expectedStatus)
+        {
             throw Failure(response, expectedStatus, testId, elapsed, body, []);
+        }
 
         var violations = schemas.Validate(schemaKey, body);
         if (violations.Count > 0)
+        {
             throw Failure(response, expectedStatus, testId, elapsed, body, violations);
+        }
     }
 
     public static async Task ShouldMatchStatusAsync(
@@ -36,7 +40,10 @@ public static class ApiResponseAssertions
     {
         ArgumentNullException.ThrowIfNull(response);
 
-        if ((int)response.StatusCode == expectedStatus) return;
+        if ((int)response.StatusCode == expectedStatus)
+        {
+            return;
+        }
 
         var body = await ReadBodyAsync(response, cancellationToken).ConfigureAwait(false);
         throw Failure(response, expectedStatus, testId, elapsed, body, []);
@@ -44,7 +51,10 @@ public static class ApiResponseAssertions
 
     private static async Task<string> ReadBodyAsync(HttpResponseMessage response, CancellationToken ct)
     {
-        if (response.Content is null) return string.Empty;
+        if (response.Content is null)
+        {
+            return string.Empty;
+        }
         try { return await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false); }
         catch (Exception ex) { return $"<body could not be read: {ex.GetType().Name}>"; }
     }

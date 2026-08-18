@@ -1,5 +1,4 @@
 using InTest.Cli.Commands;
-using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Shouldly;
 
 namespace InTest.Cli.Tests;
@@ -19,7 +18,10 @@ public class InitCommandTests
     [TestCleanup]
     public void RemoveDirectory()
     {
-        if (Directory.Exists(_root)) Directory.Delete(_root, recursive: true);
+        if (Directory.Exists(_root))
+        {
+            Directory.Delete(_root, recursive: true);
+        }
     }
 
     [TestMethod]

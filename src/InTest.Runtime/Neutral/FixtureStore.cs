@@ -3,13 +3,6 @@ using System.Text.Json.Nodes;
 namespace InTest.Runtime;
 
 /// <summary>
-/// Raised by <see cref="FixtureStore.Get"/> for an operation with no fixture on disk. The
-/// message names the repair command rather than just the missing key, because the fix is
-/// always the same command and a reader should not have to know that separately.
-/// </summary>
-public sealed class FixtureNotFoundException(string message) : Exception(message);
-
-/// <summary>
 /// Loads every fixture under <c>{root}/fixtures/*.json</c> and, when <paramref name="profile"/>
 /// is given, deep-merges any <c>{root}/fixtures/{profile}/*.json</c> overlay over it — the
 /// environment wins, property by property, not object by object. <c>root</c> is the directory
@@ -44,7 +37,10 @@ public sealed class FixtureStore
         var fixturesDir = Path.Combine(root, "fixtures");
         var fixtures = new Dictionary<string, Fixture>(StringComparer.Ordinal);
 
-        if (!Directory.Exists(fixturesDir)) return new FixtureStore(fixtures);
+        if (!Directory.Exists(fixturesDir))
+        {
+            return new FixtureStore(fixtures);
+        }
 
         foreach (var file in Directory.GetFiles(fixturesDir, "*.json", SearchOption.TopDirectoryOnly))
             fixtures[KeyOf(file)] = ParseFile(file);
@@ -60,10 +56,12 @@ public sealed class FixtureStore
                     var fileName = Path.GetFileName(file);
 
                     if (!fixtures.TryGetValue(key, out var baseFixture))
+                    {
                         throw new FixtureFormatException(
-                            $"fixtures/{profile}/{fileName} overlays an operation with no base " +
-                            $"fixture 'fixtures/{fileName}'. Run `intest fixtures repair` first, " +
-                            "or remove the overlay.");
+                        $"fixtures/{profile}/{fileName} overlays an operation with no base " +
+                        $"fixture 'fixtures/{fileName}'. Run `intest fixtures repair` first, " +
+                        "or remove the overlay.");
+                    }
 
                     fixtures[key] = Merge(baseFixture, ParseFile(file));
                 }
@@ -79,7 +77,10 @@ public sealed class FixtureStore
     /// </summary>
     public Fixture Get(string key)
     {
-        if (_fixtures.TryGetValue(key, out var fixture)) return fixture;
+        if (_fixtures.TryGetValue(key, out var fixture))
+        {
+            return fixture;
+        }
         throw new FixtureNotFoundException(
             $"No fixture is defined for operation '{key}'. Run `intest fixtures repair` to generate one.");
     }
@@ -110,9 +111,11 @@ public sealed class FixtureStore
 
         var fixture = Get(key);
         if (!fixture.Parameters.TryGetValue(name, out var raw))
+        {
             throw new FixtureNotFoundException(
-                $"Fixture 'fixtures/{key}.json' has no '$parameters.{name}'. " +
-                "Run `intest fixtures repair` to generate one.");
+            $"Fixture 'fixtures/{key}.json' has no '$parameters.{name}'. " +
+            "Run `intest fixtures repair` to generate one.");
+        }
 
         return resolver.Resolve(raw, key + ".json");
     }
@@ -132,12 +135,17 @@ public sealed class FixtureStore
         ArgumentNullException.ThrowIfNull(resolver);
 
         var result = new Dictionary<string, string>(StringComparer.Ordinal);
-        if (names.Count == 0 || !_fixtures.TryGetValue(key, out var fixture)) return result;
+        if (names.Count == 0 || !_fixtures.TryGetValue(key, out var fixture))
+        {
+            return result;
+        }
 
         var fileName = key + ".json";
         foreach (var name in names)
             if (fixture.Parameters.TryGetValue(name, out var raw))
+            {
                 result[name] = resolver.Resolve(raw, fileName);
+            }
 
         return result;
     }
@@ -200,9 +208,14 @@ public sealed class FixtureStore
     /// </summary>
     private static JsonNode? MergeBody(JsonNode? baseBody, JsonNode? overlayBody)
     {
-        if (overlayBody is null) return baseBody?.DeepClone();
+        if (overlayBody is null)
+        {
+            return baseBody?.DeepClone();
+        }
         if (baseBody is not JsonObject baseObj || overlayBody is not JsonObject overlayObj)
+        {
             return overlayBody.DeepClone();
+        }
 
         var merged = new JsonObject();
         foreach (var (key, value) in baseObj) merged[key] = value?.DeepClone();

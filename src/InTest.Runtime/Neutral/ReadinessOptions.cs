@@ -11,5 +11,3 @@ public sealed class ReadinessOptions
     public int TimeoutSeconds { get; set; } = 120;
     public int IntervalSeconds { get; set; } = 3;
 }
-
-public sealed class ReadinessTimeoutException(string message) : Exception(message);

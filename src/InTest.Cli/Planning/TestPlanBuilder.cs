@@ -104,12 +104,17 @@ public static class TestPlanBuilder
 
     private static (int Status, IOpenApiResponse Response)? SelectSuccessResponse(OpenApiOperation operation)
     {
-        if (operation.Responses is null) return null;
+        if (operation.Responses is null)
+        {
+            return null;
+        }
 
         foreach (var (code, response) in operation.Responses.OrderBy(r => r.Key, StringComparer.Ordinal))
         {
             if (int.TryParse(code, out var status) && status is >= 200 and < 400)
+            {
                 return (status, response);
+            }
         }
 
         return null;
@@ -117,10 +122,15 @@ public static class TestPlanBuilder
 
     private static string? ResolveSchemaKey(IOpenApiResponse response, int status, string operationKey)
     {
-        if (BodilessStatuses.Contains(status)) return null;
+        if (BodilessStatuses.Contains(status))
+        {
+            return null;
+        }
 
         if (response.Content is null || !response.Content.TryGetValue(JsonMediaType, out var media) || media.Schema is null)
+        {
             return null;
+        }
 
         // A reference resolves to its component name; anything inline gets a synthesized key
         // so that contract tests never silently degrade to a status-code check.
@@ -149,9 +159,15 @@ public static class TestPlanBuilder
         while (i < path.Length)
         {
             var open = path.IndexOf('{', i);
-            if (open < 0) break;
+            if (open < 0)
+            {
+                break;
+            }
             var close = path.IndexOf('}', open);
-            if (close < 0) break;
+            if (close < 0)
+            {
+                break;
+            }
             names.Add(path[(open + 1)..close]);
             i = close + 1;
         }

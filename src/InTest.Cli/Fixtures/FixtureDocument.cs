@@ -3,15 +3,6 @@ using System.Text.Json.Nodes;
 
 namespace InTest.Cli.Fixtures;
 
-public sealed class FixtureFormatException(string message, Exception? inner = null) : Exception(message, inner);
-
-public sealed class FixtureMeta
-{
-    public required int Tier { get; init; }
-    public required string OperationId { get; init; }
-    public required string GeneratedBy { get; init; }
-}
-
 /// <summary>
 /// One fixture per operation: its path and query parameters, and its request body if it takes
 /// one. Committed, hand-edited, and never overwritten by tooling once written.
@@ -96,7 +87,9 @@ public sealed class FixtureDocument
     public static string FileNameFor(string operationKey)
     {
         if (!TryValidateOperationKey(operationKey, out var reason))
+        {
             throw new FixtureFormatException(reason);
+        }
 
         return operationKey + ".json";
     }
@@ -127,7 +120,10 @@ public sealed class FixtureDocument
             root["$parameters"] = parameters;
         }
 
-        if (Body is not null) root["body"] = Body.DeepClone();
+        if (Body is not null)
+        {
+            root["body"] = Body.DeepClone();
+        }
 
         return root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + "\n";
     }
@@ -155,10 +151,15 @@ public sealed class FixtureDocument
         try { root = JsonNode.Parse(json); }
         catch (JsonException ex) { throw new FixtureFormatException($"Fixture is not valid JSON: {ex.Message}", ex); }
 
-        if (root is not JsonObject obj) throw new FixtureFormatException("Fixture root must be a JSON object.");
+        if (root is not JsonObject obj)
+        {
+            throw new FixtureFormatException("Fixture root must be a JSON object.");
+        }
 
         if (obj["$meta"] is not JsonObject meta)
+        {
             throw new FixtureFormatException("Fixture is missing its '$meta' block. Regenerate it with `intest fixtures repair`.");
+        }
 
         var document = new FixtureDocument
         {
@@ -178,9 +179,11 @@ public sealed class FixtureDocument
         if (obj["$parameters"] is { } parametersNode)
         {
             if (parametersNode is not JsonObject parameters)
+            {
                 throw new FixtureFormatException(
-                    $"Fixture '$parameters' must be a JSON object of name/value pairs, but found " +
-                    $"'{parametersNode.ToJsonString()}'. Regenerate it with `intest fixtures repair`.");
+                $"Fixture '$parameters' must be a JSON object of name/value pairs, but found " +
+                $"'{parametersNode.ToJsonString()}'. Regenerate it with `intest fixtures repair`.");
+            }
 
             foreach (var (key, value) in parameters)
             {
@@ -203,7 +206,10 @@ public sealed class FixtureDocument
     private static int ReadMetaInt(JsonObject meta, string field, int defaultValue)
     {
         var node = meta[field];
-        if (node is null) return defaultValue;
+        if (node is null)
+        {
+            return defaultValue;
+        }
 
         try
         {
@@ -220,7 +226,10 @@ public sealed class FixtureDocument
     private static string ReadMetaString(JsonObject meta, string field, string defaultValue)
     {
         var node = meta[field];
-        if (node is null) return defaultValue;
+        if (node is null)
+        {
+            return defaultValue;
+        }
 
         try
         {
@@ -239,8 +248,10 @@ public sealed class FixtureDocument
         var value = ReadMetaString(meta, "operationId", string.Empty);
 
         if (string.IsNullOrWhiteSpace(value))
+        {
             throw new FixtureFormatException(
-                "Fixture is missing '$meta.operationId'. Regenerate it with `intest fixtures repair`.");
+            "Fixture is missing '$meta.operationId'. Regenerate it with `intest fixtures repair`.");
+        }
 
         return value;
     }

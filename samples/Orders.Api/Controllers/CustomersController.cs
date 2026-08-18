@@ -1,4 +1,3 @@
-using System.ComponentModel.DataAnnotations;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -51,7 +50,9 @@ public class CustomersController(OrdersDbContext database) : ControllerBase
         [FromBody] CreateCustomerRequest request, CancellationToken cancellationToken)
     {
         if (await database.Customers.AnyAsync(c => c.Email == request.Email, cancellationToken))
+        {
             return Conflict(new ProblemDetails { Title = $"A customer with email '{request.Email}' already exists." });
+        }
 
         var customer = new Customer
         {
@@ -67,34 +68,4 @@ public class CustomersController(OrdersDbContext database) : ControllerBase
 
         return CreatedAtAction(nameof(GetById), new { id = customer.Id }, CustomerResponse.From(customer));
     }
-}
-
-public record CustomerResponse
-{
-    public required Guid Id { get; init; }
-    public required string Name { get; init; }
-    public required string Email { get; init; }
-    public string? PhoneNumber { get; init; }
-    public required DateTimeOffset RegisteredAt { get; init; }
-
-    public static CustomerResponse From(Customer customer) => new()
-    {
-        Id = customer.Id,
-        Name = customer.Name,
-        Email = customer.Email,
-        PhoneNumber = customer.PhoneNumber,
-        RegisteredAt = customer.RegisteredAt
-    };
-}
-
-public record CreateCustomerRequest
-{
-    [Required, MaxLength(200)]
-    public required string Name { get; init; }
-
-    [Required, EmailAddress, MaxLength(320)]
-    public required string Email { get; init; }
-
-    [MaxLength(30)]
-    public string? PhoneNumber { get; init; }
 }

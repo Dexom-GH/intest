@@ -3,24 +3,6 @@ using System.Text;
 
 namespace InTest.Runtime;
 
-/// <summary>Environment facts RunId derives from. Injected so the derivation is testable.</summary>
-public sealed record RunIdEnvironment(IReadOnlyDictionary<string, string> Variables, string UserName)
-{
-    public static RunIdEnvironment Current()
-    {
-        var vars = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var name in new[] { "TF_BUILD", "BUILD_BUILDID", "GITHUB_ACTIONS", "GITHUB_RUN_ID", "CI" })
-        {
-            var value = Environment.GetEnvironmentVariable(name);
-            if (!string.IsNullOrEmpty(value)) vars[name] = value;
-        }
-        return new RunIdEnvironment(vars, Environment.UserName);
-    }
-
-    public string? Get(string key) => Variables.TryGetValue(key, out var v) ? v : null;
-    public bool Has(string key) => !string.IsNullOrEmpty(Get(key));
-}
-
 /// <summary>Run identity. Framework-neutral: must not reference any test framework.</summary>
 public static class RunId
 {
@@ -49,10 +31,15 @@ public static class RunId
     private static string DerivePrefix(RunIdEnvironment env)
     {
         // Azure DevOps: Build.BuildId is unique; Build.BuildNumber is a display string that can repeat.
-        if (env.Has("TF_BUILD") && env.Has("BUILD_BUILDID")) return "ci" + env.Get("BUILD_BUILDID");
-        if (env.Has("GITHUB_ACTIONS") && env.Has("GITHUB_RUN_ID")) return "ci" + env.Get("GITHUB_RUN_ID");
-        if (env.Has("CI")) return "ci";
-        return env.UserName;
+        if (env.Has("TF_BUILD") && env.Has("BUILD_BUILDID"))
+        {
+            return "ci" + env.Get("BUILD_BUILDID");
+        }
+        if (env.Has("GITHUB_ACTIONS") && env.Has("GITHUB_RUN_ID"))
+        {
+            return "ci" + env.Get("GITHUB_RUN_ID");
+        }
+        return env.Has("CI") ? "ci" : env.UserName;
     }
 
     private static string SanitizePrefix(string value)
@@ -63,19 +50,37 @@ public static class RunId
         foreach (var ch in value)
         {
             char mapped;
-            if (ch is >= 'a' and <= 'z' or >= '0' and <= '9') mapped = ch;
-            else if (ch is >= 'A' and <= 'Z') mapped = char.ToLowerInvariant(ch);
-            else mapped = '-';
+            if (ch is >= 'a' and <= 'z' or >= '0' and <= '9')
+            {
+                mapped = ch;
+            }
+            else if (ch is >= 'A' and <= 'Z')
+            {
+                mapped = char.ToLowerInvariant(ch);
+            }
+            else
+            {
+                mapped = '-';
+            }
 
             if (mapped == '-')
             {
-                if (lastWasHyphen || sb.Length == 0) continue;
+                if (lastWasHyphen || sb.Length == 0)
+                {
+                    continue;
+                }
                 lastWasHyphen = true;
             }
-            else lastWasHyphen = false;
+            else
+            {
+                lastWasHyphen = false;
+            }
 
             sb.Append(mapped);
-            if (sb.Length == PrefixMaxLength) break;
+            if (sb.Length == PrefixMaxLength)
+            {
+                break;
+            }
         }
 
         var prefix = sb.ToString().TrimEnd('-');

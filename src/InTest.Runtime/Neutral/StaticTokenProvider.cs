@@ -10,10 +10,12 @@ public sealed class StaticTokenProvider(string token, string identityName = "def
     public Task<string> GetTokenAsync(string audience, string? identity = null, CancellationToken cancellationToken = default)
     {
         if (identity is not null && !Identities.Contains(identity))
+        {
             throw new ArgumentException(
-                $"StaticTokenProvider serves only '{string.Join(", ", Identities)}'; '{identity}' was requested. " +
-                "Implement ITestTokenProvider with more than one identity to enable the 403 auth tests.",
-                nameof(identity));
+            $"StaticTokenProvider serves only '{string.Join(", ", Identities)}'; '{identity}' was requested. " +
+            "Implement ITestTokenProvider with more than one identity to enable the 403 auth tests.",
+            nameof(identity));
+        }
 
         return Task.FromResult(_token);
     }

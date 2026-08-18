@@ -1,7 +1,5 @@
 using System.Text.Json.Nodes;
-using InTest.Runtime;
 using Microsoft.Extensions.Configuration;
-using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Shouldly;
 
 namespace InTest.Runtime.Tests;
@@ -21,7 +19,10 @@ public class FixtureValidationTests
     [TestCleanup]
     public void RemoveRoot()
     {
-        if (Directory.Exists(_root)) Directory.Delete(_root, recursive: true);
+        if (Directory.Exists(_root))
+        {
+            Directory.Delete(_root, recursive: true);
+        }
     }
 
     /// <summary>
@@ -79,17 +80,29 @@ public class FixtureValidationTests
             {
                 if (isLast) { current[name] = JsonValue.Create($"TODO:{name}"); return; }
 
-                if (current[name] is not JsonObject next) current[name] = next = new JsonObject();
+                if (current[name] is not JsonObject next)
+                {
+                    current[name] = next = new JsonObject();
+                }
                 current = next;
             }
             else
             {
-                if (current[name] is not JsonArray array) current[name] = array = new JsonArray();
-                while (array.Count <= index) array.Add(new JsonObject());
+                if (current[name] is not JsonArray array)
+                {
+                    current[name] = array = new JsonArray();
+                }
+                while (array.Count <= index)
+                {
+                    array.Add(new JsonObject());
+                }
 
                 if (isLast) { array[index.Value] = JsonValue.Create($"TODO:{name}"); return; }
 
-                if (array[index.Value] is not JsonObject element) array[index.Value] = element = new JsonObject();
+                if (array[index.Value] is not JsonObject element)
+                {
+                    array[index.Value] = element = new JsonObject();
+                }
                 current = element;
             }
         }

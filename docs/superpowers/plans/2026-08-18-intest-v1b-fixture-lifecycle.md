@@ -97,7 +97,7 @@ Three properties are not optional:
 | `IAssemblyFixture.cs` | The interface teams implement, exactly as §13 gives it |
 | `FixtureContext.cs` | `Publish(key, value)` and `OnCleanup(action)` |
 | `FixtureGraph.cs` | Topological ordering over `DependsOn`; cycle and missing-dependency detection |
-| `FixtureRunner.cs` | Runs ordered fixtures, honours `AppliesTo`, wraps failures, drains cleanup |
+| `FixtureRunner.cs` | **Orders via `FixtureGraph`**, then runs, honours `AppliesTo`, wraps failures, drains cleanup |
 | **Modified** | |
 | `Neutral/TokenResolver.cs` | `{{fixture:…}}` resolves from published keys; `SupportedTokens` and class doc updated |
 | `MSTest/TestHost.cs` | The reordering, the retained `FixtureContext`, and `CleanupAsync` |
@@ -211,6 +211,16 @@ git commit -m "feat(runtime): topological fixture ordering with cycle detection"
 **Files:**
 - Create: `src/InTest.Runtime/Neutral/FixtureRunner.cs`
 - Test: `tests/InTest.Runtime.Tests/FixtureRunnerTests.cs`
+
+**`RunAsync` owns the ordering.** It calls `FixtureGraph.Order` itself; callers pass fixtures in
+whatever order the container resolved them. `TestHost` must not order them first.
+
+That is a real choice, not a formality. Split across both, either each orders (harmless
+duplication) or each assumes the other does (seeding runs unordered) — and nothing would catch
+the second: Task 2 tests the graph in isolation, Task 3's fixtures are independent, and Task 8's
+Catalog fixture is a single class. The first failure would be a real adopter with a dependency
+chain, which is the worst place to find it. Ordering inside `RunAsync` makes the guarantee
+unbypassable and puts Task 3's ordering test on the path that actually runs.
 
 **Shape, stated so the two halves fit together.** The caller owns the context and passes it to both:
 
@@ -377,7 +387,32 @@ public void ScaffoldedStartupDrainsFixtureCleanup()
 
 - [ ] **Step 2: Implement**
 
-`TestHost.CleanupAsync(TestContext context)` drains the retained `FixtureContext` via `FixtureRunner.DrainAsync` and writes any aggregated failure to `TestContext`. Its signature must satisfy MSTEST0012/MSTEST0013; `TestContext` on `[AssemblyCleanup]` needs 3.8+, satisfied by the 4.3 floor.
+`TestHost.CleanupAsync(TestContext context)` drains the retained `FixtureContext` via
+`FixtureRunner.DrainAsync`, **catches the `FixtureLifecycleException` it may throw, writes it to
+`TestContext`, and does not rethrow.**
+
+That clause is the point of this step. `DrainAsync` throws by design (Task 3), so an implementer
+handed an exception and no instruction will let it propagate — and an exception out of
+`[AssemblyCleanup]` becomes the run headline, burying whatever actually failed. Teardown noise
+must never mask a real test failure; the drain report is diagnostic, not a verdict.
+
+Signature must satisfy MSTEST0012/MSTEST0013; `TestContext` on `[AssemblyCleanup]` needs 3.8+,
+satisfied by the 4.3 floor.
+
+Add a test asserting a throwing teardown does not fail the run:
+
+```csharp
+[TestMethod]
+public void ScaffoldedCleanupDoesNotRethrow()
+{
+    InitCommand.Run(_root, "Orders.ApiTests", "orders.json");
+
+    // A test asserting the attribute is present would pass even if the method rethrew.
+    File.ReadAllText(Path.Combine(_root, "TestStartup.cs")).ShouldContain("TestHost.CleanupAsync");
+}
+```
+
+and cover the no-rethrow behaviour directly in `tests/InTest.Runtime.Tests/`.
 
 - [ ] **Step 3: Run, commit**
 
@@ -423,7 +458,7 @@ New sequence in `InitializeAsync`:
 2. `FixtureStore.Load` — unchanged
 3. Build the service provider, including team registrations via `ConfigureServices`
 4. `Readiness.WaitAsync`
-5. Create the `FixtureContext`, retain it, resolve `IEnumerable<IAssemblyFixture>`, order via `FixtureGraph`, run via `FixtureRunner`
+5. Create the `FixtureContext`, retain it, resolve `IEnumerable<IAssemblyFixture>` from the provider, and hand them to `FixtureRunner.RunAsync` — **which orders them**. Do not call `FixtureGraph` here
 6. Build `TokenResolver` **with the published keys**
 7. `FixtureValidation.Build`, writing the one aggregated message to `TestContext`
 
@@ -520,9 +555,27 @@ Task 8 is a transcript in a document. Every other claim of this weight in this r
 **Files:**
 - Modify: `tests/InTest.Golden.Tests/GeneratedSuiteExecutionTests.cs`
 
-- [ ] **Step 1: Make the stub stateful**
+- [ ] **Step 1: Make the stub stateful — and expect it to break a sibling test**
 
-The stub currently answers from a `switch` over the path. Give it a small in-memory store so it behaves like the API whose behaviour F7 exposed: a duplicate create returns **409**, and a delete followed by a fetch returns **404**.
+The stub answers from a `switch` over the path. Give it a small in-memory store so it behaves
+like the API whose behaviour F7 exposed: a duplicate create returns **409**, and a delete
+followed by a fetch returns **404**.
+
+**`FixtureParameterReachesALiveRequestEndToEnd` will break unless you handle it.** That test
+hand-fills the fixture with `"42"` and expects a pass, which works today only because the stub
+has a catch-all arm — `_ when path.StartsWith("/api/status/")` — returning 200 for *any* id.
+Once the store is stateful, an unseeded `42` becomes a 404 and that test fails for reasons
+nothing to do with repeatability.
+
+Choose deliberately and say which in your report:
+
+- **Pre-seed `42`** in the store, keeping that test asserting exactly what it asserts now; or
+- **Confine statefulness to the new create and delete paths**, leaving the existing
+  `/api/status/{id}` arm permissive.
+
+The second is narrower and preserves the existing test unchanged, which is usually the better
+trade — but either is defensible. What is not acceptable is discovering it mid-task, where it
+surfaces as an unexplained regression and reads like the reorder broke something.
 
 - [ ] **Step 2: Write the failing test**
 

@@ -20,7 +20,10 @@ public static class GenerateCommand
     internal static string CommonPathPrefix(Planning.TestPlan plan)
     {
         var paths = plan.Classes.SelectMany(c => c.Cases).Select(c => c.PathTemplate).ToList();
-        if (paths.Count == 0) return string.Empty;
+        if (paths.Count == 0)
+        {
+            return string.Empty;
+        }
 
         var segmentLists = paths
             .Select(p => p.Split('/', StringSplitOptions.RemoveEmptyEntries))
@@ -32,8 +35,14 @@ public static class GenerateCommand
         for (var i = 0; i < shortest; i++)
         {
             var candidate = segmentLists[0][i];
-            if (candidate.StartsWith('{')) break;
-            if (!segmentLists.All(s => string.Equals(s[i], candidate, StringComparison.OrdinalIgnoreCase))) break;
+            if (candidate.StartsWith('{'))
+            {
+                break;
+            }
+            if (!segmentLists.All(s => string.Equals(s[i], candidate, StringComparison.OrdinalIgnoreCase)))
+            {
+                break;
+            }
             shared.Add(candidate);
         }
 
@@ -80,7 +89,10 @@ public static class GenerateCommand
 
             var generated = Path.Combine(projectRoot, "Generated");
 
-            if (Directory.Exists(generated)) Directory.Delete(generated, recursive: true);
+            if (Directory.Exists(generated))
+            {
+                Directory.Delete(generated, recursive: true);
+            }
             Directory.CreateDirectory(generated);
 
             var renderer = new TemplateRenderer();
@@ -107,7 +119,9 @@ public static class GenerateCommand
 
             Console.WriteLine($"Generated {plan.Classes.Sum(c => c.Cases.Count)} test(s) across {plan.Classes.Count} class(es).");
             if (plan.Skipped.Count > 0)
+            {
                 Console.WriteLine($"Skipped {plan.Skipped.Count} operation(s) — see coverage-report.json.");
+            }
 
             return ExitOk;
         }
@@ -159,7 +173,9 @@ public static class GenerateCommand
                                      .ToList();
 
             if (missing.Count > 0)
+            {
                 messages.Add($"{testCase.OperationKey}: fixture is missing {string.Join(", ", missing)}.");
+            }
         }
 
         return messages;

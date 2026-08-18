@@ -4,17 +4,6 @@ using System.Text.Json.Nodes;
 namespace InTest.Runtime;
 
 /// <summary>
-/// Raised when a fixture file cannot be parsed. Fixtures are committed and hand-edited, so a
-/// malformed field — an unquoted number, a nested object where a string belongs — is a
-/// realistic typo, not adversarial input, and every failure names the offending field with its
-/// inner exception preserved, the same idiom <c>InTest.Cli.Fixtures.FixtureDocument</c> uses on
-/// the writer side. Letting a framework exception like <c>JsonException</c> escape instead would
-/// turn one malformed fixture into an unhandled crash for the whole suite at
-/// <c>AssemblyInitialize</c>.
-/// </summary>
-public sealed class FixtureFormatException(string message, Exception? inner = null) : Exception(message, inner);
-
-/// <summary>
 /// The runtime <em>read</em> model for a fixture. Deliberately separate from
 /// <c>InTest.Cli.Fixtures.FixtureDocument</c> — decision 5: <c>InTest.Runtime</c> is the library
 /// every generated test project takes a <c>PackageReference</c> on, so it never references
@@ -36,7 +25,9 @@ public sealed class Fixture
         catch (JsonException ex) { throw new FixtureFormatException($"Fixture is not valid JSON: {ex.Message}", ex); }
 
         if (root is not JsonObject obj)
+        {
             throw new FixtureFormatException("Fixture root must be a JSON object.");
+        }
 
         var fixture = new Fixture { Body = obj["body"]?.DeepClone() };
 
@@ -47,9 +38,11 @@ public sealed class Fixture
         if (obj["$parameters"] is { } parametersNode)
         {
             if (parametersNode is not JsonObject parameters)
+            {
                 throw new FixtureFormatException(
-                    $"Fixture '$parameters' must be a JSON object of name/value pairs, but found " +
-                    $"'{parametersNode.ToJsonString()}'. Regenerate it with `intest fixtures repair`.");
+                $"Fixture '$parameters' must be a JSON object of name/value pairs, but found " +
+                $"'{parametersNode.ToJsonString()}'. Regenerate it with `intest fixtures repair`.");
+            }
 
             foreach (var (key, value) in parameters)
             {

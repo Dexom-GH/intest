@@ -1,7 +1,6 @@
 using System.Text.Json;
 using InTest.Cli.Coverage;
 using InTest.Cli.Planning;
-using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Shouldly;
 
 namespace InTest.Cli.Tests;

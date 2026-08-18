@@ -19,12 +19,17 @@ public sealed record OperationKey(string Value, bool Synthesized)
         ArgumentNullException.ThrowIfNull(path);
 
         if (!string.IsNullOrWhiteSpace(declaredOperationId))
+        {
             return new OperationKey(declaredOperationId.Trim(), Synthesized: false);
+        }
 
         var sb = new StringBuilder(httpMethod.ToLowerInvariant());
         var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
 
-        if (segments.Length == 0) return new OperationKey(sb.Append("_root").ToString(), Synthesized: true);
+        if (segments.Length == 0)
+        {
+            return new OperationKey(sb.Append("_root").ToString(), Synthesized: true);
+        }
 
         foreach (var segment in segments)
         {
@@ -46,10 +51,16 @@ public sealed record OperationKey(string Value, bool Synthesized)
         {
             if (ch == '_')
             {
-                if (lastWasUnderscore) continue;
+                if (lastWasUnderscore)
+                {
+                    continue;
+                }
                 lastWasUnderscore = true;
             }
-            else lastWasUnderscore = false;
+            else
+            {
+                lastWasUnderscore = false;
+            }
             sb.Append(ch);
         }
 

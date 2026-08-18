@@ -3,16 +3,6 @@ using System.Text.Json.Nodes;
 namespace InTest.Cli.Fixtures;
 
 /// <summary>
-/// The result of comparing a committed fixture against what <see cref="FixtureComposer"/> would
-/// compose from the current schema. Never mutates either document — <see cref="Commands.FixturesRepairCommand"/>
-/// decides what to do with each list.
-/// </summary>
-public sealed record FixtureDriftResult(
-    IReadOnlyList<string> MissingProperties,
-    IReadOnlyList<string> StaleProperties,
-    IReadOnlyList<string> MissingParameters);
-
-/// <summary>
 /// Compares an existing, possibly hand-edited fixture against a freshly composed one for the
 /// same operation. Read-only by design: it reports what changed on either side, and leaves the
 /// decision of what to do about it — add, retain, report — to the caller (§10, decision in

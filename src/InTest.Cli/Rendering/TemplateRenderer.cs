@@ -64,7 +64,10 @@ public sealed class TemplateRenderer
     private static string QueryExpression(TestCasePlan plan)
     {
         var names = plan.QueryParameterNames ?? [];
-        if (names.Count == 0) return string.Empty;
+        if (names.Count == 0)
+        {
+            return string.Empty;
+        }
 
         var nameArgs = string.Join(", ", names.Select(n => $"\"{n}\""));
         return $" + InTestUrl.BuildQuery(FixtureQueryParameters(\"{plan.OperationKey}\", {nameArgs}))";

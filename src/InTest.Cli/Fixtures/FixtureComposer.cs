@@ -25,7 +25,10 @@ public static class FixtureComposer
     {
         ArgumentNullException.ThrowIfNull(operation);
 
-        if (HasJsonBodyToCompose(operation)) return true;
+        if (HasJsonBodyToCompose(operation))
+        {
+            return true;
+        }
 
         return (operation.Parameters ?? []).Any(p =>
             p.In is (ParameterLocation.Path or ParameterLocation.Query) && ParameterValue(p, null) is not null);
@@ -42,15 +45,23 @@ public static class FixtureComposer
         var parameters = new SortedDictionary<string, string>(StringComparer.Ordinal);
         foreach (var parameter in operation.Parameters ?? [])
         {
-            if (parameter.In is not (ParameterLocation.Path or ParameterLocation.Query)) continue;
+            if (parameter.In is not (ParameterLocation.Path or ParameterLocation.Query))
+            {
+                continue;
+            }
 
             var value = ParameterValue(parameter, tier);
-            if (value is not null) parameters[parameter.Name!] = value;
+            if (value is not null)
+            {
+                parameters[parameter.Name!] = value;
+            }
         }
 
         JsonNode? body = null;
         if (HasJsonBodyToCompose(operation))
+        {
             body = ComposeBody(operation.RequestBody!.Content![JsonMediaType], tier);
+        }
 
         return new FixtureDocument
         {
@@ -154,12 +165,18 @@ public static class FixtureComposer
     private static JsonNode? ComposeFromSchema(
         IOpenApiSchema? schema, string propertyName, TierTracker tier, HashSet<string> visitedRefs)
     {
-        if (schema is null) return null;
+        if (schema is null)
+        {
+            return null;
+        }
 
         if (schema is OpenApiSchemaReference reference)
         {
             var id = reference.Reference?.Id ?? string.Empty;
-            if (!visitedRefs.Add(id)) return null;
+            if (!visitedRefs.Add(id))
+            {
+                return null;
+            }
             try { return ComposeFromSchema(reference.Target, propertyName, tier, visitedRefs); }
             finally { visitedRefs.Remove(id); }
         }
@@ -185,14 +202,18 @@ public static class FixtureComposer
         }
 
         if (schema.Type?.HasFlag(JsonSchemaType.Array) is true && schema.Items is not null)
+        {
             return new JsonArray(ComposeFromSchema(schema.Items, propertyName, tier, visitedRefs));
+        }
 
         // Deliberately last — after the object and array checks, not before them. A schema can
         // legitimately carry both `type: object` (with its own `properties`) and an `allOf`; if
         // this check ran first it would divert into the union branch and silently drop those
         // declared properties instead of composing them.
         if (SoleUnionBranch(schema) is { } branch)
+        {
             return ComposeFromSchema(branch, propertyName, tier, visitedRefs);
+        }
 
         tier.Record(4);
         return JsonValue.Create($"TODO:{propertyName}");
@@ -232,7 +253,10 @@ public static class FixtureComposer
 
         public void Record(int candidateTier)
         {
-            if (candidateTier > Value) Value = candidateTier;
+            if (candidateTier > Value)
+            {
+                Value = candidateTier;
+            }
         }
     }
 }

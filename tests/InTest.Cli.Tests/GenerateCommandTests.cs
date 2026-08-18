@@ -1,5 +1,4 @@
 using InTest.Cli.Commands;
-using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Shouldly;
 
 namespace InTest.Cli.Tests;
@@ -35,7 +34,10 @@ public class GenerateCommandTests
     [TestCleanup]
     public void RemoveProject()
     {
-        if (Directory.Exists(_root)) Directory.Delete(_root, recursive: true);
+        if (Directory.Exists(_root))
+        {
+            Directory.Delete(_root, recursive: true);
+        }
     }
 
     private async Task<int> RunAsync() => await GenerateCommand.RunAsync(_root, CancellationToken.None);

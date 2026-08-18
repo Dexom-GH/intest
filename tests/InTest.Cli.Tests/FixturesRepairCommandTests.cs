@@ -1,6 +1,5 @@
 using InTest.Cli.Commands;
 using InTest.Cli.Fixtures;
-using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Shouldly;
 
 namespace InTest.Cli.Tests;
@@ -33,7 +32,10 @@ public class FixturesRepairCommandTests
     [TestCleanup]
     public void RemoveProject()
     {
-        if (Directory.Exists(_root)) Directory.Delete(_root, recursive: true);
+        if (Directory.Exists(_root))
+        {
+            Directory.Delete(_root, recursive: true);
+        }
     }
 
     private string FixturePath => Path.Combine(_root, "fixtures", "createProduct.json");

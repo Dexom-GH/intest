@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using InTest.Cli.Commands;
-using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Shouldly;
 
 namespace InTest.Golden.Tests;
@@ -56,7 +55,10 @@ public class CompileVerificationTests
     [TestCleanup]
     public void RemoveProject()
     {
-        if (Directory.Exists(_root)) Directory.Delete(_root, recursive: true);
+        if (Directory.Exists(_root))
+        {
+            Directory.Delete(_root, recursive: true);
+        }
     }
 
     [TestMethod]

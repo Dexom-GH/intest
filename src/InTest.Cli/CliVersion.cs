@@ -23,7 +23,10 @@ public static class CliVersion
             .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
             .InformationalVersion;
 
-        if (string.IsNullOrWhiteSpace(informational)) return "0.0.0";
+        if (string.IsNullOrWhiteSpace(informational))
+        {
+            return "0.0.0";
+        }
 
         var plusIndex = informational.IndexOf('+');
         return plusIndex >= 0 ? informational[..plusIndex] : informational;

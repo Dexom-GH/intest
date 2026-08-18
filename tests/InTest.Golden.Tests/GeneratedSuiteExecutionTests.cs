@@ -3,7 +3,6 @@ using System.Net;
 using System.Text;
 using System.Xml.Linq;
 using InTest.Cli.Commands;
-using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Shouldly;
 
 namespace InTest.Golden.Tests;
