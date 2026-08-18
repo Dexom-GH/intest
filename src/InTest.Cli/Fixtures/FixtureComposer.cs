@@ -182,7 +182,11 @@ public static class FixtureComposer
         if (schema.Type?.HasFlag(JsonSchemaType.Array) is true && schema.Items is not null)
             return new JsonArray(ComposeFromSchema(schema.Items, propertyName, tier, visitedRefs));
 
-        if (UnionBranch(schema) is { } branch)
+        // Deliberately last — after the object and array checks, not before them. A schema can
+        // legitimately carry both `type: object` (with its own `properties`) and an `allOf`; if
+        // this check ran first it would divert into the union branch and silently drop those
+        // declared properties instead of composing them.
+        if (SoleUnionBranch(schema) is { } branch)
             return ComposeFromSchema(branch, propertyName, tier, visitedRefs);
 
         tier.Record(4);
@@ -195,21 +199,25 @@ public static class FixtureComposer
     /// <c>oneOf: [{type: null}, {$ref: ...}]</c> — exactly what the built-in
     /// Microsoft.AspNetCore.OpenApi producer emits — and such a schema is not itself a reference,
     /// has no <c>example</c> or <c>default</c>, and no <c>type</c> of its own, so it falls through
-    /// every check above this one. Branches whose type is exactly <c>null</c> are discarded
-    /// first; if that leaves exactly one branch, it is unambiguously the answer. Zero remaining
-    /// branches, or more than one, is a genuine ambiguity that composing a value would be
-    /// guessing at, so this method returns <see langword="null"/> and the caller falls through to
-    /// the sentinel instead.
+    /// every check above this one. A branch that declares the JSON Schema <c>null</c> type
+    /// (<c>{"type": "null"}</c>) is discarded — that is not the same thing as a branch with no
+    /// declared type at all, such as a bare <c>$ref</c>, which is exactly the branch composition
+    /// needs to keep. If discarding null-typed branches leaves exactly one candidate, it is
+    /// unambiguously the answer. Zero remaining candidates, or more than one, is a genuine
+    /// ambiguity that composing a value would be guessing at, so this method returns
+    /// <see langword="null"/> and the caller falls through to the sentinel instead.
     /// </summary>
-    private static IOpenApiSchema? UnionBranch(IOpenApiSchema schema)
+    private static IOpenApiSchema? SoleUnionBranch(IOpenApiSchema schema)
     {
-        var branches = (schema.OneOf ?? [])
+        var candidates = (schema.OneOf ?? [])
             .Concat(schema.AnyOf ?? [])
             .Concat(schema.AllOf ?? [])
+            // Discards only branches that declare the JSON `null` type — not branches with no
+            // declared type at all (a bare $ref has none), which must survive the filter.
             .Where(branch => branch.Type != JsonSchemaType.Null)
             .ToList();
 
-        return branches.Count == 1 ? branches[0] : null;
+        return candidates.Count == 1 ? candidates[0] : null;
     }
 
     /// <summary>Tracks the worst (highest-numbered) tier used anywhere while composing a fixture.</summary>

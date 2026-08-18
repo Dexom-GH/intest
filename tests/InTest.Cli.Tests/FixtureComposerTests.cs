@@ -200,68 +200,64 @@ public class FixtureComposerTests
         fixture.Body["child"].ShouldBeNull("a repeated reference emits null and stops");
     }
 
+    // F6: an un-navigated oneOf/anyOf/allOf fell through every check in ComposeFromSchema and
+    // sentinelled the whole property as a string, hiding that it was really an object with its
+    // own required fields. The tests below pin the fix and the invariants it depends on.
+
     [TestMethod]
-    public async Task OneOfWithANullBranchComposesTheOtherBranchesSkeleton()
+    [DataRow("oneOf")]
+    [DataRow("anyOf")]
+    [DataRow("allOf")]
+    public async Task AUnionWithANullBranchComposesTheRemainingSchemaSkeleton(string keyword)
     {
         // OpenAPI 3.1's idiom for a nullable reference, and exactly what the built-in
-        // Microsoft.AspNetCore.OpenApi producer emits for a nullable request-body property.
-        const string spec = """
+        // Microsoft.AspNetCore.OpenApi producer emits for a nullable request-body property. All
+        // three union keywords are treated identically once null-only branches are discarded, so
+        // one parameterized spec covers all three rather than restating the same shape per
+        // keyword — see SoleUnionBranch in FixtureComposer.cs. A plain token substitution, not
+        // string interpolation, sidesteps the raw string literal's brace-counting rules against
+        // this much literal JSON.
+        const string specTemplate = """
         {
           "openapi":"3.1.0","info":{"title":"T","version":"1"},
           "paths":{"/p":{"post":{
             "requestBody":{"content":{"application/json":{"schema":{"type":"object",
-              "properties":{"dimensions":{"oneOf":[{"type":"null"},{"$ref":"#/components/schemas/Dimensions"}]}}}}}},
+              "properties":{"dimensions":{"__KEYWORD__":[{"type":"null"},{"$ref":"#/components/schemas/Dimensions"}]}}}}}},
             "responses":{"201":{"description":"ok"}}}}},
           "components":{"schemas":{"Dimensions":{"type":"object","properties":{
             "length":{"type":"number"},"width":{"type":"number"}}}}}
         }
         """;
+        var spec = specTemplate.Replace("__KEYWORD__", keyword);
 
         var fixture = await ComposeAsync(spec, "/p", "POST");
 
+        fixture.Meta.Tier.ShouldBe(4);
         fixture.Body!["dimensions"]!["length"]!.GetValue<string>().ShouldBe("TODO:length");
         fixture.Body["dimensions"]!["width"]!.GetValue<string>().ShouldBe("TODO:width");
     }
 
     [TestMethod]
-    public async Task AnyOfWithANullBranchComposesTheOtherBranchesSkeleton()
+    public async Task AUnionBranchWithAnExampleRecordsTier2NotASentinel()
     {
+        // Every other union test here bottoms out in a sentinel. Recursing into the surviving
+        // branch can just as well find a real example or default first — that value, and its
+        // tier, must come through unchanged; the union check must not force everything under it
+        // down to tier 4.
         const string spec = """
         {
           "openapi":"3.1.0","info":{"title":"T","version":"1"},
           "paths":{"/p":{"post":{
             "requestBody":{"content":{"application/json":{"schema":{"type":"object",
-              "properties":{"dimensions":{"anyOf":[{"type":"null"},{"$ref":"#/components/schemas/Dimensions"}]}}}}}},
-            "responses":{"201":{"description":"ok"}}}}},
-          "components":{"schemas":{"Dimensions":{"type":"object","properties":{
-            "length":{"type":"number"},"width":{"type":"number"}}}}}
+              "properties":{"currency":{"oneOf":[{"type":"null"},{"type":"string","example":"GBP"}]}}}}}},
+            "responses":{"201":{"description":"ok"}}}}}
         }
         """;
 
         var fixture = await ComposeAsync(spec, "/p", "POST");
 
-        fixture.Body!["dimensions"]!["length"]!.GetValue<string>().ShouldBe("TODO:length");
-        fixture.Body["dimensions"]!["width"]!.GetValue<string>().ShouldBe("TODO:width");
-    }
-
-    [TestMethod]
-    public async Task AllOfWithASingleBranchComposesThatSchema()
-    {
-        const string spec = """
-        {
-          "openapi":"3.1.0","info":{"title":"T","version":"1"},
-          "paths":{"/p":{"post":{
-            "requestBody":{"content":{"application/json":{"schema":{"type":"object",
-              "properties":{"dimensions":{"allOf":[{"$ref":"#/components/schemas/Dimensions"}]}}}}}},
-            "responses":{"201":{"description":"ok"}}}}},
-          "components":{"schemas":{"Dimensions":{"type":"object","properties":{
-            "length":{"type":"number"}}}}}
-        }
-        """;
-
-        var fixture = await ComposeAsync(spec, "/p", "POST");
-
-        fixture.Body!["dimensions"]!["length"]!.GetValue<string>().ShouldBe("TODO:length");
+        fixture.Meta.Tier.ShouldBe(2);
+        fixture.Body!["currency"]!.GetValue<string>().ShouldBe("GBP");
     }
 
     [TestMethod]
@@ -281,6 +277,7 @@ public class FixtureComposerTests
 
         var fixture = await ComposeAsync(spec, "/p", "POST");
 
+        fixture.Meta.Tier.ShouldBe(4);
         fixture.Body!["value"]!.GetValue<string>().ShouldBe("TODO:value");
     }
 
@@ -299,6 +296,7 @@ public class FixtureComposerTests
 
         var fixture = await ComposeAsync(spec, "/p", "POST");
 
+        fixture.Meta.Tier.ShouldBe(4);
         fixture.Body!["value"]!.GetValue<string>().ShouldBe("TODO:value");
     }
 
@@ -321,8 +319,36 @@ public class FixtureComposerTests
 
         // Asserted on observable output, not by racing a timeout — see
         // StopsAtARepeatedSchemaReference above for why a timeout guard would be unsound here.
+        fixture.Meta.Tier.ShouldBe(4);
         fixture.Body!["name"]!.GetValue<string>().ShouldBe("TODO:name");
         fixture.Body["next"].ShouldBeNull("a self-referencing union branch emits null and stops");
+    }
+
+    [TestMethod]
+    public async Task ComposesItsOwnPropertiesEvenWhenAnAllOfIsAlsoPresent()
+    {
+        // Pins the placement invariant on the union check in ComposeFromSchema: it runs only
+        // after the object check, so a schema declaring both `type: object` (with its own
+        // properties) and an allOf still composes those declared properties instead of diverting
+        // into the allOf branch. Moving the union check earlier would pass every other test in
+        // this file while silently dropping "sku" here.
+        const string spec = """
+        {
+          "openapi":"3.1.0","info":{"title":"T","version":"1"},
+          "paths":{"/p":{"post":{
+            "requestBody":{"content":{"application/json":{"schema":{"type":"object",
+              "properties":{"item":{"type":"object","properties":{"sku":{"type":"string"}},
+                "allOf":[{"$ref":"#/components/schemas/Base"}]}}}}}},
+            "responses":{"201":{"description":"ok"}}}}},
+          "components":{"schemas":{"Base":{"type":"object","properties":{
+            "id":{"type":"string"}}}}}
+        }
+        """;
+
+        var fixture = await ComposeAsync(spec, "/p", "POST");
+
+        fixture.Meta.Tier.ShouldBe(4);
+        fixture.Body!["item"]!["sku"]!.GetValue<string>().ShouldBe("TODO:sku");
     }
 
     private const string NeedsFixtureSpec = """
