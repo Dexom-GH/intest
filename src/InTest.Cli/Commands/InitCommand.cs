@@ -119,9 +119,11 @@ public static class InitCommand
                 await TestHost.CleanupAsync(context);
             }
 
-            /// <summary>Team-owned registrations. Add configuration providers here. A secured
-            /// API needs a DelegatingHandler appended to InTestClients.Api — ITestTokenProvider
-            /// is not wired up yet. See "Auth" in Phase 3 of getting-started.md for a worked
+            /// <summary>Team-owned registrations. Add configuration providers here. AuthHandler
+            /// is already attached to InTestClients.Api; a secured API needs only an
+            /// ITestTokenProvider registered below — do not also append a DelegatingHandler of
+            /// your own, or two handlers will set Authorization and the last one registered
+            /// silently wins. See "Auth" in Phase 3 of getting-started.md for a worked
             /// example.</summary>
             private static void Register(IServiceCollection services, IConfiguration configuration)
             {

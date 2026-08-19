@@ -5,7 +5,7 @@ public sealed class StaticTokenProvider(string token, string identityName = "def
 {
     private readonly string _token = token ?? throw new ArgumentNullException(nameof(token));
 
-    public IReadOnlyCollection<string> Identities { get; } = [identityName];
+    public IReadOnlyList<string> Identities { get; } = [identityName];
 
     public Task<string> GetTokenAsync(string audience, string? identity = null, CancellationToken cancellationToken = default)
     {

@@ -32,6 +32,13 @@ public abstract class ApiTestBase
     {
         _scope = TestHost.Root.CreateScope();
         InTestAmbient.TestId.Value = TestId;
+
+        // The Default slot, resolved (v1-c decision 7): every test authenticates as this unless
+        // a generated auth case overrides it before sending its request. Resolved here, once per
+        // test, from whatever ITestTokenProvider the generated project registered — never a
+        // literal identity name, since the CLI that generated this suite could not have known one.
+        InTestAmbient.Identity.Value = ResolveDefaultIdentity(_scope.ServiceProvider.GetService<ITestTokenProvider>());
+
         Client = _scope.ServiceProvider.GetRequiredService<IHttpClientFactory>().CreateClient(InTestClients.Api);
     }
 
@@ -39,8 +46,27 @@ public abstract class ApiTestBase
     public void ApiTestCleanup()
     {
         InTestAmbient.TestId.Value = null;
+        InTestAmbient.Identity.Value = null;
         _scope.Dispose();
     }
+
+    /// <summary>
+    /// The Default slot resolved to a concrete identity (v1-c decision 7): <c>Identities[0]</c>
+    /// when the provider advertises at least one, otherwise <see cref="InTestIdentities.None"/> —
+    /// including when <paramref name="provider"/> itself is null, which is the ordinary state for
+    /// every spec that declares no <c>security</c> (question (b), and Catalog/Inventory's own
+    /// scaffolds). <c>ITestTokenProvider.Identities</c>'s own doc already documents a count of
+    /// zero as contemplated, not an error; indexing <c>Identities[0]</c> without this check would
+    /// throw <see cref="ArgumentOutOfRangeException"/> here, in <c>[TestInitialize]</c>, before a
+    /// single request is built — for every test in the suite, not just the auth ones.
+    /// <para>
+    /// Pulled out as an internal, dependency-free seam — rather than left inline in
+    /// <see cref="ApiTestInitialize"/> — because that method needs a live <c>TestHost.Root</c> to
+    /// exercise at all, and this decision deserves its own test independent of that weight.
+    /// </para>
+    /// </summary>
+    internal static string ResolveDefaultIdentity(ITestTokenProvider? provider) =>
+        provider?.Identities is { Count: > 0 } identities ? identities[0] : InTestIdentities.None;
 
     /// <summary>
     /// Generated tests call this before building a request. Consults the aggregated validation

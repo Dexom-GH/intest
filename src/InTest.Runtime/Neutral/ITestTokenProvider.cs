@@ -7,11 +7,29 @@ namespace InTest.Runtime;
 public interface ITestTokenProvider
 {
     /// <summary>
-    /// Identities this provider can issue tokens for. A count of one or zero gates the
+    /// Identities this provider can issue tokens for, in order. A count of one or zero gates the
     /// wrong-scope and wrong-tenant auth tests off, and is the source of the coverage
     /// report's gated-test count. A declared capability, never a probe.
+    /// <para>
+    /// <c>IReadOnlyList</c>, not <c>IReadOnlyCollection</c>: the CLI generates test code long
+    /// before an adopter has written a provider, so generated code can never reference an
+    /// identity by name — only by position (v1-c decision 7). Index 0 is therefore the default
+    /// identity every ordinary case authenticates as; index 1, when present, is "some other
+    /// identity" the wrong-scope 403 case selects. This is a breaking change from the
+    /// <c>IReadOnlyCollection</c> this shipped as, made while nothing outside this repository
+    /// implements the interface yet — the last point at which it was free. From the first
+    /// published version onward, this ordering is a semver promise (§3), not an implementation
+    /// detail.
+    /// </para>
     /// </summary>
-    IReadOnlyCollection<string> Identities { get; }
+    IReadOnlyList<string> Identities { get; }
 
+    /// <param name="audience">The token's intended audience — configuration's <c>Api:Audience</c>,
+    /// falling back to the base URL's authority (v1-c Task 2 question (c)).</param>
+    /// <param name="identity">One of <see cref="Identities"/>, selecting which identity to issue
+    /// a token for. Null means the provider's own default — <see cref="AuthHandler"/> passes null
+    /// through unchanged whenever <c>InTestAmbient.Identity</c> is unset, rather than resolving it
+    /// to <c>Identities[0]</c> itself.</param>
+    /// <param name="cancellationToken"></param>
     Task<string> GetTokenAsync(string audience, string? identity = null, CancellationToken cancellationToken = default);
 }

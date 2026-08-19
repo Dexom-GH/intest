@@ -94,20 +94,24 @@ public class InitCommandTests
     }
 
     [TestMethod]
-    public void RegisterCommentPointsAtTheAuthMechanismThatActuallyWorks()
+    public void RegisterCommentPointsAtImplementingITestTokenProviderNowThatAuthHandlerConsumesIt()
     {
         InitCommand.Run(_root, "Orders.ApiTests", "orders.json");
 
-        // ITestTokenProvider has no consumers (F8): nothing calls GetTokenAsync, so telling an
-        // adopter to implement it teaches a dead extension point. The comment must instead
-        // point at the DelegatingHandler-on-InTestClients.Api mechanism that getting-started's
-        // Phase 3 "Auth" section documents as working today.
+        // Task 2 question (e): AuthHandler now ships attached to InTestClients.Api, so telling
+        // an adopter to append their own DelegatingHandler there produces two handlers both
+        // setting Authorization, where the last one registered silently wins. The comment must
+        // say AuthHandler is already attached and that only ITestTokenProvider needs
+        // implementing — the instruction this same comment told people NOT to follow before
+        // AuthHandler existed to consume it.
         var scaffold = File.ReadAllText(Path.Combine(_root, "TestStartup.cs"));
 
-        scaffold.ShouldContain("DelegatingHandler",
-            customMessage: "a scaffold must not teach a dead API; it must point at the auth mechanism that works");
+        scaffold.ShouldContain("AuthHandler",
+            customMessage: "the scaffold must say AuthHandler is already attached, not send an adopter to write their own");
+        scaffold.ShouldContain("ITestTokenProvider",
+            customMessage: "the scaffold must point at the extension point that now actually works");
         scaffold.ShouldContain("InTestClients.Api",
-            customMessage: "a scaffold must not teach a dead API; it must point at the auth mechanism that works");
+            customMessage: "the scaffold must still name the client AuthHandler is attached to");
     }
 
     [TestMethod]

@@ -87,4 +87,62 @@ public class InTestClientsTests
 
         throwing.Ran.ShouldBeFalse("a handler attached to InTestClients.Api must never run for the readiness probe");
     }
+
+    /// <summary>Records the request it saw so a test can inspect headers a handler upstream of
+    /// it set, and answers 200 without any real network traffic.</summary>
+    private sealed class CapturingHandler : HttpMessageHandler
+    {
+        public HttpRequestMessage? SeenRequest;
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            SeenRequest = request;
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
+        }
+    }
+
+    /// <summary>
+    /// Task 2's own wiring, proven the same way F10's fix above is: through
+    /// <see cref="TestHost.RegisterInTestClients"/> itself, not a hand-duplicated copy of its
+    /// registrations. A provider is registered and reachable here, so a wiring mistake that put
+    /// <see cref="AuthHandler"/> on the wrong client — or on neither — would show up as a
+    /// missing or misplaced header, not as an exception.
+    /// </summary>
+    [TestMethod]
+    public async Task ApiClientCarriesAuthHandlerButReadinessDoesNotEvenWhenAProviderIsRegistered()
+    {
+        var apiInner = new CapturingHandler();
+        var readinessInner = new CapturingHandler();
+
+        var services = new ServiceCollection();
+        services.AddTransient(_ => new RunIdHandler(() => "run-1"));
+        services.AddSingleton<ITestTokenProvider>(new StaticTokenProvider("tok-abc"));
+        services.AddTransient(sp => new AuthHandler(sp.GetService<ITestTokenProvider>(), "api://orders"));
+
+        // The exact registration TestHost.InitializeAsync performs, via the seam it calls.
+        TestHost.RegisterInTestClients(services, new Uri("https://h.invalid/api/"));
+
+        services.AddHttpClient(InTestClients.Api).ConfigurePrimaryHttpMessageHandler(() => apiInner);
+        services.AddHttpClient(InTestClients.Readiness).ConfigurePrimaryHttpMessageHandler(() => readinessInner);
+
+        using var provider = services.BuildServiceProvider();
+        using var scope = provider.CreateScope();
+        var factory = scope.ServiceProvider.GetRequiredService<IHttpClientFactory>();
+
+        InTestAmbient.Identity.Value = "default";
+        try
+        {
+            await factory.CreateClient(InTestClients.Api).GetAsync("https://h.invalid/api/orders");
+            await factory.CreateClient(InTestClients.Readiness).GetAsync("https://h.invalid/api/health/ready");
+        }
+        finally
+        {
+            InTestAmbient.Identity.Value = null;
+        }
+
+        apiInner.SeenRequest!.Headers.Authorization.ShouldNotBeNull(
+            "AuthHandler must be attached to InTestClients.Api — this is F8's whole point");
+        readinessInner.SeenRequest!.Headers.Authorization.ShouldBeNull(
+            "AuthHandler must never reach the anonymous readiness probe (F10, decision 1)");
+    }
 }

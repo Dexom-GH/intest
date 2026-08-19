@@ -97,6 +97,14 @@ public static class TestHost
             ?? throw new InvalidOperationException(
                 $"Api:BaseUrl is not configured for profile '{Profile}'."));
 
+        // Task 2 question (c): Api:Audience, falling back to the base URL's authority — not the
+        // spec's security-scheme audience, since OpenAPI OAuth2 flows carry tokenUrl and scopes,
+        // not reliably an audience. sp.GetService (not GetRequiredService) is question (b):
+        // Catalog and Inventory declare no `security` and register no provider, so AuthHandler
+        // must be constructible, and must no-op, when none is there.
+        var audience = Configuration["Api:Audience"] ?? baseUrl.Authority;
+        services.AddTransient(sp => new AuthHandler(sp.GetService<ITestTokenProvider>(), audience));
+
         RegisterInTestClients(services, baseUrl);
 
         ConfigureServices?.Invoke(services, Configuration);
@@ -187,8 +195,9 @@ public static class TestHost
 
     /// <summary>
     /// Registers InTest's two named HTTP clients — <see cref="InTestClients.Api"/> and
-    /// <see cref="InTestClients.Readiness"/> — against the same <paramref name="baseUrl"/>, both
-    /// carrying only <see cref="RunIdHandler"/>. Extracted from <see cref="InitializeAsync"/> as
+    /// <see cref="InTestClients.Readiness"/> — against the same <paramref name="baseUrl"/>.
+    /// Both carry <see cref="RunIdHandler"/>; only <see cref="InTestClients.Api"/> also carries
+    /// <see cref="AuthHandler"/> (Task 2, F8). Extracted from <see cref="InitializeAsync"/> as
     /// an internal seam (the csproj's own <c>InternalsVisibleTo</c> comment explains why an
     /// internal seam is sanctioned here) so <c>InTest.Runtime.Tests</c> can prove that the
     /// registration this method performs — not a hand-duplicated copy of it — keeps a handler an
@@ -197,13 +206,14 @@ public static class TestHost
     /// whole is still not given an in-process harness — see <c>TestHostTests</c>'s note on
     /// <c>ContextTextWriter</c> for why — but this narrower seam needs none of what makes that
     /// true: no <c>AppContext.BaseDirectory</c>, no real <see cref="TestContext"/>, no live HTTP.
-    /// Requires <see cref="RunIdHandler"/> already registered in <paramref name="services"/>;
-    /// this method only wires the two named clients to it.
+    /// Requires <see cref="RunIdHandler"/> and <see cref="AuthHandler"/> already registered in
+    /// <paramref name="services"/>; this method only wires the two named clients to them.
     /// </summary>
     internal static void RegisterInTestClients(IServiceCollection services, Uri baseUrl)
     {
         services.AddHttpClient(InTestClients.Api, client => client.BaseAddress = baseUrl)
-                .AddHttpMessageHandler<RunIdHandler>();
+                .AddHttpMessageHandler<RunIdHandler>()
+                .AddHttpMessageHandler<AuthHandler>();
 
         // Separate from Api so that the one attachment point the scaffold documents and adopters
         // actually use — InTestClients.Api, via ConfigureServices — cannot carry an auth handler
@@ -211,10 +221,10 @@ public static class TestHost
         // that: named-HttpClient configuration is additive IConfigureNamedOptions applied at
         // CreateClient time, independent of which AddHttpClient call ran first, so nothing stops
         // a ConfigureServices that deliberately names InTestClients.Readiness from attaching to
-        // it too. A future task adding AuthHandler must attach it to InTestClients.Api by name —
-        // never assume this ordering keeps it off the probe. RunIdHandler stays regardless: probe
-        // traffic should still carry X-Test-Run-Id and remain traceable, and it never throws
-        // regardless of identity-provider health, unlike an auth handler would.
+        // it too. AuthHandler is attached to InTestClients.Api by name, above, precisely so this
+        // ordering is never load-bearing. RunIdHandler stays regardless: probe traffic should
+        // still carry X-Test-Run-Id and remain traceable, and it never throws regardless of
+        // identity-provider health, unlike AuthHandler would if it were attached here too.
         services.AddHttpClient(InTestClients.Readiness, client => client.BaseAddress = baseUrl)
                 .AddHttpMessageHandler<RunIdHandler>();
     }
