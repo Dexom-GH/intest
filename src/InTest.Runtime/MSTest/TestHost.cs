@@ -91,7 +91,12 @@ public static class TestHost
         // adopter's ConfigureServices can only ever reach InTestClients.Api, never this one
         // (F10). RunIdHandler stays: probe traffic should still carry X-Test-Run-Id and remain
         // traceable, and it never throws regardless of identity-provider health, unlike an auth
-        // handler would.
+        // handler would. Hoisting baseUrl out of both AddHttpClient lambdas so the two
+        // registrations share one normalized value also moves the missing-Api:BaseUrl throw
+        // above from lazy (previously raised inside a configure lambda, the first time
+        // CreateClient ran) to eager, at registration, here — before ConfigureServices and
+        // SchemaBundle.FromFile. Nothing in this task asked for that reordering; it is a side
+        // effect of the hoist worth naming rather than leaving silent.
         services.AddHttpClient(InTestClients.Readiness, client => client.BaseAddress = baseUrl)
                 .AddHttpMessageHandler<RunIdHandler>();
 
@@ -102,8 +107,9 @@ public static class TestHost
 
         // Fail on a base URL that repeats a prefix the spec's paths already carry, before a
         // single request is sent. The alternative is every test returning 404 with no clue why.
-        InTestUrl.EnsureNoPrefixDuplication(
-            InTestUrl.NormalizeBase(Configuration["Api:BaseUrl"]!), ReadOperationPathPrefix());
+        // Reuses the baseUrl computed above rather than re-normalizing Configuration["Api:BaseUrl"]
+        // a second time.
+        InTestUrl.EnsureNoPrefixDuplication(baseUrl, ReadOperationPathPrefix());
 
         var readiness = new ReadinessOptions();
         Configuration.GetSection("InTest:Readiness").Bind(readiness);
