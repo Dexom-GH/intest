@@ -11,6 +11,12 @@ public static class TestPlanBuilder
     private const string DefaultTag = "Default";
     private const string ContractCategory = "Contract";
 
+    // Decision 5: v1-c generates a declared-error case for 404 only. 400 has no deterministic
+    // fixture-free trigger; 401/403 are the auth cases' territory (Task 5); everything else needs
+    // conflicting state or input this plan does not create. Widening this set is a scope
+    // decision for a later plan, not a constant to extend casually.
+    private const int NotFoundStatus = 404;
+
     /// <summary>Statuses that carry no body by definition, so a missing schema is correct
     /// rather than a gap.</summary>
     private static readonly HashSet<int> BodilessStatuses = [204, 205, 304];
@@ -63,8 +69,9 @@ public static class TestPlanBuilder
                     ? CSharpIdentifier.ToPascalCase(t)
                     : DefaultTag;
 
+                var pathParameterNames = PathParameters(path);
                 var methodName = CSharpIdentifier.ToPascalCase(key.Value) + "_Contract";
-                proposedNames[key.Value] = methodName;
+                proposedNames[CaseIdentity(key.Value, CaseRole.Success)] = methodName;
 
                 draft.Add((tag, new TestCasePlan(
                     MethodName: methodName,
@@ -73,13 +80,52 @@ public static class TestPlanBuilder
                     OperationKeySynthesized: key.Synthesized,
                     HttpMethod: method.Method.ToUpperInvariant(),
                     PathTemplate: path,
-                    PathParameterNames: PathParameters(path),
+                    PathParameterNames: pathParameterNames,
                     ExpectedStatus: status,
                     SchemaKey: schemaKey,
                     Category: ContractCategory,
+                    Role: CaseRole.Success,
                     NeedsFixture: needsFixture,
                     QueryParameterNames: QueryParameters(operation),
                     HasRequestBody: FixtureComposer.HasJsonBodyToCompose(operation))));
+
+                // Declared-error cases come only from what the spec itself declares (decision 5)
+                // — reached only once the success case above is confirmed generated, so a
+                // declared-error case can never outlive an operation this method already skipped
+                // (the `continue`s above it) and the two can never disagree about the operation.
+                if (FindDeclaredResponse(operation, NotFoundStatus) is { } notFoundResponse)
+                {
+                    if (pathParameterNames.Count == 0)
+                    {
+                        // Nowhere to put an unmatchable value — telling a lookup query parameter
+                        // from a filter is itself a guess, so this is noted rather than guessed at.
+                        skipped.Add(new SkippedOperation(key.Value,
+                            $"declares {NotFoundStatus} but has no path parameter to target with an unmatchable value"));
+                    }
+                    else
+                    {
+                        var notFoundMethodName = CSharpIdentifier.ToPascalCase(key.Value) + "_NotFound";
+                        proposedNames[CaseIdentity(key.Value, CaseRole.DeclaredError)] = notFoundMethodName;
+
+                        draft.Add((tag, new TestCasePlan(
+                            MethodName: notFoundMethodName,
+                            DisplayName: $"Given {tag}, when {key.Value}, then {NotFoundStatus}",
+                            OperationKey: key.Value,
+                            OperationKeySynthesized: key.Synthesized,
+                            HttpMethod: method.Method.ToUpperInvariant(),
+                            PathTemplate: path,
+                            PathParameterNames: pathParameterNames,
+                            ExpectedStatus: NotFoundStatus,
+                            SchemaKey: ResolveSchemaKey(notFoundResponse, NotFoundStatus, key.Value),
+                            Category: ContractCategory,
+                            Role: CaseRole.DeclaredError,
+                            // Decision 6: an unmatchable generated id and no body, never a
+                            // fixture value — so an unfilled fixture can never block a test that
+                            // needs no data, and a broken generator can never delete or mutate
+                            // real state through this case.
+                            NeedsFixture: false)));
+                    }
+                }
             }
         }
 
@@ -91,7 +137,7 @@ public static class TestPlanBuilder
             .Select(g => new TestClassPlan(
                 ClassName: g.Key + "Tests",
                 Tag: g.Key,
-                Cases: g.Select(d => d.Case with { MethodName = deduped[d.Case.OperationKey] })
+                Cases: g.Select(d => d.Case with { MethodName = deduped[CaseIdentity(d.Case.OperationKey, d.Case.Role)] })
                         .OrderBy(c => c.MethodName, StringComparer.Ordinal)
                         .ToList()))
             .ToList();
@@ -100,6 +146,34 @@ public static class TestPlanBuilder
             document.Info?.Title ?? "Api",
             classes,
             skipped.OrderBy(s => s.OperationKey, StringComparer.Ordinal).ToList());
+    }
+
+    /// <summary>
+    /// The dedupe dictionary's key (decision 4): operation key alone collapses a success case and
+    /// its declared-error sibling onto the same entry, so every case for that operation is
+    /// reassigned the same final <c>MethodName</c> — CS0111 the moment an operation has more than
+    /// one case. Combining role into the key keeps each case's proposed name — and, when a real
+    /// collision with another operation's name exists, its hash suffix — independent of its
+    /// siblings.
+    /// </summary>
+    private static string CaseIdentity(string operationKey, CaseRole role) => $"{operationKey}#{role}";
+
+    private static IOpenApiResponse? FindDeclaredResponse(OpenApiOperation operation, int status)
+    {
+        if (operation.Responses is null)
+        {
+            return null;
+        }
+
+        foreach (var (code, response) in operation.Responses)
+        {
+            if (int.TryParse(code, out var parsed) && parsed == status)
+            {
+                return response;
+            }
+        }
+
+        return null;
     }
 
     private static (int Status, IOpenApiResponse Response)? SelectSuccessResponse(OpenApiOperation operation)

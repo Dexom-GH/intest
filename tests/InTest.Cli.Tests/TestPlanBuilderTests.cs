@@ -195,4 +195,225 @@ public class TestPlanBuilderTests
         plan.Skipped.ShouldBeEmpty();
         plan.Classes.SelectMany(c => c.Cases).Count().ShouldBe(1);
     }
+
+    // --- Declared-error cases (decision 5): 404 only, and only with a path parameter. ---
+
+    private static async Task<TestPlan> BuildAsync(string spec)
+        => TestPlanBuilder.Build((await SpecLoader.LoadFromTextAsync(spec)).Document);
+
+    private const string SpecDeclaring404 = """
+    {
+      "openapi": "3.0.3",
+      "info": { "title": "Orders", "version": "1.0" },
+      "paths": {
+        "/orders/{id}": {
+          "get": {
+            "operationId": "getOrderById",
+            "tags": ["Orders"],
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+            "responses": {
+              "200": { "description": "ok", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/Order" } } } },
+              "404": { "description": "not found" }
+            }
+          }
+        }
+      },
+      "components": { "schemas": { "Order": { "type": "object" } } }
+    }
+    """;
+
+    [TestMethod]
+    public async Task EmitsADeclaredErrorCaseFor404WhenTheOperationHasAPathParameter()
+    {
+        var plan = await BuildAsync(SpecDeclaring404);
+        var cases = plan.Classes.SelectMany(c => c.Cases).Where(c => c.OperationKey == "getOrderById").ToList();
+
+        cases.ShouldContain(c => c.ExpectedStatus == 404 && c.Role == CaseRole.DeclaredError);
+    }
+
+    [TestMethod]
+    public async Task NamesTheDeclaredErrorCaseByItsStatusRatherThanACollisionSuffix()
+    {
+        // "GetOrderById_NotFound", not "GetOrderById_Contract2" — decision 4's dedupe machinery
+        // must never be what names a genuinely distinct case; only real name collisions get a
+        // hash suffix.
+        var plan = await BuildAsync(SpecDeclaring404);
+        var notFound = plan.Classes.SelectMany(c => c.Cases).Single(c => c.ExpectedStatus == 404);
+
+        notFound.MethodName.ShouldBe("GetOrderById_NotFound");
+    }
+
+    [TestMethod]
+    public async Task TheDeclaredErrorMethodNameIsStableAcrossRebuilds()
+    {
+        var first = (await BuildAsync(SpecDeclaring404)).Classes.SelectMany(c => c.Cases).Single(c => c.ExpectedStatus == 404);
+        var second = (await BuildAsync(SpecDeclaring404)).Classes.SelectMany(c => c.Cases).Single(c => c.ExpectedStatus == 404);
+
+        first.MethodName.ShouldBe(second.MethodName);
+    }
+
+    [TestMethod]
+    public async Task ANotFoundCaseUsesAnUnmatchableIdRatherThanAFixture()
+    {
+        var plan = await BuildAsync(SpecDeclaring404);
+        var notFound = plan.Classes.SelectMany(c => c.Cases).Single(c => c.ExpectedStatus == 404);
+
+        // A 404 test needs no data, so it must not be blocked by an unfilled fixture. Decision 6.
+        notFound.NeedsFixture.ShouldBeFalse();
+    }
+
+    [TestMethod]
+    public async Task TheSuccessCaseIsUnaffectedByTheDeclaredErrorCaseItGainsANeighbour()
+    {
+        var plan = await BuildAsync(SpecDeclaring404);
+        var success = plan.Classes.SelectMany(c => c.Cases).Single(c => c.Role == CaseRole.Success);
+
+        success.MethodName.ShouldBe("GetOrderById_Contract");
+        success.ExpectedStatus.ShouldBe(200);
+    }
+
+    [TestMethod]
+    public async Task DoesNotGenerateADeclaredErrorCaseFor400()
+    {
+        // No deterministic fixture-free trigger exists for 400 — sending the valid success
+        // request would assert 400 against a 200 on every run.
+        const string spec = """
+        {
+          "openapi": "3.0.3",
+          "info": { "title": "Orders", "version": "1.0" },
+          "paths": {
+            "/orders/{id}": {
+              "get": {
+                "operationId": "getOrderById",
+                "tags": ["Orders"],
+                "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+                "responses": {
+                  "200": { "description": "ok", "content": { "application/json": {
+                    "schema": { "$ref": "#/components/schemas/Order" } } } },
+                  "400": { "description": "bad request" }
+                }
+              }
+            }
+          },
+          "components": { "schemas": { "Order": { "type": "object" } } }
+        }
+        """;
+
+        var plan = await BuildAsync(spec);
+        var cases = plan.Classes.SelectMany(c => c.Cases).Where(c => c.OperationKey == "getOrderById").ToList();
+
+        cases.Count.ShouldBe(1);
+        cases.ShouldNotContain(c => c.Role == CaseRole.DeclaredError);
+    }
+
+    [TestMethod]
+    [DataRow("401")]
+    [DataRow("403")]
+    public async Task DoesNotGenerateADeclaredErrorCaseForAuthOwnedStatuses(string authStatus)
+    {
+        // The auth cases (Task 5) already own 401/403. A declared-error case here would send a
+        // valid authenticated request and assert 401/403 against it — failing on every run.
+        var spec = $$"""
+        {
+          "openapi": "3.0.3",
+          "info": { "title": "Orders", "version": "1.0" },
+          "paths": {
+            "/orders/{id}": {
+              "get": {
+                "operationId": "getOrderById",
+                "tags": ["Orders"],
+                "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+                "responses": {
+                  "200": { "description": "ok", "content": { "application/json": {
+                    "schema": { "$ref": "#/components/schemas/Order" } } } },
+                  "{{authStatus}}": { "description": "denied" }
+                }
+              }
+            }
+          },
+          "components": { "schemas": { "Order": { "type": "object" } } }
+        }
+        """;
+
+        var plan = await BuildAsync(spec);
+        var cases = plan.Classes.SelectMany(c => c.Cases).Where(c => c.OperationKey == "getOrderById").ToList();
+
+        cases.Count.ShouldBe(1);
+        cases.ShouldNotContain(c => c.Role == CaseRole.DeclaredError);
+    }
+
+    [TestMethod]
+    public async Task SkipsAndNotesA404WithNoPathParameterRatherThanGuessingWhereToPutAnUnmatchableValue()
+    {
+        const string spec = """
+        {
+          "openapi": "3.0.3",
+          "info": { "title": "Orders", "version": "1.0" },
+          "paths": {
+            "/orders": {
+              "get": {
+                "operationId": "listOrders",
+                "tags": ["Orders"],
+                "responses": {
+                  "200": { "description": "ok", "content": { "application/json": {
+                    "schema": { "type": "array", "items": { "$ref": "#/components/schemas/Order" } } } } },
+                  "404": { "description": "not found" }
+                }
+              }
+            }
+          },
+          "components": { "schemas": { "Order": { "type": "object" } } }
+        }
+        """;
+
+        var plan = await BuildAsync(spec);
+
+        var cases = plan.Classes.SelectMany(c => c.Cases).Where(c => c.OperationKey == "listOrders").ToList();
+        cases.Count.ShouldBe(1, "the success case must still generate — only the declared-error case is affected");
+        cases.ShouldNotContain(c => c.Role == CaseRole.DeclaredError);
+
+        plan.Skipped.ShouldContain(s => s.OperationKey == "listOrders" && s.Reason.Contains("404"),
+            "a silently dropped 404 case is indistinguishable from a bug");
+    }
+
+    [TestMethod]
+    public async Task NeitherStatusDeclaredMeansOnlyTheSuccessCase()
+    {
+        var plan = await BuildAsync(Spec);
+        var cases = plan.Classes.SelectMany(c => c.Cases).Where(c => c.OperationKey == "getOrderById").ToList();
+
+        cases.Count.ShouldBe(1);
+        cases.Single().Role.ShouldBe(CaseRole.Success);
+    }
+
+    [TestMethod]
+    public async Task SkipsTheDeclaredErrorCaseWhenTheSuccessCaseWasAlsoSkipped()
+    {
+        // An operation whose operationId cannot be a fixture filename is skipped entirely before
+        // any case is built (SkipsAnOperationWhoseIdCannotBeAFixtureFileName above) — the
+        // declared-error case must never appear on its own once the success case it would sit
+        // beside was never generated, so the two can never disagree about the operation.
+        const string spec = """
+        {
+          "openapi":"3.0.3","info":{"title":"T","version":"1"},
+          "paths":{
+            "/a/{id}":{"get":{"operationId":"Orders/Get",
+              "parameters":[{"name":"id","in":"path","required":true,"schema":{"type":"string"}}],
+              "responses":{
+                "200":{"description":"ok"},
+                "404":{"description":"not found"}
+              }}}}
+        }
+        """;
+
+        var plan = await BuildAsync(spec);
+
+        plan.Skipped.ShouldContain(sk => sk.OperationKey == "Orders/Get" && sk.Reason.Contains("'/'"));
+        plan.Classes.SelectMany(c => c.Cases).ShouldNotContain(c => c.OperationKey == "Orders/Get");
+
+        // Exactly one skip reason for this operation, not two — the fixture-key skip alone
+        // explains its absence; a second, 404-shaped skip reason would say the two disagreed.
+        plan.Skipped.Count(sk => sk.OperationKey == "Orders/Get").ShouldBe(1);
+    }
 }

@@ -1,5 +1,16 @@
 namespace InTest.Cli.Planning;
 
+/// <summary>
+/// What a case's <see cref="TestCasePlan.ExpectedStatus"/> represents. Declared errors are never
+/// inferred (decision 5) — a case exists in this role only because the spec itself declared the
+/// response InTest generated it from. Task 5 adds <c>Auth</c>; v1-c generates only these two.
+/// </summary>
+public enum CaseRole
+{
+    Success,
+    DeclaredError
+}
+
 public sealed record TestCasePlan(
     string MethodName,
     string DisplayName,
@@ -11,6 +22,15 @@ public sealed record TestCasePlan(
     int ExpectedStatus,
     string? SchemaKey,
     string Category,
+    // Part of the case's identity, not a derived property computed at render time — decision 4.
+    // TestPlanBuilder's dedupe machinery keys its proposed-name dictionary on operation key
+    // *and* role together: two cases for the same operation (a success and a declared error)
+    // deliberately get different method names, and only get the same *hash suffix* input when
+    // they also share a role — collapsing role into the operation key alone reassigns every
+    // case for an operation the same deduped name, which is CS0111 the moment an operation
+    // emits more than one case. Defaults to Success so every call site that predates decision 5
+    // — none of which had a role to state — is read as what it always was.
+    CaseRole Role = CaseRole.Success,
     // Carries FixtureComposer.NeedsFixture's verdict for this operation so that no other caller
     // (fixtures repair, chiefly) ever has to recompute or restate it — a divergence between a
     // second copy of this logic and the composer's own is a defect this branch already fixed
