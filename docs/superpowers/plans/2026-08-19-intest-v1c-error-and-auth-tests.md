@@ -118,7 +118,7 @@ path parameter.** Everything else in the 4xx range is excluded, each for its own
 
 | Status | Why not in v1-c |
 |---|---|
-| `400` | **No deterministic fixture-free trigger exists.** Provoking one means sending malformed input — the variation subsystem this plan defers. A 400 case sending the valid success request asserts 400 against a 200 on every run: exactly the wall of wrong failures decision 5 cites as the reason not to guess |
+| `400` | **No deterministic fixture-free trigger exists.** Provoking one means sending malformed input — the variation subsystem this plan defers. A 400 case sending the valid success request asserts 400 against a 200 on every run: exactly the wall of wrong failures this decision opens with |
 | `401`, `403` | **The auth cases already own these.** An operation declaring 401 would otherwise get both an auth 401 (sends no token, expects 401 — correct) and a declared-error 401 (sends a valid authenticated request, expects 401 — fails always). Specs declare these routinely |
 | `409`, `422`, others | Need specific conflicting state or input. Same reasoning as 400 |
 
@@ -146,7 +146,30 @@ failing auth test harmless: a 404 instead of a 204.
 Task 8 Step 3 deliberately mis-scopes a token and expects the write 403s to fail. Without this
 rule, that step performs real deletes against the sample.
 
-**7. Every new case is `TestCategory("Contract")`.**
+**7. A case selects an identity by *slot*, never by name.**
+
+Decision 3 makes generated code choose between identities, and decision (a) in Task 2 makes
+`Identities` an ordered `IReadOnlyList<string>` for exactly that reason: **the CLI generates code
+long before any provider exists and can never know an identity name.** So `TestCasePlan` carries a
+slot, not a string:
+
+| Slot | Means | Resolved at render time to |
+|---|---|---|
+| `Default` | the ordinary authenticated identity | `Identities[0]` |
+| `Secondary` | some *other* identity, for wrong-scope 403 | `Identities[1]` |
+| `None` | send no `Authorization` at all, for 401 | `InTestIdentities.None` |
+
+Nothing anywhere emits a literal identity name into a plan or a template. If a subagent finds
+itself writing one, it has misread this: there is no correct string to write.
+
+**Zero identities is a documented state, not an error.** `ITestTokenProvider.cs:14` already says
+"a count of one or zero gates the wrong-scope and wrong-tenant auth tests off" — so `Identities[0]`
+must never be indexed blind. An empty list resolves `Default` to `None`, exactly as if no provider
+were registered (Task 2(b) already makes `AuthHandler` no-op there). Index it directly and every
+test in the suite throws `ArgumentOutOfRangeException` in `[TestInitialize]`, before a single
+request is built — turning a gating state into a suite-wide crash.
+
+**8. Every new case is `TestCategory("Contract")`.**
 
 §9 splits the gate on category: `--filter "TestCategory=Contract"` runs in the post-deployment gate, `Variation` does not. Declared-error and auth tests are deterministic, fixture-free and safe against a deployed environment — exactly what belongs in a gate. Only variations get a different category, and they are not in this plan.
 
@@ -163,7 +186,7 @@ rule, that step performs real deletes against the sample.
 | **Modified** | |
 | `MSTest/TestHost.cs` | Register both clients; resolve the readiness one for probing; expose the token provider |
 | `MSTest/ApiTestBase.cs` | Set and clear the ambient identity per test; host `RequireMultipleIdentities()` (Task 5) |
-| `Planning/TestCasePlan.cs` | Carry the expected status' role — success, declared error, or auth — and the identity to use |
+| `Planning/TestCasePlan.cs` | Carry the expected status' role — success, declared error, or auth — and the identity **slot** (never a name; see decision 7) |
 | `Planning/TestPlanBuilder.cs` | Emit declared-error and auth cases |
 | `Rendering/Templates/mstest-class.scriban` | Render them, including the runtime multi-identity guard |
 | `Coverage/CoverageReport.cs` | Count generated and gated auth tests |
@@ -246,7 +269,7 @@ public async Task SendsNoAuthorizationHeaderForTheNoTokenIdentity()
 }
 ```
 
-- [ ] **Step 2: Four interface questions the plan must answer before you implement**
+- [ ] **Step 2: Five interface questions the plan must answer before you implement**
 
 **a. `Identities` becomes `IReadOnlyList<string>`.** It is `IReadOnlyCollection<string>` today
 (`ITestTokenProvider.cs:14`), which guarantees no order — yet "the default is the provider's
@@ -274,7 +297,13 @@ implementing the interface needs to know what arrives. Use configuration `Api:Au
 back to the base URL's authority. **Not** the spec's security-scheme audience: OpenAPI OAuth2
 flows carry `tokenUrl` and `scopes`, not reliably an audience.
 
-**d. The scaffold comment stops telling people to write their own handler.**
+**d. Zero identities must not index.** `ApiTestBase` sets the default in `[TestInitialize]`, so
+`Identities[0]` runs for every test in the suite including the ones with nothing to do with auth.
+An empty list is explicitly contemplated (`ITestTokenProvider.cs:14`) and must resolve to
+`InTestIdentities.None` — see decision 7. This is the difference between "auth tests gate off" and
+"every test throws before it starts".
+
+**e. The scaffold comment stops telling people to write their own handler.**
 `InitCommand.cs:123` currently says a secured API "needs a `DelegatingHandler` appended to
 `InTestClients.Api`". Once `AuthHandler` ships attached, that instruction produces two handlers
 both setting `Authorization`, where the last one silently wins. Replace it with a line saying
@@ -284,7 +313,8 @@ prose in `getting-started.md` Phase 3 is Task 7's.
 - [ ] **Step 3–4: Run, implement, re-run, commit**
 
 `ApiTestBase` sets the ambient identity in `[TestInitialize]` and clears it in `[TestCleanup]`,
-exactly as it already does for `TestId`. The default is `Identities[0]`.
+exactly as it already does for `TestId`. The default is the `Default` slot — `Identities[0]`, or
+`InTestIdentities.None` when the list is empty (question (d)); never a blind index.
 
 ```bash
 git commit -m "feat(runtime): auth handler consuming the registered token provider"
@@ -344,14 +374,38 @@ git commit -m "feat(cli): plan declared-error cases from declared responses"
 
 A declared-error case renders a method asserting its status, uses the generated unmatchable id, and **calls no fixture lookup**. `EmitsNoStrayBlankLines` must still pass — the template gains conditionals, which is exactly where whitespace control breaks.
 
-- [ ] **Step 2: Extend the golden corpus first — today it proves nothing about this**
+- [ ] **Step 2: Extend *both* corpora — they are separate guards and only one is a text diff**
 
-`tests/InTest.Golden.Tests/Specs/orders.json` holds two operations, `200` responses only, no
-`security`. Regenerating the golden file against it would be a **no-op for every line v1-c adds**,
-leaving the project's one whole-file regression guard covering none of this plan's output.
+There are two, they do not overlap, and conflating them is how v1-c's headline output ends up with
+no proof that it runs:
 
-Add to that spec: a declared `404` on `GET /orders/{id}`, and a `security` block on at least one
-operation. Add the matching arms to `GoldenApiStub`, which has no 401 or 403 response today.
+| Corpus | Read by | Proves | Reached from |
+|---|---|---|---|
+| `Specs/orders.json` | `GoldenFileTests`, `CompileVerificationTests` | The output's **text** is stable and **compiles** | — |
+| Inline specs in `GeneratedSuiteExecutionTests.cs:21,65,126` | the same file's live tests | The output **actually runs and gets the status it asserts** | `GoldenApiStub` |
+
+**a. `Specs/orders.json`** holds two operations, `200` only, no `security`. Regenerating against it
+is a **no-op for every line v1-c adds**. Add a declared `404` to `GET /orders/{id}`. Nothing
+existing breaks; the golden file gains the new method and the compile check covers it.
+
+**b. An inline spec — this is the one that is missing, and it is F1's lesson verbatim.**
+`GoldenApiStub` is **not reachable from `Specs/orders.json` at all**: `GeneratedSuiteExecutionTests`
+writes its own inline specs to `spec.json`, so "add arms to the stub" without adding an inline spec
+attaches the arms to nothing. §16 says it plainly — compile verification proves generated code
+builds, never that it runs, and v0 shipped only the first.
+
+Add a declared `404` to one inline spec and give the stub an arm that answers it, so a generated
+declared-error test is proven to receive a real 404 over the wire.
+
+> **Do not hang the 404 case off an `/api/status/…` path.** `GoldenApiStub.cs:134`'s catch-all
+> returns **200** for anything under that prefix, so the test would fail confusingly, or worse,
+> a later "fix" to the catch-all would mask it. The bare `_ => (404, …)` default already answers
+> for any other unknown path.
+
+**Auth execution coverage is Task 5's, not deferrable to Task 8.** Not because 403 is expensive —
+because **Task 4 does not generate auth cases at all**; Task 5 does. There is nothing here to
+execute yet. Task 5 Step 2 owns adding `security` to both corpora, the stub's 401/403 arms, and a
+fake provider issuing distinguishable tokens per identity so the stub can map token → scope.
 
 - [ ] **Step 3: Regenerate the golden file and read it**
 
@@ -384,7 +438,7 @@ git commit -m "feat(cli): render declared-error contract tests"
 
 - [ ] **Step 1: Write the failing tests**
 
-Planning: an operation declaring `security` yields a no-token 401 case · it also yields a wrong-scope 403 case **carrying the guard call** · an operation declaring no `security` yields neither · the 403 case names a non-default identity · neither case needs a fixture.
+Planning: an operation declaring `security` yields a no-token 401 case · it also yields a wrong-scope 403 case **carrying the guard call** · an operation declaring no `security` yields neither · **the 403 case selects the `Secondary` slot and the 401 case selects `None`** — never an identity name (decision 7) · neither case needs a fixture.
 
 Guarding — the pair that actually exercises `RequireMultipleIdentities()`, one provider each side
 of the boundary:
@@ -439,16 +493,69 @@ Two things to carry forward: the message survives **verbatim** into `<ErrorInfo>
 the console summary's word, not the file's. Anything that later parses a `.trx` for gated auth
 tests must match `NotExecuted`.
 
-- [ ] **Step 2: Regenerate the golden file again**
+- [ ] **Step 2: Extend both corpora for auth, and prove a 401 over the wire**
 
-Task 4 added `security` to the golden spec precisely so this task's output is covered too. Read
-the regenerated file and confirm the 401 and 403 methods are in it — an auth case that never
-reaches the golden corpus has no whole-file guard at all.
+Task 4 Step 2 explains why these are two guards rather than one; auth is where the live half
+matters most, because a 401 test is the easiest thing in this plan to pass vacuously.
+
+**a. `Specs/orders.json`** gains a `security` block on at least one operation. Regenerate and
+confirm the 401 and 403 methods appear — an auth case absent from the golden corpus has no
+whole-file guard.
+
+**b. An inline spec in `GeneratedSuiteExecutionTests.cs`** gains `security`, and `GoldenApiStub`
+gains the arms to answer it — it inspects no `Authorization` header today:
+
+| Request | Stub answers |
+|---|---|
+| No `Authorization` on a secured path | **401** |
+| Token belonging to the `Secondary` identity | **403** |
+| Token belonging to the `Default` identity | the normal success arm |
+
+The 403 half needs the test's fake `ITestTokenProvider` to issue **distinguishable** tokens per
+identity — `token-for-{identity}` is enough — so the stub can map token back to scope. Without
+that the stub cannot tell the two apart and the 403 test proves nothing.
+
+**The 401 test must fail if the suite stops sending tokens.** Assert that the *success* cases in
+the same run still pass. A 401 case passes trivially when every request is anonymous, which is
+precisely the day-one state (Task 6 ships the provider registration commented out) — so a green
+401 alone is not evidence.
 
 - [ ] **Step 3–5: Run, implement, re-run, commit**
 
 The template emits the runtime guard call (decision 3) at the top of 403 cases only — **not**
 `MemberCondition`, which is measured not to work for a DI-dependent condition.
+
+**Where the identity override is emitted.** `ApiTestBase.ApiTestInitialize` has already set the
+`Default` slot by the time any test body runs, so a 401 or 403 case must override it **in the
+generated method body, before the request is built** — after the guard call, ahead of everything
+else. The `TestCasePlan` slot (decision 7) is what drives that line; a case in the `Default` slot
+emits nothing, which keeps every existing success case byte-identical in the golden file:
+
+```csharp
+[TestMethod, TestCategory("Contract")]
+public async Task DeleteOrder_WrongScope_Returns403()
+{
+    RequireMultipleIdentities();              // guard first — decision 3
+    using var _ = UseIdentity(IdentitySlot.Secondary);   // then the override, before the request
+    ...
+}
+```
+
+Scoped rather than assigned, so `[TestCleanup]` is not the only thing restoring it — a test that
+throws mid-body must not leak a secondary identity into whatever runs next.
+
+**Guard accessibility.** `RequireMultipleIdentities` is `protected internal static`: `protected`
+so the generated suite (a *different assembly* deriving from `ApiTestBase`) can call it like its
+`protected static` neighbours `RequireFixture` and `FixtureBody`, and `internal` so
+`InTest.Runtime.Tests` can call it directly without a test-only subclass —
+`InternalsVisibleTo Include="InTest.Runtime.Tests"` is already in `InTest.Runtime.csproj:22`.
+Plain `protected static` would match the neighbours but leave the Step 1 tests unable to reach it
+at all.
+
+It reads the provider `TestHost` exposes, so the runtime tests set that static directly and reset
+it in `[TestCleanup]` — the same hand-rolled pattern `TestHostTests` already uses for
+`TestHost.RetainedFixtureContext` (`TestHost.cs:59`). `TestHostFixture.With(...)` in Step 1's
+snippets is that helper; write it if it does not exist, or set the static inline.
 
 **`[DoNotParallelize]` must also consider the role.** It is derived from HTTP method alone today
 (`TemplateRenderer.cs:32`), so every 401 and 403 case on a POST or DELETE would serialize the
@@ -542,7 +649,7 @@ inside Task 8 Step 1, where it would be done in passing during an acceptance run
 
 - [ ] **Step 5: Close F8, F9 and F10 in the acceptance log**
 
-Both with the evidence from Tasks 1 and 2 — not merely marked done.
+All three with the evidence from Tasks 1, 2 and 5 — not merely marked done.
 
 - [ ] **Step 6: Commit**
 
@@ -565,6 +672,11 @@ git commit -m "docs: declared-error and auth tests are built; F8, F9 and F10 clo
 - [ ] **Step 2: Run the Orders suite**
 
 **Expected: every generated test passes, including 401s and 403s**, with the 403 tests now running rather than skipping. Record how many of each kind were generated.
+
+**State explicitly that the 401s are not passing vacuously.** With no provider registered every
+request is anonymous, so 401 cases go green while the rest of the suite is 401-red. The evidence
+that they are real is that the **success** cases pass in the same run — record that as the reason,
+rather than leaving it implied by the totals.
 
 - [ ] **Step 3: Prove the 403 tests can fail**
 
