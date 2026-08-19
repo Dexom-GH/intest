@@ -1,4 +1,4 @@
-# Acceptance runs — v0 and v1-a
+# Acceptance runs — v0, v1-a and v1-b
 
 A living record. Each phase ends by regenerating against `samples/` and appending its results
 here, so the defect numbering (`F1`, `F2`, …) runs continuously across phases and the "carried
@@ -8,6 +8,7 @@ forward" list at the end is always the current one.
 |---|---|---|---|
 | v0 | 2026-08-17 | `bec4ee1` + F1 fix | Catalog **6 of 9**; Orders and Inventory generated but never run |
 | v1-a | 2026-08-17 | `466e118` | All three run live: **22 of 22**; **44 sentinels** filled by hand |
+| v1-b | 2026-08-19 (UTC) | `f07ce4c` + this commit | Catalog **9 of 9 twice, sequentially** (not concurrently — §11), a negative control reproducing F7 on the same suite/database with the fixture unregistered, and a drain-isolation run proving cleanup, not a test, deletes the seeded row. **F7 closed** |
 
 ---
 
@@ -18,7 +19,10 @@ forward" list at the end is always the current one.
 The v0 plan's acceptance criterion was a run against "one real API in a real pipeline". This
 run used three purpose-built sample APIs instead (`samples/`), one per OpenAPI producer, so the
 producer matrix and the acceptance run are the same exercise. They are committed, so every
-finding below is reproducible.
+finding below is reproducible — with one qualification the original v0 run did not know to state:
+reaching the ports named throughout this document requires setting `ASPNETCORE_URLS` externally
+when starting each sample, which nothing here or in `samples/README.md` records; see F9 in the
+v1-b section below, found by literally following the README's own commands.
 
 ## What was exercised
 
@@ -350,7 +354,14 @@ operation from selecting a nullable union's single real branch. None of the thre
 uses it, so it is recorded here rather than guessed at; it is the natural follow-up if 3.0-style
 composition shows up in a real document.
 
-### F7 — the generated suite is not idempotent against a persistent store · **open, by construction**
+### F7 — the generated suite is not idempotent against a persistent store · **closed in v1-b**
+
+> **Closed.** See "v1-b acceptance run — the suite runs twice" below, including a negative
+> control that reproduces this exact finding on demand (same suite, same database, fixture
+> removed) and independent proof that cleanup — not a test — is what removes the seeded row.
+> The failure recorded immediately below is preserved as the original v1-a evidence this finding
+> was opened on; it is what the fix is measured against, not a live description of current
+> behaviour.
 
 Running the Catalog suite a second time against the same database, changing nothing:
 
@@ -447,11 +458,623 @@ from pointing adopters at it.
 | 2 | F8 — stop the scaffold and the docs telling adopters to register an `ITestTokenProvider` that nothing calls; point both at the `DelegatingHandler` that works today | v1-a | **Closed** — getting-started Phase 3, plus `40fd2cb` + `32e23a6` fixing the generated `TestStartup.cs` comment, guarded by a negative-controlled test |
 | 3 | F8 — actually consume `ITestTokenProvider` from the generated template, so the documented extension point stops being a dead end | v1-c | Open |
 | 4 | F7 — document that a generated suite assumes a reset environment, and that `{{runId}}` is the v1-a tool for free-form uniqueness | v1-a docs | **Closed** — getting-started Phase 5 |
-| 5 | F7 — `{{fixture:…}}` / `IAssemblyFixture`, so create-then-delete and constrained-unique values stop depending on a reset database | v1-b | Open, now measured |
+| 5 | F7 — `{{fixture:…}}` / `IAssemblyFixture`, so create-then-delete and constrained-unique values stop depending on a reset database | v1-b | **Closed** — see the v1-b acceptance run below |
 | 6 | `intest survey` should predict from **total request-body leaf properties + path parameters**, not operation count and not `required` count | v1-f | Open, input recorded above |
 | 7 | Merge `allOf` composition (`[{$ref: Base}, {…}]`) rather than treating it as an ambiguous union | when a real spec needs it | Open, recorded under F6 |
 
-## Carried forward — not covered by either run
+---
+
+# v1-b acceptance run — the suite runs twice
+
+**Date:** 2026-08-19 (UTC; local machine date 2026-08-18, corrected here to match the run-id
+timestamps cited as evidence throughout this section) · **Commit:** `f07ce4c` + this commit
+**Task:** Plan v1-b Task 8 — the verdict task. Tasks 1–7 (the fixture lifecycle: `IAssemblyFixture`,
+`FixtureGraph`, `FixtureRunner`, `TokenResolver`'s `{{fixture:…}}`, cleanup drain on
+`AssemblyCleanup`) were all green in isolation before this run started. This is the only task
+that proves they compose into what F7 actually needs: a suite that survives a second run against
+the database the first run left behind.
+
+Unit suite before the run: **313 passing, 0 failing** — Architecture 2, Cli 141, Runtime 161,
+Golden 9.
+
+## Results
+
+| Sample | Runs | Result |
+|---|---|---|
+| `Catalog.Api`, closed suite (`CatalogSeedFixture` registered) | 2, sequential, same database | **9 of 9 both times** |
+| `Catalog.Api`, negative control (no fixture, literal values) | 2, sequential, same database | 9 of 9, then **6 of 9** — reproduces F7 exactly |
+| `Catalog.Api`, drain-isolation (fixture forced to throw) | 1 | 0 of 9 pass (all abort in `AssemblyInitialize`, by design) — seeded row still removed |
+| `Orders.Api` | 1 | **7 of 7**, unchanged from v1-a |
+| `Inventory.Api` | 1 | **6 of 6**, unchanged from v1-a |
+
+## What was built
+
+A fresh `Catalog.ApiTests` suite, scaffolded outside the repository the same way v1-a's was
+(`intest init` → `intest generate` → `intest fixtures repair` → fill sentinels → `intest
+generate` → `dotnet test`, `InTest.Runtime` swapped from `PackageReference` to `ProjectReference`
+since it is not published — the same substitution `GeneratedSuiteExecutionTests` makes).
+
+One addition beyond v1-a: `CatalogSeedFixture`, an `IAssemblyFixture` registered in
+`TestStartup.cs` the way an adopter would (`services.AddSingleton<IAssemblyFixture,
+CatalogSeedFixture>();`, replacing the scaffold's placeholder comment). Each run it:
+
+1. **Creates a category** via a live `POST /api/categories`, with a name made unique by
+   `Guid.NewGuid()` (not `{{runId}}` — this runs as plain C#, before any token is resolved).
+   Publishes `seededCategory.id` and registers `OnCleanup` to `DELETE` it, tolerating a 404 —
+   `DeleteApiCategoriesId_Contract` may already have deleted this exact row as part of the same
+   run.
+2. **Creates a product** via a live `POST /api/products`, with a SKU generated to match
+   `^[A-Z]{3}-[0-9]{4}$` (three letters and four digits derived from `Guid.NewGuid().ToByteArray()`
+   — `{{runId}}` cannot satisfy that pattern, which is the entire reason this fixture exists).
+   Publishes `seededProduct.id`. **No cleanup is registered for it** — `ProductsController` has
+   no `DELETE` endpoint by design (products are deactivated, never removed), so nothing exists to
+   undo the call. Because the SKU is generated fresh every run, this does not collide with the
+   next run, but it does leave one more row behind, permanently — see "What 'closed' does not
+   claim" below.
+3. **Generates a second, independent SKU** (`newProduct.sku`), published for the suite's own
+   `POST /api/products` test body — it has to differ from the one used in step 2, or the very
+   first run would 409 against the fixture's own seed product.
+
+Fixture files were pointed at the published keys deliberately, not uniformly:
+`get_api_categories_id.json` was left on the stable, never-deleted seed row (`22222222-…`,
+"Software") rather than the fixture's own category, so the read and delete tests do not share a
+target MSTest gives no ordering guarantee between. `delete_api_categories_id.json` alone points
+at `{{fixture:seededCategory.id}}`; `get_api_products_id.json`,
+`get_api_products_id_tags.json` and `put_api_products_id.json` all point at
+`{{fixture:seededProduct.id}}`; `post_api_products.json`'s `sku` points at
+`{{fixture:newProduct.sku}}`; `post_api_categories.json`'s `name` uses `Accessories-{{runId}}`,
+the free-form case v1-a already closed.
+
+Source: `CatalogSeedFixture.cs` and `fixtures/*.json` in the scratch project (not committed —
+outside the repository, same as v1-a's). Inlined below in full — this is the load-bearing
+artifact the entire closure rests on, and the SKU generator in particular is the crux of the
+format-constrained claim, so it is reproduced rather than merely described:
+
+```csharp
+using System.Net;
+using System.Net.Http.Json;
+using System.Text.Json;
+using InTest.Runtime;
+
+namespace Catalog.ApiTests;
+
+public sealed class CatalogSeedFixture(IHttpClientFactory httpClientFactory) : IAssemblyFixture
+{
+    // Fixed seed category (CatalogDbContext.SeedAsync) — stable across every run, never
+    // deleted by any generated test, safe to reference directly rather than via a fixture.
+    private static readonly Guid HardwareCategoryId = Guid.Parse("11111111-1111-1111-1111-111111111111");
+
+    public Type[] DependsOn { get; } = [];
+    public string[] AppliesTo { get; } = []; // every profile
+
+    public async Task InitializeAsync(FixtureContext ctx, CancellationToken ct)
+    {
+        var client = httpClientFactory.CreateClient(InTestClients.Api);
+
+        // 1. A category this run owns, so DeleteApiCategoriesId_Contract has a target that
+        // still exists on every run. Guid.NewGuid() keeps the name unique per run without
+        // needing the {{runId}} token machinery — this runs as plain C#, before any token is
+        // resolved.
+        var categoryName = $"InTest-Seed-{Guid.NewGuid():N}";
+        using var categoryResponse = await client.PostAsJsonAsync(
+            "/api/categories", new { name = categoryName }, ct);
+        categoryResponse.EnsureSuccessStatusCode();
+        var category = await categoryResponse.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: ct);
+        var categoryId = category.GetProperty("id").GetString()!;
+        ctx.Publish("seededCategory.id", categoryId);
+
+        ctx.OnCleanup(async () =>
+        {
+            using var response = await client.DeleteAsync($"/api/categories/{categoryId}", ct);
+            // Tolerate 404: DeleteApiCategoriesId_Contract may already have deleted this exact
+            // row as part of the run it was seeded for. Anything else is a real cleanup failure.
+            if (response.StatusCode != HttpStatusCode.NoContent && response.StatusCode != HttpStatusCode.NotFound)
+            {
+                response.EnsureSuccessStatusCode();
+            }
+        });
+
+        // 2. A product this run owns, with its own run-scoped SKU, so GetApiProductsId_Contract,
+        // GetApiProductsIdTags_Contract and PutApiProductsId_Contract all have a stable target
+        // via {{fixture:seededProduct.id}} instead of a fixed seed row.
+        var seededSku = GenerateSku();
+        using var productResponse = await client.PostAsJsonAsync("/api/products", new
+        {
+            sku = seededSku,
+            name = $"InTest Seed Product {seededSku}",
+            price = 9.99m,
+            stockQuantity = 1,
+            categoryId = HardwareCategoryId
+        }, ct);
+        productResponse.EnsureSuccessStatusCode();
+        var product = await productResponse.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: ct);
+        var productId = product.GetProperty("id").GetString()!;
+        ctx.Publish("seededProduct.id", productId);
+
+        // No cleanup registered for the product: ProductsController deliberately has no DELETE
+        // endpoint (products are deactivated, never removed — see its own doc comment), so
+        // nothing exists to undo this HTTP call. Because the SKU is freshly generated every
+        // run, this leaves one more row behind per run — see "What 'closed' does not claim".
+
+        // 3. A second, independently generated SKU for the suite's own POST /api/products test
+        // body. Must differ from the one used above, or the very first run would 409 against
+        // the seed product this fixture just created.
+        ctx.Publish("newProduct.sku", GenerateSku());
+    }
+
+    /// <summary>Generates a value matching <c>^[A-Z]{3}-[0-9]{4}$</c> from fresh randomness, so
+    /// two calls in the same run are independent of each other and of any previous run.</summary>
+    private static string GenerateSku()
+    {
+        var bytes = Guid.NewGuid().ToByteArray();
+        var letters = new char[3];
+        for (var i = 0; i < 3; i++)
+        {
+            letters[i] = (char)('A' + (bytes[i] % 26));
+        }
+        var number = BitConverter.ToUInt16(bytes, 3) % 10000;
+        return $"{new string(letters)}-{number:D4}";
+    }
+}
+```
+
+Two more copies of this same scaffold were built for the additional evidence further below:
+`catalog-suite-negative` (identical generation, no `IAssemblyFixture` registered, static
+literal fixture values) and `catalog-suite-drainproof` (identical to the closed suite, with
+`CatalogSeedFixture` edited to throw immediately after registering the category's `OnCleanup`).
+Neither is committed, same as the closed suite.
+
+## The suite runs twice, sequentially
+
+`samples/Catalog.Api` was started fresh for this run (its `catalog.db` deleted first, so the
+first run really is against a freshly seeded database — the same comparison basis v1-a used), with
+the port explicit rather than left to the ASP.NET default (see F9):
+
+```bash
+rm -f samples/Catalog.Api/bin/Debug/net10.0/catalog.db*
+ASPNETCORE_URLS="http://localhost:5081" dotnet run --project samples/Catalog.Api --no-build
+```
+
+Both `dotnet test` invocations below ran against the **same, never-restarted** API process and
+the **same, never-reset** `catalog.db`, one after the other — this proves sequential
+repeatability, not concurrent (see "What 'closed' does not claim" below). Pasted directly from
+the terminal, not summarised.
+
+Run 1:
+
+```
+Test run for C:\…\catalog-suite\bin\Debug\net10.0\Catalog.ApiTests.dll (.NETCoreApp,Version=v10.0)
+A total of 1 test files matched the specified pattern.
+C:\…\catalog-suite\bin\Debug\net10.0\Catalog.ApiTests.dll
+All fixtures resolved cleanly.
+  Passed DeleteApiCategoriesId_Contract [75 ms]
+  Passed GetApiCategoriesId_Contract [33 ms]
+  Passed GetApiCategories_Contract [22 ms]
+  Passed PostApiCategories_Contract [8 ms]
+  Passed GetApiProductsIdTags_Contract [71 ms]
+  Passed GetApiProductsId_Contract [10 ms]
+  Passed GetApiProducts_Contract [72 ms]
+  Passed PostApiProducts_Contract [9 ms]
+  Passed PutApiProductsId_Contract [24 ms]
+  Standard Output Messages:
+
+
+ TestContext Messages:
+ InTest fixture cleanup: drained 1 action(s).
+
+
+
+Test Run Successful.
+Total tests: 9
+     Passed: 9
+ Total time: 4.6315 Seconds
+```
+
+Run 2, same database, nothing reset in between:
+
+```
+Test run for C:\…\catalog-suite\bin\Debug\net10.0\Catalog.ApiTests.dll (.NETCoreApp,Version=v10.0)
+A total of 1 test files matched the specified pattern.
+C:\…\catalog-suite\bin\Debug\net10.0\Catalog.ApiTests.dll
+All fixtures resolved cleanly.
+  Passed DeleteApiCategoriesId_Contract [16 ms]
+  Passed GetApiCategoriesId_Contract [20 ms]
+  Passed GetApiCategories_Contract [6 ms]
+  Passed PostApiCategories_Contract [6 ms]
+  Passed GetApiProductsIdTags_Contract [13 ms]
+  Passed GetApiProductsId_Contract [6 ms]
+  Passed GetApiProducts_Contract [14 ms]
+  Passed PostApiProducts_Contract [8 ms]
+  Passed PutApiProductsId_Contract [4 ms]
+  Standard Output Messages:
+
+
+ TestContext Messages:
+ InTest fixture cleanup: drained 1 action(s).
+
+
+
+Test Run Successful.
+Total tests: 9
+     Passed: 9
+ Total time: 3.9209 Seconds
+```
+
+**9 of 9, both times, same database.** The `POST /api/categories → 409`, `POST /api/products →
+409`, and `DeleteApiCategoriesId_Contract` 404-on-an-already-deleted-target failures F7 recorded
+do not reproduce. `--logger "console;verbosity=detailed"` was used throughout, per this task's
+own note that a passing `[AssemblyInitialize]`'s output reaches no sink under VSTest +
+MSTest.TestAdapter 4.3.3 on .NET 10 — `AssemblyCleanup`'s "drained 1 action(s)" line, which does
+reach the console, is exactly the corroborating detail that line is there for.
+
+### The negative control — the fixture is the only variable that can be varied independently
+
+Two runs passing is not, by itself, proof the fixture is *why*. A second copy of the identical
+generated suite was built — same spec, same generation — with two changes, not one:
+`CatalogSeedFixture` was left unregistered, and `fixtures/*.json` was hand-filled with the
+literal, non-unique values F7's original reproduction used (`post_api_categories.json`'s `name`
+is the literal string `"Accessories"`, no `{{runId}}`; `post_api_products.json`'s `sku` is the
+literal string `"ACC-0100"`; `delete_api_categories_id.json` targets `33333333-…`, the fixed seed
+"Deprecated" category, which only one `DELETE` can ever succeed against). The second change is
+not independent of the first: `{{fixture:seededCategory.id}}` and `{{fixture:newProduct.sku}}`
+cannot resolve to anything without a registered fixture publishing those keys — `TokenResolver`
+throws `FixtureResolutionException` before any request is sent — so removing the fixture forces
+the literal-value change as its only working substitute. Together they are one change with two
+visible edits, not two independent ones; a design that could vary fixture-presence alone while
+holding the fixture-file contents fixed does not exist for this suite. Run against the **same
+live `samples/Catalog.Api` process and the same `catalog.db`** the closed suite above just ran
+against — same machine, same database, same generated suite otherwise.
+
+Run 1:
+
+```
+Test run for C:\…\catalog-suite-negative\bin\Debug\net10.0\Catalog.ApiTests.dll (.NETCoreApp,Version=v10.0)
+A total of 1 test files matched the specified pattern.
+C:\…\catalog-suite-negative\bin\Debug\net10.0\Catalog.ApiTests.dll
+All fixtures resolved cleanly.
+  Passed DeleteApiCategoriesId_Contract [25 ms]
+  Passed GetApiCategoriesId_Contract [20 ms]
+  Passed GetApiCategories_Contract [5 ms]
+  Passed PostApiCategories_Contract [5 ms]
+  Passed GetApiProductsIdTags_Contract [4 ms]
+  Passed GetApiProductsId_Contract [11 ms]
+  Passed GetApiProducts_Contract [8 ms]
+  Passed PostApiProducts_Contract [4 ms]
+  Passed PutApiProductsId_Contract [2 ms]
+
+Test Run Successful.
+Total tests: 9
+     Passed: 9
+ Total time: 4.6371 Seconds
+```
+
+Run 2, same database, nothing reset in between:
+
+```
+Test run for C:\…\catalog-suite-negative\bin\Debug\net10.0\Catalog.ApiTests.dll (.NETCoreApp,Version=v10.0)
+A total of 1 test files matched the specified pattern.
+C:\…\catalog-suite-negative\bin\Debug\net10.0\Catalog.ApiTests.dll
+All fixtures resolved cleanly.
+  Failed DeleteApiCategoriesId_Contract [54 ms]
+  Error Message:
+   Test method Catalog.ApiTests.CategoriesTests.DeleteApiCategoriesId_Contract threw exception:
+InTest.Runtime.ContractAssertionException: DELETE http://localhost:5081/api/categories/33333333-3333-3333-3333-333333333333 → expected 204, got 404 (3ms)
+Body: {"type":"https://tools.ietf.org/html/rfc9110#section-15.5.5","title":"Not Found","status":404,…}
+
+  Passed GetApiCategoriesId_Contract [24 ms]
+  Passed GetApiCategories_Contract [7 ms]
+  Failed PostApiCategories_Contract [5 ms]
+  Error Message:
+   Test method Catalog.ApiTests.CategoriesTests.PostApiCategories_Contract threw exception:
+InTest.Runtime.ContractAssertionException: POST http://localhost:5081/api/categories → expected 201, got 409 (3ms)
+Body: {"title":"A category named 'Accessories' already exists.","status":409}
+
+  Passed GetApiProductsIdTags_Contract [3 ms]
+  Passed GetApiProductsId_Contract [8 ms]
+  Passed GetApiProducts_Contract [8 ms]
+  Failed PostApiProducts_Contract [2 ms]
+  Error Message:
+   Test method Catalog.ApiTests.ProductsTests.PostApiProducts_Contract threw exception:
+InTest.Runtime.ContractAssertionException: POST http://localhost:5081/api/products → expected 201, got 409 (1ms)
+Body: {"title":"A product with SKU 'ACC-0100' already exists.","status":409}
+
+  Passed PutApiProductsId_Contract [2 ms]
+
+Test Run Failed.
+Total tests: 9
+     Passed: 6
+     Failed: 3
+ Total time: 3.9290 Seconds
+```
+
+**6 of 9 — the exact three operations F7 named, with the identical error strings**
+(`"A category named 'Accessories' already exists."`, `"A product with SKU 'ACC-0100' already
+exists."`, and the `DELETE` returning 404 on a row the first run already removed). Same machine,
+same database, same generated suite as the 9-of-9/9-of-9 pair above; the bundled change described
+above — fixture unregistered, its published tokens necessarily replaced with the literal values
+they used to resolve to — is the only thing that differs. That is causation for the bundle, not
+merely correlation, and it is defensible precisely because the bundle could not be split further:
+it is not a claim that the fixture *registration line alone*, independent of what the fixture
+files say, is what flips the result. This is what makes the closure above checkable by a skeptic
+rather than merely asserted.
+
+## Cleanup ran, and the drain (not a test) is what did it
+
+The two runs above prove cleanup happens *somewhere*: after both, the live API was queried
+directly rather than trusting the "drained 1 action(s)" line alone.
+
+```
+GET http://localhost:5081/api/categories
+[
+  {"id":"34b6a730-…","name":"Accessories-tjayo-20260819T003450Z-dba63a39","notes":null},
+  {"id":"0bb9081c-…","name":"Accessories-tjayo-20260819T003511Z-eb2252d2","notes":null},
+  {"id":"33333333-…","name":"Deprecated","notes":"Unused, safe to delete"},
+  {"id":"11111111-…","name":"Hardware","notes":"Physical goods"},
+  {"id":"22222222-…","name":"Software","notes":null}
+]
+```
+
+Five categories: the three fixed seed rows, and the two `Accessories-{{runId}}` categories
+`PostApiCategories_Contract` created — one per run, neither ever meant to be deleted. **Zero
+`InTest-Seed-*` categories remain.**
+
+That query alone under-proves the claim, and the gap is worth naming rather than glossing:
+`delete_api_categories_id.json` always targets the fixture's own category, so
+`DeleteApiCategoriesId_Contract` deletes it on every run before `OnCleanup` ever runs — `OnCleanup`
+always hits an already-tolerated 404. The category's absence is consistent with "the drain
+deleted it" and equally consistent with "the test did, and the drain found nothing left to do."
+The query above cannot tell those apart.
+
+**A third run isolates the drain from every test.** A copy of the same suite had
+`CatalogSeedFixture` edited to throw immediately after registering the category's `OnCleanup`,
+before creating the product or publishing anything else — `FixtureRunner.RunAsync`'s own
+documented behaviour is to drain whatever cleanup is already registered before rethrowing, so
+this exercises that path, not `AssemblyCleanup`'s. `AssemblyInitialize` then fails, which aborts
+every test before its body runs — no test method in this run ever calls the live API at all:
+
+```
+Test run for C:\…\catalog-suite-drainproof\bin\Debug\net10.0\Catalog.ApiTests.dll (.NETCoreApp,Version=v10.0)
+A total of 1 test files matched the specified pattern.
+C:\…\catalog-suite-drainproof\bin\Debug\net10.0\Catalog.ApiTests.dll
+  Failed DeleteApiCategoriesId_Contract
+  Error Message:
+   Assembly Initialization method Catalog.ApiTests.TestStartup.AssemblyInit threw exception. InTest.Runtime.FixtureLifecycleException: Fixture 'Catalog.ApiTests.CatalogSeedFixture' failed during InitializeAsync: Forced failure for the v1-b drain-proof experiment: no test should run after this.. Fix the underlying error in that fixture; later fixtures were not run because they may depend on the state this one was building.. Aborting test execution.
+  [ …and the same "Assembly Initialization method … threw exception" failure repeated for the
+  other 8 tests — every one aborted before its body ran, none of them touched the live API ]
+
+Test Run Failed.
+Total tests: 9
+     Failed: 9
+ Total time: 4.4687 Seconds
+```
+
+Categories immediately before this run and immediately after — note this is a *different* set of
+five than the listing above: the negative control (previous section) ran in between and left its
+own mark on the same database — `"Deprecated"` is gone (its `DELETE` succeeded on the negative
+control's first run and, being a fixed seed row, could not be recreated) and a literal
+`"Accessories"` row now exists (created by that same first run) alongside the two
+`Accessories-{{runId}}` rows the closed suite's two runs created earlier. None of that is
+`CatalogSeedFixture`'s doing; it is exactly the state the negative control's own transcript above
+predicts:
+
+```
+BEFORE: [{"name":"Accessories",…},{"name":"Accessories-…dba63a39",…},{"name":"Accessories-…eb2252d2",…},{"name":"Hardware",…},{"name":"Software",…}]
+AFTER:  [{"name":"Accessories",…},{"name":"Accessories-…dba63a39",…},{"name":"Accessories-…eb2252d2",…},{"name":"Hardware",…},{"name":"Software",…}]
+```
+
+Identical, five rows both times — no `InTest-Seed-*` row before, none after. The category this
+run's fixture created and immediately threw on was created, then removed, entirely inside
+`AssemblyInitialize`, before a single `[TestMethod]` executed. No `DeleteApiCategoriesId_Contract`
+ran — it is in the failed list above for the same reason every other test is, `AssemblyInitialize`
+never finished — so nothing but the drain could have removed that row. This is what makes the
+"cleanup actually ran" claim for the ordinary two runs above credible rather than merely
+plausible: the same mechanism, exercised in isolation, demonstrably deletes.
+
+(No "drained N action(s)" line appears in this run's console output, and that absence is itself
+consistent with the runtime rather than a gap in it: that line is written only by
+`TestHost.CleanupAsync`'s own drain in `[AssemblyCleanup]`, which still runs unconditionally
+afterward but finds nothing left — `FixtureRunner.RunAsync`'s catch block already drained the
+context, synchronously, before rethrowing. Two different, both-documented drain paths; this run
+exercises the other one.)
+
+Products, queried with `X-Include-Inactive: true` — the plain endpoint hides `SPR-0002`
+(`IsActive: false`, `ProductsController.cs` line 31) and returns only 5 of the 6 rows that exist —
+show six rows after the two main runs: the two fixed seed products (`WGT-0001`, `SPR-0002`), and
+four created across the two runs — one `CatalogSeedFixture`-seeded product per run plus one
+`PostApiProducts_Contract`-created product per run, each with its own generated SKU (`GVW-3966`,
+`NNF-9731`, `XDU-2311`, `YVR-3354` — all four distinct, confirming the SKU generator did not
+collide with itself, the fixed seed data, or across runs). No products are deleted, by design —
+see above.
+
+```
+GET http://localhost:5081/api/products?pageSize=100
+{"items":[…5 active rows…],"totalCount":5,…}
+
+GET http://localhost:5081/api/products?pageSize=100  (header: X-Include-Inactive: true)
+{"items":[…6 rows, SPR-0002 now included…],"totalCount":6,…}
+```
+
+## Orders and Inventory
+
+Both regenerated and run live, single run each, using the same fixed seed data v1-a used (no new
+`IAssemblyFixture` was written for either — that was not this task's scope; Catalog is where F7
+lived).
+
+```
+Test run for C:\…\inventory-suite\bin\Debug\net10.0\Inventory.ApiTests.dll (.NETCoreApp,Version=v10.0)
+A total of 1 test files matched the specified pattern.
+C:\…\inventory-suite\bin\Debug\net10.0\Inventory.ApiTests.dll
+All fixtures resolved cleanly.
+  Passed StockAdjust_Contract [196 ms]
+  Passed StockDelete_Contract [93 ms]
+  Passed StockGetAll_Contract [23 ms]
+  Passed StockGetBySku_Contract [13 ms]
+  Passed WarehousesGetAll_Contract [19 ms]
+  Passed WarehousesGetById_Contract [12 ms]
+
+Test Run Successful.
+Total tests: 6
+     Passed: 6
+ Total time: 4.8669 Seconds
+```
+
+```
+Test run for C:\…\orders-suite\bin\Debug\net10.0\Orders.ApiTests.dll (.NETCoreApp,Version=v10.0)
+A total of 1 test files matched the specified pattern.
+C:\…\orders-suite\bin\Debug\net10.0\Orders.ApiTests.dll
+All fixtures resolved cleanly.
+  Passed GetApiCustomersId_Contract [30 ms]
+  Passed GetApiCustomers_Contract [5 ms]
+  Passed PostApiCustomers_Contract [9 ms]
+  Passed DeleteApiOrdersId_Contract [3 ms]
+  Passed GetApiOrdersId_Contract [5 ms]
+  Passed GetApiOrders_Contract [6 ms]
+  Passed PostApiOrders_Contract [13 ms]
+
+Test Run Successful.
+Total tests: 7
+     Passed: 7
+ Total time: 3.8746 Seconds
+```
+
+**Inventory 6 of 6, Orders 7 of 7 — unchanged from v1-a.** Neither number moved. Orders needed
+`samples/Identity.Server`, started fresh for this run (not reused from a prior session), which is
+what let the Duende trial-mode warning finally be observed — see "Carried forward" at the end of
+this document.
+
+## F7 verdict: closed
+
+Catalog runs 9 of 9 against a freshly seeded database and 9 of 9 again against the same,
+unreset database — the exact reproduction F7 recorded, now passing both times. Three pieces of
+evidence back that, not one: the two-run pass itself; a negative control that reproduces F7's
+exact 6-of-9 failure, with identical error strings, on the identical suite and database with the
+fixture unregistered and its published tokens replaced by the literal values they used to
+resolve to (causation for that bundle, not correlation — see the negative control's own section
+for why it cannot be split any finer); and a drain-isolation run that removes the fixture-created
+row with zero test code executed, proving the drain — not `DeleteApiCategoriesId_Contract` — is
+what deletes it. `{{fixture:…}}` / `IAssemblyFixture` (v1-a action 5, above) is closed.
+
+**What "closed" does not claim.**
+
+- This closes the two cases F7 named — a format-constrained unique field, and deleting a seeded
+  row — for a suite that adopts `IAssemblyFixture`. It does not claim every possible seeding
+  shape is covered (composite unique constraints across two fields, for instance, were not
+  exercised).
+- It does not claim cleanup is guaranteed — §14's "best effort, not on a crash" caveat is
+  unchanged and untested by this run (see "Carried forward").
+- **This proves sequential repeatability only, not concurrent.** Borrowing getting-started's own
+  wording verbatim so the two documents agree: "This does not make a suite runnable twice
+  *concurrently*. Two runs seeding at the same time still collide on the same unique constraints
+  — cross-process coordination is not solved at this layer (§11). What this buys is sequential
+  repeatability: run, then run again, without hand-editing fixtures or resetting the environment
+  in between." Both `dotnet test` invocations above ran one after the other, never
+  overlapping — that is the only shape this run, or the plan's Task 8/8a, was ever asked to prove.
+- **It does not claim the fixture's own resource usage is free.** `CatalogSeedFixture` deletes
+  the category it creates but has no way to delete the product it creates (`ProductsController`
+  has no `DELETE` endpoint) — every run leaves one more product row behind, permanently. Two runs
+  in this acceptance left two; `n` runs leave `n`. This is not claimed to be harmless: unbounded
+  per-run growth in a shared, long-lived environment is exactly the class of problem §14's
+  out-of-band sweeper exists for, and this pattern — a seeding fixture creating a resource its own
+  API cannot delete — was not previously named as a case that sweeper needs to cover. See
+  "Carried forward" below.
+
+## Defects found
+
+### F9 — following `samples/README.md`'s run commands literally does not reach the documented ports
+
+```bash
+dotnet run --project samples/Catalog.Api        # http://localhost:5081
+```
+
+Run exactly as written, this binds to the ASP.NET default (`http://localhost:5000` in this
+environment), not `5081`. None of the four sample projects sets a port in source, an
+`appsettings.json`, or a `launchSettings.json` — every acceptance run to date (v0, v1-a, and this
+one) must have set `ASPNETCORE_URLS` externally to reach the documented addresses, and nothing
+records that. Followed as an adopter would follow it — copy the command, run it — the README's
+own worked example does not reach itself.
+
+**Not fixed here** — samples are explicitly out of scope for what this task may edit, and fixing
+it is a one-line addition to `samples/README.md` (`ASPNETCORE_URLS=http://localhost:5081` before
+each command, or a `launchSettings.json` per project) rather than anything InTest-side. Recorded
+so the next phase that touches `samples/` closes it.
+
+### F10 — Phase 3's auth `DelegatingHandler` is registered on the same client the readiness probe uses, so a token failure surfaces as a misleading readiness timeout
+
+Following getting-started Phase 3's own worked example exactly —
+`services.AddHttpClient(InTestClients.Api).AddHttpMessageHandler<BearerTokenHandler>();` — attaches
+the handler to the *named client `TestHost` also uses for the readiness probe* (`TestHost.
+InitializeAsync` resolves `InTestClients.Api` and hands it straight to `Readiness.WaitAsync`,
+before any test runs). When the identity provider is unreachable — which is exactly what happened
+here first: `samples/Identity.Server`'s dev TLS certificate was not the one this machine's
+`dotnet dev-certs https --trust` had trusted (see below) — the handler's own token request throws
+on *every* request through that client, readiness included, even though `/health/ready` itself is
+anonymous and would have answered immediately with no token at all:
+
+```
+InTest.Runtime.ReadinessTimeoutException: Service did not become ready within 120s
+(last response: HttpRequestException). Probed 'http://localhost:5082/health/ready'
+expecting 200, requiring 2 consecutive successes.
+```
+
+That message says nothing about a token, an identity provider, or TLS — it reads exactly like F2
+and F4 (a dead or slow API), and the getting-started guidance right above it — "keep that
+endpoint anonymous or readiness will fail" — describes a *different* trap (the health endpoint
+requiring auth on the server side) that does not apply here. Diagnosing this took reading the raw
+exception type and cross-checking it against what the handler does, not anything the message or
+the docs said. A note in Phase 3, next to the `DelegatingHandler` example, naming this failure
+mode would have saved that.
+
+**The obvious alternative — give the readiness probe its own client, without the auth handler
+attached — was considered, not overlooked.** F2 modelled exactly this kind of argument: name the
+runtime change explicitly, then say why it was or was not made. Here: `TestHost.InitializeAsync`
+resolves one client via `IHttpClientFactory.CreateClient(InTestClients.Api)` and hands that same
+instance to both `Readiness.WaitAsync` and, later, the generated tests — a second, unhandlered
+client for readiness alone would decouple the two, and would have made this exact failure surface
+as a real readiness timeout with no auth noise in the way. It was not made here because it is a
+runtime change to `TestHost`, and Task 8 is an acceptance run, not an implementation task — making
+it would be exactly the kind of edit this task's own rules say to report rather than perform.
+Recorded as the concrete fix candidate for whichever phase next touches `TestHost`'s readiness
+wiring, rather than left as an unnamed possibility.
+
+**Not fixed here**, same reasoning as F9 — a docs-only fix, recorded for the phase that next
+touches getting-started Phase 3.
+
+## Environment note, not an InTest finding: this machine had an untrusted active dev certificate
+
+The proximate cause of F10 surfacing at all: `dotnet dev-certs https --check --trust` reported an
+already-trusted certificate, but Kestrel was actually serving a *different* `CN=localhost`
+certificate (three were present in the personal store) that was never added to the trusted root
+store. `Invoke-WebRequest` against the discovery endpoint failed with `UntrustedRoot`; `curl -k`
+(skipping validation) succeeded, confirming it was specifically a trust problem, not a
+connectivity one. Re-running `dotnet dev-certs https --trust` opens an interactive Windows
+confirmation dialog, which a non-interactive session cannot answer, and this task's own rules
+prohibit programmatically installing a certificate into a trust store to work around that.
+
+**Worked around without touching the trust store or any sample source**: `samples/Identity.Server`
+and `samples/Orders.Api` both already read their issuer/authority from configuration
+(`IdentityServer:IssuerUri`, `Identity:Authority`), so both were restarted with those set to a
+plain-HTTP address (`http://localhost:5444`) instead of the default HTTPS one, and
+`CatalogSeedFixture`'s sibling `BearerTokenHandler` in the Orders scratch project pointed at the
+same. This is an environment quirk of this machine, not a defect in InTest or the samples — recorded
+here only because it is exactly the kind of thing that costs a real adopter an afternoon the first
+time they stand up `Identity.Server` locally, and nothing currently warns about it.
+
+## v1-b actions
+
+| # | Action | Owner phase | Status |
+|---|---|---|---|
+| 1 | F7 — `{{fixture:…}}` / `IAssemblyFixture` closes both cases F7 named | v1-b | **Closed** — this run: two-run pass, negative control, drain-isolation run |
+| 2 | F9 — add the missing `ASPNETCORE_URLS` (or a `launchSettings.json` per project) to `samples/README.md`'s run commands | next phase touching `samples/` | Open |
+| 3 | F10 — note in getting-started Phase 3, next to the `DelegatingHandler` example, that it shares the readiness client and a token failure there reads as a plain readiness timeout | next phase touching getting-started Phase 3 | Open |
+| 4 | F10 — give the readiness probe its own client, decoupled from any team-registered auth handler | next phase touching `TestHost`'s readiness wiring | Open, candidate fix named above |
+| 5 | The product-row leak (`CatalogSeedFixture` creates a product every run with no way to delete it) is a case §14's sweeper needs to cover explicitly, and getting-started's `IAssemblyFixture` section should say so | getting-started docs / v1-f | Open |
+| 6 | F8 — actually consume `ITestTokenProvider` from the generated template | v1-c | Open, carried from v1-a action 3, unchanged by this run |
+| 7 | `intest survey` should predict from **total request-body leaf properties + path parameters** | v1-f | Open, carried from v1-a action 6, unchanged by this run |
+| 8 | Merge `allOf` composition (`[{$ref: Base}, {…}]`) rather than treating it as an ambiguous union | when a real spec needs it | Open, carried from v1-a action 7, unchanged by this run |
+
+---
+
+## Carried forward — not covered by any run
 
 Closed by v1-a:
 
@@ -459,18 +1082,37 @@ Closed by v1-a:
   7 of 7 and 6 of 6.
 - ~~Operations with a request body cannot send one.~~ Closed — that was the point of v1-a.
 
+Closed by v1-b:
+
+- ~~The generated suite is not idempotent against a persistent store (F7).~~ Closed — Catalog
+  runs 9 of 9 twice against the same, unreset database. See below.
+- ~~The Duende trial-mode startup warning was not observed.~~ Observed this run, twice
+  (`fail: Duende.Private.Licencing.V2.LicenseValidator[263521618]  You do not have a valid
+  license key for the Duende software...`) — `samples/Identity.Server` was started fresh for
+  this acceptance run rather than reusing an already-running instance.
+
 Still open, stated rather than glossed:
 
 - **No auth tests were generated**, because v1-a does not generate them. Orders declares
   `security` on all 7 operations, so it is ready for v1-c — but see F8: the token plumbing
   those tests will need does not exist yet either.
-- **No pipeline run.** Both runs were local. "In a real pipeline" remains unmet.
+- **No pipeline run.** All runs were local. "In a real pipeline" remains unmet.
 - **`X-Test-Run-Id` was not verified in server-side telemetry.** The header is sent, but no
   sink was configured to confirm arrival.
-- **The Duende trial-mode startup warning was not observed.** The identity server was exercised
-  this time — it issued a client-credentials token that Orders accepted — but the run reused an
-  already-running instance, so its startup output was never seen.
 - **`survey`, `generate --check`, YAML input, and variation tests** are unbuilt, so nothing
   about them was exercised.
 - **One sample was measured per producer.** The corpus is deliberate but small; nothing here
   says how the composer behaves on a large real-world document.
+- **Cleanup was confirmed for the delete case, not the crash case.** §14 and getting-started
+  both say cleanup is best-effort, not guaranteed on a crash or cancelled run — this acceptance
+  run only exercised the ordinary path (`AssemblyCleanup` running to completion), not that
+  failure mode.
+- **`CatalogSeedFixture`'s product row is never reclaimed — every run leaves one more behind,
+  permanently.** `ProductsController` has no `DELETE` endpoint, so nothing in this pattern can
+  undo the `POST` that creates it. Not exercised: how many runs before that matters in a shared
+  environment, and whether §14's out-of-band sweeper — designed for crash-abandoned rows, not for
+  a seeding fixture's own by-design accumulation — actually covers this case or needs to be
+  extended to. See "v1-b actions" above.
+- **This run proves sequential repeatability only.** Both `dotnet test` invocations always ran
+  one after the other, never concurrently — §11 states cross-process coordination is unsolved at
+  this layer, and nothing here touches that.
