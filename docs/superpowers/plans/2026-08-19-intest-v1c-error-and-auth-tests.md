@@ -55,22 +55,98 @@ A dead identity server reported as a dead API, after a two-minute wait. Readines
 
 F8's remaining half. The interface, `StaticTokenProvider` and the `Identities` property all ship today and nothing calls them. `AuthHandler` is a `DelegatingHandler` that requests a token for the ambient identity and sets `Authorization`. It reads the identity from an `AsyncLocal`, for the same measured reason `RunIdHandler` does — factory-created handlers are not DI-scoped.
 
-**3. Auth tests split by what the provider can actually do, and the split already exists in the spec.**
+**3. Auth tests split by what the provider can do — and the gate is NOT `MemberCondition`.**
 
 | Test | Needs | Behaviour |
 |---|---|---|
 | no token → 401 | nothing; send no `Authorization` | **Always generated, always runs** |
-| wrong scope → 403 | a second identity | Generated, gated on `Identities.Count > 1` |
+| wrong scope → 403 | a second identity | Generated; skips with a stated reason when unavailable |
 
-Gating is `MemberCondition` over `InTestConditions.MultiIdentityAvailable` — framework-native, and the same mechanism §9 already specifies for variations. A gated-off test **skips with a stated reason and is counted in the coverage report**; a generated suite must not be red on day one for a capability the adopter has not supplied.
+§9 specifies `MemberCondition` for this. **Measured, on MSTest 4.3.3, that does not work here** —
+the condition is evaluated *before* `[AssemblyInitialize]`, so it cannot see anything the DI
+container builds:
 
-**4. Declared-error tests come from declared responses only — never inferred.**
+```
+09:48:17.759  condition-read Root=NULL      <- MemberCondition evaluated
+09:48:17.774  assembly-initialize            <- 15ms later
+09:48:17.783  plain-test-body-ran
+```
 
-Where the spec declares a 404 or a 400, generate a test for it. Where it does not, generate nothing. InTest does not guess that an endpoint "probably" 404s on a bad id, because §9's expected-outcome policy is explicit that guessed assertions produce a wall of wrong failures that get bulk-ignored.
+The gated test was **Skipped and the run reported `Passed!`** — a green suite with auth testing
+silently switched off, which is worse than the exception one might expect, because nothing
+surfaces.
 
-A 404 test needs an id that does not exist. That is a **generated constant**, not a fixture: a fresh GUID or an unmatchable string, chosen so no seeded row can collide. It must not consume a fixture value, or a suite whose fixtures are unfilled would block a test that needs no data at all.
+`MemberCondition` remains correct where the condition is knowable without DI — a config or
+environment flag, which is how §9 uses it for variations. It is wrong wherever the answer lives
+in the service provider.
 
-**5. Every new case is `TestCategory("Contract")`.**
+**The gate is therefore a runtime guard inside the generated test**, which runs after
+`AssemblyInitialize` and can consult the real provider:
+
+```csharp
+[TestMethod, TestCategory("Contract")]
+public async Task DeleteOrder_WrongScope_Returns403()
+{
+    RequireMultipleIdentities();   // Assert.Inconclusive with a stated reason if not
+    ...
+}
+```
+
+`Assert.Inconclusive` reports as skipped in the `.trx` **with its message**, reads the single
+source of truth rather than a config flag that can drift from it, and keeps the reason visible.
+Task 7 amends §9 with this measurement, since the spec currently recommends a mechanism that
+fails silently for this use.
+
+**4. Method names are deduped by case identity, not by operation.**
+
+`TestPlanBuilder` builds `proposedNames[key.Value] = methodName` — one entry per operation — and
+then reassigns `MethodName = deduped[d.Case.OperationKey]` for every case in the class
+(`TestPlanBuilder.cs:66,92`). Emit two to four cases per operation under that keying and they all
+receive the **same** method name: `CS0111`, and nothing compiles.
+
+Both the dictionary and the rename must key on **operation key + role**. Two knock-on effects to
+handle deliberately rather than discover:
+
+- `CSharpIdentifier.Dedupe` computes `ShortHash` over that key, so changing it **churns the
+  suffix on genuinely-colliding operations too** — and the golden file with them.
+- Role must therefore be part of the case identity in `TestCasePlan`, not derived at render time.
+
+**5. Declared-error tests come from declared responses only — never inferred.**
+
+**v1-c generates declared-error tests for `404` only, and only for operations with at least one
+path parameter.** Everything else in the 4xx range is excluded, each for its own reason:
+
+| Status | Why not in v1-c |
+|---|---|
+| `400` | **No deterministic fixture-free trigger exists.** Provoking one means sending malformed input — the variation subsystem this plan defers. A 400 case sending the valid success request asserts 400 against a 200 on every run: exactly the wall of wrong failures decision 5 cites as the reason not to guess |
+| `401`, `403` | **The auth cases already own these.** An operation declaring 401 would otherwise get both an auth 401 (sends no token, expects 401 — correct) and a declared-error 401 (sends a valid authenticated request, expects 401 — fails always). Specs declare these routinely |
+| `409`, `422`, others | Need specific conflicting state or input. Same reasoning as 400 |
+
+A 404 also needs somewhere to put an unmatchable value, so an operation declaring 404 with **no
+path parameter** — a `GET /orders` that declares one — is skipped and noted. Restricting to path
+parameters rather than "any parameter" is deliberate: telling a lookup query parameter from a
+filter is itself a guess.
+
+*Recorded for v1-c2 rather than lost:* omitting a **required** parameter is a candidate
+deterministic 400 trigger, since the contract declares the requirement. It is deferred because
+whether a framework answers 400 or 404 for a missing required parameter depends on binding and
+route configuration — which makes it a measurement to take, not an assumption to ship.
+
+**6. Every fixture-free case uses an unmatchable id and sends no body — including auth cases.**
+
+A generated constant, not a fixture value: a fresh GUID or an unmatchable string, so no seeded
+row can collide and an unfilled fixture cannot block a test that needs no data.
+
+This applies to auth cases too, and the reason is safety rather than tidiness. A `DELETE
+/orders/{id}` 403 case pointed at a real id **succeeds when auth is broken** — which is the only
+condition under which that test fails. It would delete real data at exactly the moment something
+is already wrong. Pointing every auth case at an unmatchable id and sending no body makes a
+failing auth test harmless: a 404 instead of a 204.
+
+Task 8 Step 3 deliberately mis-scopes a token and expects the write 403s to fail. Without this
+rule, that step performs real deletes against the sample.
+
+**7. Every new case is `TestCategory("Contract")`.**
 
 §9 splits the gate on category: `--filter "TestCategory=Contract"` runs in the post-deployment gate, `Variation` does not. Declared-error and auth tests are deterministic, fixture-free and safe against a deployed environment — exactly what belongs in a gate. Only variations get a different category, and they are not in this plan.
 
@@ -82,18 +158,20 @@ A 404 test needs an id that does not exist. That is a **generated constant**, no
 |---|---|
 | **New — `src/InTest.Runtime/`** | |
 | `Neutral/AuthHandler.cs` | Sets `Authorization` from `ITestTokenProvider` for the ambient identity |
-| `Neutral/InTestConditions.cs` | `MultiIdentityAvailable`, read by `MemberCondition` |
+| `Neutral/InTestIdentities.cs` | The `None` sentinel meaning "send no token", plus the ambient accessor |
 | `MSTest/InTestClients.cs` *(modify)* | Add `Readiness` alongside `Api` |
 | **Modified** | |
 | `MSTest/TestHost.cs` | Register both clients; resolve the readiness one for probing; expose the token provider |
 | `MSTest/ApiTestBase.cs` | Set and clear the ambient identity per test |
 | `Planning/TestCasePlan.cs` | Carry the expected status' role — success, declared error, or auth — and the identity to use |
 | `Planning/TestPlanBuilder.cs` | Emit declared-error and auth cases |
-| `Rendering/Templates/mstest-class.scriban` | Render them, including the `MemberCondition` gate |
+| `Rendering/Templates/mstest-class.scriban` | Render them, including the runtime multi-identity guard |
 | `Coverage/CoverageReport.cs` | Count generated and gated auth tests |
 | `Commands/InitCommand.cs` | Scaffold registers a token provider; Phase 3's guidance changes |
 
-`AuthHandler` and `InTestConditions` are under `Neutral/`, so §3's portability boundary holds and the architecture test stays green. **`MemberCondition` is an MSTest attribute — it is emitted by the template, never referenced from `Neutral/`.**
+`AuthHandler` and `InTestIdentities` are under `Neutral/`, so §3's portability boundary holds and
+the architecture test stays green. The multi-identity guard is an `ApiTestBase` helper — MSTest
+layer, since `Assert.Inconclusive` is an MSTest type (decision 3).
 
 ---
 
@@ -168,9 +246,43 @@ public async Task SendsNoAuthorizationHeaderForTheNoTokenIdentity()
 }
 ```
 
-- [ ] **Step 2–4: Run, implement, re-run, commit**
+- [ ] **Step 2: Three interface questions the plan must answer before you implement**
 
-`ApiTestBase` sets the ambient identity in `[TestInitialize]` and clears it in `[TestCleanup]`, exactly as it already does for `TestId`. The default is the provider's first identity.
+**a. `Identities` becomes `IReadOnlyList<string>`.** It is `IReadOnlyCollection<string>` today
+(`ITestTokenProvider.cs:14`), which guarantees no order — yet "the default is the provider's
+first identity" and the 403 case must select a *different* one by position, because the CLI
+generates code long before any adopter has written a provider and cannot know an identity name.
+Position is the only thing generated code can reference, so order has to be part of the contract.
+
+This is a breaking change to a public interface in `InTest.Runtime`, which §3's semver contract
+covers — **and the packages are still unpublished, so this is the last moment it is free.** Take
+it now or accept a major bump later. Document that index 0 is the default identity.
+
+**b. `AuthHandler` no-ops when no provider is registered.** `GetTokenAsync(string audience, ...)`
+requires a provider, but Catalog and Inventory declare no `security` and their scaffolds register
+none — they cannot, since `StaticTokenProvider` needs a token. Resolve `ITestTokenProvider?` and
+send no `Authorization` header when it is absent.
+
+Preferred over the alternative — scaffolding `AuthHandler` only when the spec declares `security`
+— because that makes `init`'s output shape depend on the spec, which is harder to document and
+harder to test. A handler that is present and inert is simpler than a handler that is sometimes
+absent. Task 8 Step 5 depends on this working.
+
+**c. What is passed as `audience`.** The parameter is required and has no default, so an adopter
+implementing the interface needs to know what arrives. Use configuration `Api:Audience`, falling
+back to the base URL's authority. **Not** the spec's security-scheme audience: OpenAPI OAuth2
+flows carry `tokenUrl` and `scopes`, not reliably an audience.
+
+- [ ] **Step 3: An adopter who already wrote their own handler now has two**
+
+Phase 3 told adopters to write a `BearerTokenHandler` and attach it. Anyone who did now has that
+plus `AuthHandler`, both setting `Authorization` — last one wins, silently. Task 7's upgrade note
+must say to remove theirs, and the scaffold comment must say `AuthHandler` is already attached.
+
+- [ ] **Step 4–5: Run, implement, re-run, commit**
+
+`ApiTestBase` sets the ambient identity in `[TestInitialize]` and clears it in `[TestCleanup]`,
+exactly as it already does for `TestId`. The default is `Identities[0]`.
 
 ```bash
 git commit -m "feat(runtime): auth handler consuming the registered token provider"
@@ -220,7 +332,16 @@ git commit -m "feat(cli): plan declared-error cases from declared responses"
 
 A declared-error case renders a method asserting its status, uses the generated unmatchable id, and **calls no fixture lookup**. `EmitsNoStrayBlankLines` must still pass — the template gains conditionals, which is exactly where whitespace control breaks.
 
-- [ ] **Step 2: Regenerate the golden file and read it**
+- [ ] **Step 2: Extend the golden corpus first — today it proves nothing about this**
+
+`tests/InTest.Golden.Tests/Specs/orders.json` holds two operations, `200` responses only, no
+`security`. Regenerating the golden file against it would be a **no-op for every line v1-c adds**,
+leaving the project's one whole-file regression guard covering none of this plan's output.
+
+Add to that spec: a declared `404` on `GET /orders/{id}`, and a `security` block on at least one
+operation. Add the matching arms to `GoldenApiStub`, which has no 401 or 403 response today.
+
+- [ ] **Step 3: Regenerate the golden file and read it**
 
 ```bash
 INTEST_UPDATE_GOLDEN=1 dotnet test tests/InTest.Golden.Tests --filter "FullyQualifiedName~GoldenFileTests"
@@ -260,9 +381,21 @@ public void TheShippedProviderGatesTheForbiddenTestsOff()
 }
 ```
 
-- [ ] **Step 2–4: Run, implement, re-run, commit**
+- [ ] **Step 2: Regenerate the golden file again**
 
-The template emits `[MemberCondition(typeof(InTestConditions), nameof(InTestConditions.MultiIdentityAvailable))]` on 403 cases only.
+Task 4 added `security` to the golden spec precisely so this task's output is covered too. Read
+the regenerated file and confirm the 401 and 403 methods are in it — an auth case that never
+reaches the golden corpus has no whole-file guard at all.
+
+- [ ] **Step 3–5: Run, implement, re-run, commit**
+
+The template emits the runtime guard call (decision 3) at the top of 403 cases only — **not**
+`MemberCondition`, which is measured not to work for a DI-dependent condition.
+
+**`[DoNotParallelize]` must also consider the role.** It is derived from HTTP method alone today
+(`TemplateRenderer.cs:32`), so every 401 and 403 case on a POST or DELETE would serialize the
+gate despite sending an unmatchable id and no body, and mutating nothing. Derive it from method
+**and** role.
 
 ```bash
 git commit -m "feat: generate auth contract tests, gated on available identities"
@@ -278,7 +411,26 @@ git commit -m "feat: generate auth contract tests, gated on available identities
 
 - [ ] **Step 1: Write the failing tests**
 
-The report counts declared-error tests generated, auth tests generated, and **auth tests gated off**. That last line is why a reader can tell "gated" from "never generated" — without it they are indistinguishable, which §12 treats as the same failure as a silent skip.
+**Operation counts and case counts must stop being the same number.** `CoverageReport.cs:20`
+reports `generated = cases.Count`, which reads as an operation count today only because cases and
+operations are 1:1 — §12's own example is "Operations in spec: 148 / Generated: 113". Emitting
+several cases per operation silently changes what that number means, and what `--check` compares.
+
+Two existing notes break the same way:
+
+| Note | Breaks how |
+|---|---|
+| `untaggedOperations` | Sums case counts under a name that says operations |
+| `statusOnlyContractTests` | Counts null `SchemaKey`, so every declared-error and auth case inflates a note whose stated meaning is "no response schema declared — fixable in the spec" |
+
+That second one is §12's bodiless-204 mistake recurring: a note that means one thing and counts
+another. Separate operation counts from case counts, and exclude non-success roles from both notes.
+
+The report also counts declared-error tests generated, auth tests generated, **auth tests skipped
+for want of a second identity**, and **operations declaring 404 that got no test because they have
+no path parameter** (decision 5). Those last two are why a reader can tell "skipped" and "not
+applicable" from "never generated" — without them they are indistinguishable, which §12 treats as
+the same failure as a silent skip.
 
 The scaffold's `TestStartup.cs` shows registering an `ITestTokenProvider`, and Phase 3's example must attach `AuthHandler` to `InTestClients.Api` **only** — never to readiness (Task 1). Assert on the registration call, not on prose.
 
@@ -304,14 +456,19 @@ With F10's evidence, so the reason survives.
 
 It currently attaches the handler to the client readiness also uses. Correct it, and say why plainly enough that nobody reverts it: an anonymous probe must not fail because a token provider is unreachable.
 
-- [ ] **Step 4: Close F8 and F10 in the acceptance log**
+- [ ] **Step 4: Fix F9 — `samples/README.md`'s documented port is unreachable**
+
+A one-line fix, and it is an owner-phase item in v1-b's action table. Named here rather than left
+inside Task 8 Step 1, where it would be done in passing during an acceptance run and easily lost.
+
+- [ ] **Step 5: Close F8, F9 and F10 in the acceptance log**
 
 Both with the evidence from Tasks 1 and 2 — not merely marked done.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git commit -m "docs: declared-error and auth tests are built; F8 and F10 closed"
+git commit -m "docs: declared-error and auth tests are built; F8, F9 and F10 closed"
 ```
 
 ---
@@ -352,7 +509,14 @@ git commit -m "docs: v1-c acceptance run — auth tests against a live identity 
 
 ## Self-review
 
-**Spec coverage.** §9's declared-error tests (Tasks 3, 4), auth tests with the 401/403 split and `MemberCondition` gating (Tasks 2, 5), and the coverage lines that keep gated tests visible (Task 6). §13's readiness client (Task 1). F8 and F10 both close with evidence (Tasks 1, 2, 7).
+**Spec coverage.** §9's declared-error tests (Tasks 3, 4), auth tests with the 401/403 split
+(Tasks 2, 5), and the coverage lines that keep skipped tests distinguishable from absent ones
+(Task 6). §13's readiness client (Task 1). F8, F9 and F10 all close with evidence (Tasks 1, 2, 7).
+
+**One spec mechanism is contradicted by measurement, not by preference.** §9 specifies
+`MemberCondition` for gating auth tests. It is evaluated before `[AssemblyInitialize]`, so it
+cannot see the DI container, and the failure mode is a silently skipped test in a suite that
+reports `Passed!`. Task 7 amends §9 with the trace rather than quietly doing something else.
 
 **Deliberately deferred.** Variation tests — the reasoning is at the top, and it is a scope call worth overriding now rather than at Task 8 if you disagree. `IControllerFixture` — still no measured need. Multi-identity providers beyond client-credentials — the interface takes an identity string; what an adopter does with it is theirs.
 
