@@ -11,6 +11,23 @@ public enum CaseRole
     DeclaredError
 }
 
+/// <summary>
+/// The OpenAPI-declared shape of a path parameter, as far as <see cref="TemplateRenderer"/>
+/// needs to know it to pick an unmatchable-but-well-typed value for a non-success case (decision
+/// 6). Review finding on Task 4: rendering <c>Guid.NewGuid().ToString()</c> for every path
+/// parameter regardless of declared type sends an ill-typed value against a `type: integer`
+/// parameter — an ASP.NET Core `[ApiController]` binding `int id` without a route constraint
+/// answers 400 from model binding before the action's <c>NotFound()</c> path ever runs, so the
+/// generated 404 case fails on every run. Only <see cref="Integer"/> gets special treatment;
+/// every other declared type (string, its formats included, or nothing declared at all) still
+/// takes a fresh GUID, which was already a well-typed unmatchable value for those.
+/// </summary>
+public enum PathParameterKind
+{
+    String,
+    Integer
+}
+
 public sealed record TestCasePlan(
     string MethodName,
     string DisplayName,
@@ -46,4 +63,10 @@ public sealed record TestCasePlan(
     // Whether the operation has an `application/json` request body with a schema to compose from
     // — FixtureComposer.HasJsonBodyToCompose is the sole authority on this (same reasoning as
     // NeedsFixture above), so this is set from that method directly rather than re-derived here.
-    bool HasRequestBody = false);
+    bool HasRequestBody = false,
+    // Parallel to PathParameterNames — same order, same length when set. Only TestPlanBuilder's
+    // declared-error branch populates this (the only role that ever renders an unmatchable
+    // value from it); every other call site, including every one that predates this field, is
+    // read as "kind unknown", which TemplateRenderer treats identically to String — the same
+    // GUID it always rendered, so no existing behaviour changes silently.
+    IReadOnlyList<PathParameterKind>? PathParameterKinds = null);

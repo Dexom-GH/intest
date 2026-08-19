@@ -73,6 +73,15 @@ public sealed class TemplateRenderer
     /// The condition tests for Success, not "!= DeclaredError", for the same fail-safe reason as
     /// <c>emits_fixture_lookup</c> above: Task 5's Auth role must default to this same
     /// fixture-free arm the instant it exists, without anyone having to remember to add it here.
+    ///
+    /// Review finding on Task 4: "unmatchable" is not the same as "any old value" — a
+    /// <c>type: integer</c> path parameter needs a well-typed-but-unmatchable value, or an
+    /// ASP.NET Core binder without a route constraint answers 400 from model binding before the
+    /// action's declared-error path ever runs, and the generated test asserts 404 against a
+    /// guaranteed 400 on every run. <see cref="UnmatchableValueFor"/> picks per
+    /// <see cref="TestCasePlan.PathParameterKinds"/>; a missing or short kinds list (every call
+    /// site that predates this field) reads as "unknown", which renders the same GUID this
+    /// method always rendered.
     /// </summary>
     private static string PathArguments(TestCasePlan plan)
     {
@@ -81,12 +90,28 @@ public sealed class TemplateRenderer
             return string.Empty;
         }
 
-        var values = plan.Role != CaseRole.Success
-            ? plan.PathParameterNames.Select(_ => "Guid.NewGuid().ToString()")
-            : plan.PathParameterNames.Select(n => $"FixtureParameter(\"{plan.OperationKey}\", \"{n}\")");
+        if (plan.Role == CaseRole.Success)
+        {
+            return ", " + string.Join(", ",
+                plan.PathParameterNames.Select(n => $"FixtureParameter(\"{plan.OperationKey}\", \"{n}\")"));
+        }
+
+        var kinds = plan.PathParameterKinds;
+        var values = plan.PathParameterNames.Select((_, i) =>
+            UnmatchableValueFor(kinds is not null && i < kinds.Count ? kinds[i] : PathParameterKind.String));
 
         return ", " + string.Join(", ", values);
     }
+
+    /// <summary>
+    /// A large in-range integer literal for <see cref="PathParameterKind.Integer"/> — well-typed
+    /// (a compliant binder accepts it and reaches the action) but unmatchable by any seeded row
+    /// using ordinary small or sequential ids. Every other kind keeps the fresh GUID this
+    /// renderer always emitted, which was already a well-typed unmatchable value for a string
+    /// (uuid-formatted or not).
+    /// </summary>
+    private static string UnmatchableValueFor(PathParameterKind kind)
+        => kind == PathParameterKind.Integer ? "\"2147483647\"" : "Guid.NewGuid().ToString()";
 
     /// <summary>
     /// Appended to the built path so the query string comes entirely from whichever declared

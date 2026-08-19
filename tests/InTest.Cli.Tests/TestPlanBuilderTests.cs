@@ -311,6 +311,43 @@ public class TestPlanBuilderTests
     }
 
     [TestMethod]
+    public async Task ANotFoundCaseForAnIntegerPathParameterCarriesItsDeclaredKind()
+    {
+        // Review finding on Task 4: the renderer needs to know a path parameter is `type:
+        // integer` to pick a well-typed unmatchable value instead of a GUID (see
+        // TemplateRendererTests). TestPlanBuilder is the only place that ever reads the spec's
+        // parameter schema, so it must carry the kind forward on the declared-error case.
+        const string spec = """
+        {
+          "openapi": "3.0.3",
+          "info": { "title": "Orders", "version": "1.0" },
+          "paths": {
+            "/orders/{id}": {
+              "get": {
+                "operationId": "getOrderById",
+                "tags": ["Orders"],
+                "parameters": [
+                  { "name": "id", "in": "path", "required": true, "schema": { "type": "integer", "format": "int32" } }
+                ],
+                "responses": {
+                  "200": { "description": "ok", "content": { "application/json": {
+                    "schema": { "$ref": "#/components/schemas/Order" } } } },
+                  "404": { "description": "not found" }
+                }
+              }
+            }
+          },
+          "components": { "schemas": { "Order": { "type": "object" } } }
+        }
+        """;
+
+        var plan = await BuildAsync(spec);
+        var notFound = plan.Classes.SelectMany(c => c.Cases).Single(c => c.Role == CaseRole.DeclaredError);
+
+        notFound.PathParameterKinds.ShouldBe([PathParameterKind.Integer]);
+    }
+
+    [TestMethod]
     public async Task TheSuccessCaseIsUnaffectedByTheDeclaredErrorCaseItGainsANeighbour()
     {
         var plan = await BuildAsync(SpecDeclaring404);

@@ -160,7 +160,13 @@ public static class TestPlanBuilder
                             // fixture value — so an unfilled fixture can never block a test that
                             // needs no data, and a broken generator can never delete or mutate
                             // real state through this case.
-                            NeedsFixture: false)));
+                            NeedsFixture: false,
+                            // Review finding on Task 4: which flavour of unmatchable value is
+                            // safe depends on the parameter's declared type — an integer path
+                            // parameter needs a well-typed-but-unmatchable integer, not a GUID
+                            // string a route-constraint-free binder rejects with 400 before the
+                            // 404 path ever runs. TemplateRenderer is the only consumer.
+                            PathParameterKinds: ResolvePathParameterKinds(operation, pathParameterNames))));
                     }
                 }
             }
@@ -273,6 +279,31 @@ public static class TestPlanBuilder
             .Where(p => p.In == ParameterLocation.Query && p.Required)
             .Select(p => p.Name!)
             .ToList();
+
+    /// <summary>
+    /// One <see cref="PathParameterKind"/> per entry in <paramref name="pathParameterNames"/>,
+    /// same order — the spec data <see cref="TemplateRenderer"/> needs to render a well-typed
+    /// unmatchable value for a declared-error case (decision 6, and the review finding above
+    /// this method's only call site). Every declared type except integer/number renders as
+    /// <see cref="PathParameterKind.String"/>, which keeps rendering the fresh GUID this code
+    /// already used before that finding — only the integer case is new behaviour.
+    /// </summary>
+    private static IReadOnlyList<PathParameterKind> ResolvePathParameterKinds(
+        OpenApiOperation operation, IReadOnlyList<string> pathParameterNames)
+    {
+        var declared = (operation.Parameters ?? [])
+            .Where(p => p.In == ParameterLocation.Path)
+            .ToDictionary(p => p.Name!, p => p.Schema, StringComparer.Ordinal);
+
+        return pathParameterNames
+            .Select(name => declared.TryGetValue(name, out var schema) && IsNumericType(schema)
+                ? PathParameterKind.Integer
+                : PathParameterKind.String)
+            .ToList();
+    }
+
+    private static bool IsNumericType(IOpenApiSchema? schema)
+        => schema?.Type is { } type && (type.HasFlag(JsonSchemaType.Integer) || type.HasFlag(JsonSchemaType.Number));
 
     private static IReadOnlyList<string> PathParameters(string path)
     {

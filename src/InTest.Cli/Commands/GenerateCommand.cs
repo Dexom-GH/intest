@@ -122,6 +122,10 @@ public static class GenerateCommand
             {
                 Console.WriteLine($"Skipped {plan.Skipped.Count} operation(s) — see coverage-report.json.");
             }
+            if (plan.Notes.Count > 0)
+            {
+                Console.WriteLine($"Noted {plan.Notes.Count} operation(s) — see coverage-report.json.");
+            }
 
             return ExitOk;
         }

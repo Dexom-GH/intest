@@ -68,6 +68,26 @@ public class CoverageReportTests
     }
 
     [TestMethod]
+    public void SurfacesAWithheldDeclaredErrorCaseInTheArtefact()
+    {
+        // Review finding on Task 4: TestPlan.Notes was populated by TestPlanBuilder's three
+        // withholding branches and then read by nothing — a withheld declared-error case was a
+        // completely silent omission, exactly what §12 legislates against ("skips remove tests.
+        // Notes do not" only helps if something reports the notes).
+        var plan = new TestPlan(
+            "Orders",
+            [new TestClassPlan("OrdersTests", "Orders",
+                [new TestCasePlan("A_Contract", "d", "a", true, "GET", "/a", [], 200, "Order", "Contract")])],
+            [],
+            [new CoverageNote("a", "declares 404 but has no path parameter to target with an unmatchable value")]);
+
+        var json = CoverageReport.ToJson(plan);
+
+        json.ShouldContain("\"a\"");
+        json.ShouldContain("no path parameter to target with an unmatchable value");
+    }
+
+    [TestMethod]
     public void CarriesAnUnusableOperationIdSkip()
     {
         var plan = new TestPlan("Api", [],

@@ -43,6 +43,23 @@ public class TemplateRendererTests
             Role: CaseRole.DeclaredError,
             NeedsFixture: false)]);
 
+    private static TestClassPlan PlanDeclaredErrorWithIntegerPathParameter() => new(
+        "OrdersTests", "Orders",
+        [new TestCasePlan(
+            MethodName: "DeleteOrder_NotFound",
+            DisplayName: "Given Orders, when deleteOrder, then 404",
+            OperationKey: "deleteOrder",
+            OperationKeySynthesized: false,
+            HttpMethod: "GET",
+            PathTemplate: "/orders/{id}",
+            PathParameterNames: ["id"],
+            ExpectedStatus: 404,
+            SchemaKey: null,
+            Category: "Contract",
+            Role: CaseRole.DeclaredError,
+            NeedsFixture: false,
+            PathParameterKinds: [PathParameterKind.Integer])]);
+
     private static TestClassPlan PlanWithRole(CaseRole role) => new(
         "OrdersTests", "Orders",
         [new TestCasePlan(
@@ -206,6 +223,23 @@ public class TemplateRendererTests
 
         rendered.ShouldContain("Guid.NewGuid().ToString()");
         rendered.ShouldNotContain("FixtureParameter(");
+    }
+
+    [TestMethod]
+    public void ADeclaredErrorCaseWithAnIntegerPathParameterUsesAWellTypedUnmatchableValueRatherThanAGuid()
+    {
+        // Review finding on Task 4: PathArguments rendered Guid.NewGuid().ToString() for every
+        // path parameter regardless of declared type. For `type: integer`, that is not an
+        // unmatchable id — it is an ill-typed one, and an ASP.NET Core [ApiController] binding
+        // `int id` without a route constraint answers 400 from model binding before the action's
+        // NotFound() path ever runs, so the generated test would assert 404 against a guaranteed
+        // 400 on every run — the same 400-vs-404 hazard the three note-not-guess branches in
+        // TestPlanBuilder exist to avoid, just undetected here even though the same spec data
+        // (the parameter's declared schema type) was available.
+        var rendered = Render(PlanDeclaredErrorWithIntegerPathParameter());
+
+        rendered.ShouldNotContain("Guid.NewGuid()");
+        rendered.ShouldContain("\"2147483647\"");
     }
 
     [TestMethod]
