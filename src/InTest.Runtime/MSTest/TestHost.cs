@@ -40,11 +40,11 @@ public static class TestHost
     /// <summary>
     /// The one <see cref="FixtureContext"/> instance <see cref="InitializeAsync"/> creates and
     /// passes to every fixture, retained here so <see cref="CleanupAsync"/> can drain the exact
-    /// instance the fixtures wrote to rather than a fresh, empty one (decision 4). Reset to null
+    /// instance the fixtures wrote to rather than a fresh, empty one (v1-b decision 4). Reset to null
     /// at the top of every <see cref="InitializeAsync"/> call and set again just before
     /// <see cref="FixtureRunner.RunAsync"/> runs, not after: <see cref="FixtureRunner.RunAsync"/>
     /// deliberately does not drain a cancellation that lands between fixtures (its own doc calls
-    /// this out — decision 4 does not guarantee cleanup across a cancellation, crash, or agent
+    /// this out — v1-b decision 4 does not guarantee cleanup across a cancellation, crash, or agent
     /// timeout), so whatever already-succeeded fixtures registered before that point only reaches
     /// <see cref="CleanupAsync"/>'s later, unconditional drain if this field was already pointing
     /// at the live context when the cancellation happened. An ordinary fixture failure does not
@@ -105,7 +105,7 @@ public static class TestHost
         var client = scope.ServiceProvider.GetRequiredService<IHttpClientFactory>().CreateClient(InTestClients.Api);
         await Readiness.WaitAsync(client, readiness, cancellationToken).ConfigureAwait(false);
 
-        // The reorder that is this task's whole substance (decision 1): seeding needs a service
+        // The reorder that is this task's whole substance (v1-b decision 1): seeding needs a service
         // provider and a reachable API, so it runs here — after both — and before TokenResolver,
         // which needs seeding's published keys to resolve {{fixture:...}} at all. One visible
         // consequence: a dead API now fails on readiness before the fixture report is ever built

@@ -64,7 +64,7 @@ public static class FixtureRunner
         {
             // Checked before entering the try below, so a cancellation between fixtures
             // propagates as a raw OperationCanceledException, undrained. That is a deliberate,
-            // not incidental, choice: decision 4 already says cleanup is not guaranteed on
+            // not incidental, choice: v1-b decision 4 already says cleanup is not guaranteed on
             // cancellation, crash, or agent timeout — the out-of-band sweeper is the answer for
             // what that leaves behind — so RunAsync does not pretend otherwise by draining here.
             // A fixture that throws OperationCanceledException from inside its own

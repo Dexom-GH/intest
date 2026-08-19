@@ -145,7 +145,7 @@ public class FixtureGraphTests
         // services.AddSingleton<IAssemblyFixture, X>() (unlike TryAddEnumerable) does not dedupe
         // a copy-pasted registration line, so resolving IEnumerable<IAssemblyFixture> can hand
         // Order the same fixture type twice. Collapsing that to one run silently would hide
-        // exactly the non-determinism decision 3 exists to eliminate.
+        // exactly the non-determinism v1-b decision 3 exists to eliminate.
         var ex = Should.Throw<FixtureLifecycleException>(() => FixtureGraph.Order([new Alpha(), new Alpha()]));
 
         ex.Message.ShouldContain(nameof(Alpha));

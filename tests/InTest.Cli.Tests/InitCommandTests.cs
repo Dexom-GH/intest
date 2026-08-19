@@ -139,7 +139,7 @@ public class InitCommandTests
         InitCommand.Run(_root, "Orders.ApiTests", "orders.json");
         var startup = File.ReadAllText(Path.Combine(_root, "TestStartup.cs"));
 
-        // Commented, not live: `init` never discovers fixtures by reflection (decision 2), and a
+        // Commented, not live: `init` never discovers fixtures by reflection (v1-b decision 2), and a
         // live call here would reference a fixture type that does not exist yet, breaking every
         // fresh scaffold's build before a team has written one.
         startup.ShouldContain("// services.AddSingleton<IAssemblyFixture,");

@@ -2,7 +2,7 @@ namespace InTest.Runtime;
 
 /// <summary>
 /// Orders <see cref="IAssemblyFixture"/> instances so every fixture's <see cref="IAssemblyFixture.DependsOn"/>
-/// finishes before it runs (decision 3). Integer priorities were rejected in §13 — someone always
+/// finishes before it runs (v1-b decision 3). Integer priorities were rejected in §13 — someone always
 /// needs to slot a new fixture between 15 and 20 — so ordering is derived from the dependency
 /// graph itself, which has no gaps to slot into. This type only computes the order; <c>FixtureRunner</c>
 /// (Task 3) is the sole caller and owns everything about actually running a fixture.
@@ -20,7 +20,7 @@ public static class FixtureGraph
     /// the dependent and the missing type when a <c>DependsOn</c> entry points at a type nobody
     /// registered; naming a type registered more than once (<c>AddSingleton</c>, unlike
     /// <c>TryAddEnumerable</c>, does not dedupe a copy-pasted registration line, and collapsing
-    /// that to a single run silently would hide exactly the non-determinism decision 3 exists to
+    /// that to a single run silently would hide exactly the non-determinism v1-b decision 3 exists to
     /// eliminate); or naming a fixture whose <c>DependsOn</c> is null. Every failure names the
     /// fixture(s) responsible rather than leaving the reader to re-derive the graph by hand.
     /// </para>

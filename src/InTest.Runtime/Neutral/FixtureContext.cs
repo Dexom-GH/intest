@@ -6,7 +6,7 @@ namespace InTest.Runtime;
 /// The state one assembly run's fixtures publish into and register teardown against. One
 /// instance is created by <c>TestHost</c>, passed to every <see cref="IAssemblyFixture"/>, and
 /// retained in a static field so <c>AssemblyCleanup</c> can drain the same instance the fixtures
-/// wrote to (decision 4). This type only records — it runs nothing itself; <see cref="FixtureRunner"/>
+/// wrote to (v1-b decision 4). This type only records — it runs nothing itself; <see cref="FixtureRunner"/>
 /// (Task 3) owns ordering fixtures, invoking them, and taking and running the cleanup actions
 /// recorded here. Taking cleanup actions on drain (rather than merely reading them) is still
 /// recording-side bookkeeping, not execution, so that responsibility belongs on this type rather
@@ -44,7 +44,7 @@ public sealed class FixtureContext
 
     /// <summary>
     /// Teardown registered so far and not yet taken for draining, in registration order — the
-    /// order <see cref="FixtureRunner"/> must drain in reverse (decision 4). A fresh snapshot on
+    /// order <see cref="FixtureRunner"/> must drain in reverse (v1-b decision 4). A fresh snapshot on
     /// every read, like <see cref="PublishedValues"/>: the backing list can shrink once draining
     /// starts taking from it, and a caller holding an earlier <see cref="IReadOnlyList{T}"/> from
     /// this property must not see it empty out from under them.
