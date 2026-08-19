@@ -1226,11 +1226,12 @@ Still open, stated rather than glossed:
   own doc comment states this precondition; a "full access vs. read-only" split — arguably the
   most common real-world shape — silently produces 4 unprovable wrong-scope 403 tests for every
   3 provable ones on `samples/Orders.Api`. See "v1-c actions" below.
-- **Decision 6's predicted status for a mis-scoped, bodyless `POST` is wrong: 415, not 400
+- **Task 8 Step 3's prediction table for a mis-scoped, bodyless `POST` is wrong: 415, not 400
   (F12).** `DELETE`'s prediction (404) is correct — the difference is `[ApiController]` model
   binding returning 415 for a missing `Content-Type` before validation (400's source) ever
-  runs. Not yet corrected anywhere the prediction is repeated (§9, getting-started, this plan's
-  own decision 6 text). See "v1-c actions" below.
+  runs. Not yet corrected at its source, `docs/superpowers/plans/2026-08-19-intest-v1c-error-and-auth-tests.md:691`
+  — decision 6 itself (plan lines 135–147) predicts only DELETE's 404 and makes no POST
+  prediction. See "v1-c actions" below.
 - **`InventorySeedFixture` inserts directly into `inventory.db` rather than through
   `Inventory.Api`'s own HTTP surface**, because `StockController` has no create endpoint —
   unlike `CatalogSeedFixture`, which seeds entirely over HTTP. Not exercised: whether a direct-
@@ -1380,9 +1381,10 @@ instead of 20 of 24.
 not `204`** — the unmatchable id (decision 6) means the request that is no longer denied still
 finds no row to delete, so nothing was actually deleted by this run.
 
-**`PostApiOrders_Forbidden` and `PostApiCustomers_Forbidden` do not match decision 6's
-prediction.** Decision 6's own text (this plan, above) says a mis-scoped POST should give
-`expected 403, got 400` — "no body is sent". The measured status is **415, not 400** — see F12.
+**`PostApiOrders_Forbidden` and `PostApiCustomers_Forbidden` do not match Task 8 Step 3's
+prediction.** The prediction table in this plan's Task 8 Step 3 (line 691) says a mis-scoped
+POST should give `expected 403, got 400` — "no body is sent". Decision 6 itself makes no POST
+prediction; only DELETE's 404 is its claim. The measured status is **415, not 400** — see F12.
 
 **The trade decision 6 makes, stated plainly:** a *passing* auth test proves the authorization
 check ran and denied — `DeleteApiOrdersId_Forbidden` and the two POST cases passing in Step 2 is
@@ -1518,9 +1520,11 @@ real identity capabilities).
 
 ### F12 — a mis-scoped, bodyless POST 415s, not the 400 decision 6 predicts
 
-Decision 6's own text (this plan) says: `POST /api/orders` mis-scoped gives "`expected 403, got
-400`" because "no body is sent". Measured in Step 3: both `PostApiOrders_Forbidden` and
-`PostApiCustomers_Forbidden` return **415 Unsupported Media Type**, not 400.
+Task 8 Step 3's own prediction table (this plan, line 691) says: `POST /api/orders` mis-scoped
+gives "`expected 403, got 400`" because "no body is sent". Decision 6 (lines 135–147) makes no
+prediction for POST at all — its only claim is DELETE's 404, which held. Measured in Step 3: both
+`PostApiOrders_Forbidden` and `PostApiCustomers_Forbidden` return **415 Unsupported Media Type**,
+not 400.
 
 The generated request (`Generated/OrdersTests.g.cs`) sets no `request.Content` and no
 `Content-Type` header at all for an auth case — decision 6's "no body" premise is accurate. But
@@ -1536,9 +1540,12 @@ carrying the same text) and asserting on the literal status `400` for a mis-scop
 their own negative-control test failing against reality, the same class of surprise this whole
 task exists to catch before an adopter does.
 
-**Not fixed here**, same reasoning as F11. The concrete fix is textual: decision 6's table (and
-any place that repeats it — §9, getting-started) should read `expected 403, got 415` for a
-mis-scoped POST with no body, not `400`.
+**Not fixed here**, same reasoning as F11. The concrete fix is textual: Task 8 Step 3's prediction
+table at `docs/superpowers/plans/2026-08-19-intest-v1c-error-and-auth-tests.md:691` should read
+`expected 403, got 415` for a mis-scoped POST with no body, not `400`. Grepped `docs/getting-
+started.md` and `docs/superpowers/specs/2026-08-16-intest-api-test-generator-design.md` for
+`expected 403`, `got 400`, `415` and `Unsupported Media`: zero hits in either, so the wrong
+prediction is not repeated there — this plan's line 691 is its only occurrence.
 
 ## v1-c actions
 
@@ -1547,7 +1554,7 @@ mis-scoped POST with no body, not `400`.
 | 1 | F8 — actually consume `ITestTokenProvider` from the generated template, proven live against `samples/Orders.Api` and a real Duende identity server, not only the golden-suite stub | v1-c | **Closed** — Steps 1–2 above |
 | 2 | F10 — give the readiness probe its own client, proven by stopping the real `Identity.Server` and reading the failure, not only by the golden-suite stub | v1-c | **Closed** — Step 4 above |
 | 3 | F11 — the wrong-scope 403 case assumes the Secondary identity lacks every scope any secured operation needs; state that requirement explicitly wherever `ITestTokenProvider`/decision 3 is documented, or teach `TestPlanBuilder` to reason per-operation | next phase touching auth-case generation or its docs | Open |
-| 4 | F12 — correct decision 6's predicted status for a mis-scoped, bodyless POST from 400 to 415, everywhere the prediction is repeated (§9, getting-started, this plan) | next phase touching §9 or getting-started's Auth section | Open |
+| 4 | F12 — correct Task 8 Step 3's prediction table for a mis-scoped, bodyless POST from 400 to 415, at its source: `docs/superpowers/plans/2026-08-19-intest-v1c-error-and-auth-tests.md:691` (decision 6 itself makes no POST prediction and needs no correction) | next phase touching this plan's Task 8 or §9/getting-started if either later adds a POST prediction | Open |
 | 5 | Inventory now has the same twice-run proof Catalog has had since v1-b (`InventorySeedFixture`, Step 5 above) — not previously true, closed incidentally by this task rather than a dedicated one | v1-c | **Closed** — Step 5 above |
-| 6 | README.md line 80 claimed "every declared-error test (404s, 400s)" — decision 5 excludes 400 declared-error tests outright (no deterministic fixture-free trigger). Dropped the "400s" claim | found by Task 7b review, fixed here | **Closed** |
+| 6 | README.md line 80 claimed "every declared-error test (404s, 400s)" — decision 5 excludes 400 declared-error tests outright (no deterministic fixture-free trigger). Dropped the "400s" claim | found while writing this acceptance log (Task 8, commit `8df32f1`); not requested by any Task 8 step, fixed here as a one-line factual correction rather than deferred | **Closed** |
 
