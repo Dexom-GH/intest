@@ -27,14 +27,14 @@ public class TemplateRendererTests
             Category: "Contract",
             QueryParameterNames: queryParameterNames)]);
 
-    private static TestClassPlan PlanDeclaredError() => new(
+    private static TestClassPlan PlanDeclaredError(string httpMethod = "GET") => new(
         "OrdersTests", "Orders",
         [new TestCasePlan(
-            MethodName: "GetOrderById_NotFound",
-            DisplayName: "Given Orders, when getOrderById, then 404",
-            OperationKey: "getOrderById",
+            MethodName: "DeleteOrder_NotFound",
+            DisplayName: "Given Orders, when deleteOrder, then 404",
+            OperationKey: "deleteOrder",
             OperationKeySynthesized: false,
-            HttpMethod: "GET",
+            HttpMethod: httpMethod,
             PathTemplate: "/orders/{id}",
             PathParameterNames: ["id"],
             ExpectedStatus: 404,
@@ -217,6 +217,21 @@ public class TemplateRendererTests
         rendered.ShouldNotContain("\n\n    }");
         rendered.ShouldContain("    {\n        using var request",
             customMessage: "no RequireFixture line and no leftover blank line ahead of it");
+    }
+
+    [TestMethod]
+    public void EmitsNoStrayBlankLinesForAMutatingDeclaredErrorCase()
+    {
+        // A declared 404 on a DELETE or PUT stacks the mutates/[DoNotParallelize] conditional
+        // (existing) with the new emits_fixture_lookup one on the very same method — the
+        // combination neither EmitsNoStrayBlankLinesForADeclaredErrorCase (GET) nor
+        // EmitsNoStrayBlankLines (mutates only, always emits RequireFixture) exercises alone.
+        var rendered = Render(PlanDeclaredError(httpMethod: "DELETE"));
+
+        rendered.ShouldNotContain("\n\n\n");
+        rendered.ShouldNotContain("\n\n    }");
+        rendered.ShouldContain("[DoNotParallelize]\n    public async Task DeleteOrder_NotFound()\n    {\n        using var request",
+            customMessage: "no RequireFixture line and no leftover blank line between the two stacked conditionals");
     }
 
     [TestMethod]
