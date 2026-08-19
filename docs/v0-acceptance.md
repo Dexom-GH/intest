@@ -1,4 +1,4 @@
-# Acceptance runs — v0, v1-a and v1-b
+# Acceptance runs — v0, v1-a, v1-b and v1-c
 
 A living record. Each phase ends by regenerating against `samples/` and appending its results
 here, so the defect numbering (`F1`, `F2`, …) runs continuously across phases and the "carried
@@ -9,7 +9,7 @@ forward" list at the end is always the current one.
 | v0 | 2026-08-17 | `bec4ee1` + F1 fix | Catalog **6 of 9**; Orders and Inventory generated but never run |
 | v1-a | 2026-08-17 | `466e118` | All three run live: **22 of 22**; **44 sentinels** filled by hand |
 | v1-b | 2026-08-19 (UTC) | `f07ce4c` + this commit | Catalog **9 of 9 twice, sequentially** (not concurrently — §11), a negative control reproducing F7 on the same suite/database with the fixture unregistered, and a drain-isolation run proving cleanup, not a test, deletes the seeded row. **F7 closed** |
-| v1-c | 2026-08-19 (UTC) | `f09f2d5` + this commit | Orders live against a real Duende identity server: 401s real, write-scope 403s real (**F8 closed for real**), a dead identity server fails by name, not as a readiness timeout (**F10 closed for real**). Two new findings the live run — not the unit suite — exposed: 4 of 7 wrong-scope 403 tests cannot pass against the sample's only identity pair, because read operations need no scope the read-only identity lacks (**F11**); a mis-scoped write request 415s, not the 400 decision 6 predicted (**F12**). Catalog **13 of 13 twice**, Inventory **9 of 9 twice**, neither gains an auth test — v1-b's guarantee survives |
+| v1-c | 2026-08-19 (UTC) | `f09f2d5` + this commit | Orders live against a real Duende identity server: 401s real, write-scope 403s real (**F8 closed for real**), a dead identity server fails by name, not as a readiness timeout (**F10 closed for real**). Two new findings the live run — not the unit suite — exposed: 4 of 7 wrong-scope 403 tests cannot pass against the sample's only identity pair, because read operations need no scope the read-only identity lacks (**F11**); a mis-scoped write request 415s, not the 400 Task 8 Step 3 predicted (**F12**). Catalog **13 of 13 twice**, Inventory **9 of 9 twice**, neither gains an auth test — v1-b's guarantee survives |
 
 ---
 
@@ -1268,7 +1268,7 @@ documentation inside it.
 `samples/Identity.Server/Config.cs` names two Duende clients precisely for this: `orders-client`
 (`orders.read orders.write`) and `orders-readonly` (`orders.read` only), sharing one secret
 (`sample-secret-not-a-real-credential`). `OrdersTokenProvider` (in the scratch suite, not
-committed — see "Where this task sits" in the plan) implements `ITestTokenProvider` with
+committed) implements `ITestTokenProvider` with
 `Identities => ["orders-client", "orders-readonly"]` — index 0 the Default slot every ordinary
 case authenticates as, index 1 the Secondary slot the wrong-scope 403 case selects (decision 7) —
 and requests a client-credentials token from `POST /connect/token` for whichever client id
@@ -1448,12 +1448,12 @@ Run 2: Total tests: 13   Passed: 13
 
 **Inventory had no assembly fixture in v1-a or v1-b — it was never run twice before.**
 `StockController` exposes only `Adjust` and `Delete`, no create endpoint, so
-`Stock_Delete_Contract`'s target (a fixed seed row, ids 1–2) would be gone by the second run
+`StockDelete_Contract`'s target (a fixed seed row, ids 1–2) would be gone by the second run
 without a fixture to replace it — the same class of problem F7 named for Catalog. A new
 `InventorySeedFixture` inserts a fresh `StockItem` row directly into `inventory.db` via a minimal
 shadow `DbContext` (not raw SQL — letting EF write `LastCountedAt` is what guarantees
 `Inventory.Api`'s own EF stack reads it back correctly) and publishes its id for
-`Stock_Delete_Contract`; `Stock_Adjust_Contract` uses a fixed `delta: 1` against the permanent
+`StockDelete_Contract`; `StockAdjust_Contract` uses a fixed `delta: 1` against the permanent
 seed row, safe indefinitely since it only ever increases:
 
 ```
@@ -1463,7 +1463,7 @@ Run 2: Total tests: 9   Passed: 9
 
 Queried directly after both runs: `WGT-0001`'s `quantityOnHand` is 122 (120 + 1 per run), and only
 the two original seed rows (`WGT-0001`, `SPR-0002`) remain — both fixture-seeded rows were deleted
-by their own run's `Stock_Delete_Contract`, exactly as intended.
+by their own run's `StockDelete_Contract`, exactly as intended.
 
 **v1-b's guarantee survives v1-c's changes to `TestPlanBuilder`, `TestCasePlan` and the
 template.** Neither sample gained a spurious auth test, and Catalog's own repeat-run proof
@@ -1518,7 +1518,7 @@ operation could require — not merely "some other identity" — or teach the ge
 about per-operation scope, which decision 7 currently rules out on principle (the CLI never sees
 real identity capabilities).
 
-### F12 — a mis-scoped, bodyless POST 415s, not the 400 decision 6 predicts
+### F12 — a mis-scoped, bodyless POST 415s, not the 400 Task 8 Step 3 predicts
 
 Task 8 Step 3's own prediction table (this plan, line 691) says: `POST /api/orders` mis-scoped
 gives "`expected 403, got 400`" because "no body is sent". Decision 6 (lines 135–147) makes no
@@ -1535,10 +1535,10 @@ be selected, and that failure is reported before model validation (the source of
 exactly the `404` decision 6 predicts — the DELETE case's prediction was correct precisely because
 it doesn't touch this mechanism.
 
-Consequential rather than merely cosmetic: an adopter reading decision 6 (or a future §9 revision
-carrying the same text) and asserting on the literal status `400` for a mis-scoped POST would find
-their own negative-control test failing against reality, the same class of surprise this whole
-task exists to catch before an adopter does.
+Consequential rather than merely cosmetic: an adopter reading Task 8 Step 3's prediction table
+(this plan, line 691) or a future revision carrying the same text, and asserting on the literal
+status `400` for a mis-scoped POST, would find their own negative-control test failing against
+reality — the same class of surprise this whole task exists to catch before an adopter does.
 
 **Not fixed here**, same reasoning as F11. The concrete fix is textual: Task 8 Step 3's prediction
 table at `docs/superpowers/plans/2026-08-19-intest-v1c-error-and-auth-tests.md:691` should read
