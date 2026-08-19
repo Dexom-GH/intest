@@ -79,26 +79,25 @@ public static class TestHost
         var services = new ServiceCollection();
         services.AddSingleton(Configuration);
         services.AddTransient(_ => new RunIdHandler(() => RunIdValue));
+
+        // Hoisted here so RegisterInTestClients can share one normalized value between
+        // InTestClients.Api and .Readiness below. This also changes which exception a
+        // misconfigured project sees when Api:BaseUrl is missing: previously this exact
+        // InvalidOperationException lived inside the Api client's AddHttpClient configure lambda
+        // and never actually fired there in practice, because EnsureNoPrefixDuplication further
+        // down called InTestUrl.NormalizeBase(Configuration["Api:BaseUrl"]!) first — via a
+        // null-forgiving operator on that same missing key — and NormalizeBase's own
+        // ArgumentException("Base URL must not be null or whitespace.") won that race every time.
+        // Computing baseUrl once, here, means the profile-named message below is what a
+        // misconfigured project now sees instead. Nothing in Task 1 asked for that change; it is
+        // a side effect of sharing baseUrl between both clients — deliberate, but unpinned by any
+        // test.
         var baseUrl = InTestUrl.NormalizeBase(
             Configuration["Api:BaseUrl"]
             ?? throw new InvalidOperationException(
                 $"Api:BaseUrl is not configured for profile '{Profile}'."));
 
-        services.AddHttpClient(InTestClients.Api, client => client.BaseAddress = baseUrl)
-                .AddHttpMessageHandler<RunIdHandler>();
-
-        // Readiness gets its own client, registered before ConfigureServices runs so an
-        // adopter's ConfigureServices can only ever reach InTestClients.Api, never this one
-        // (F10). RunIdHandler stays: probe traffic should still carry X-Test-Run-Id and remain
-        // traceable, and it never throws regardless of identity-provider health, unlike an auth
-        // handler would. Hoisting baseUrl out of both AddHttpClient lambdas so the two
-        // registrations share one normalized value also moves the missing-Api:BaseUrl throw
-        // above from lazy (previously raised inside a configure lambda, the first time
-        // CreateClient ran) to eager, at registration, here — before ConfigureServices and
-        // SchemaBundle.FromFile. Nothing in this task asked for that reordering; it is a side
-        // effect of the hoist worth naming rather than leaving silent.
-        services.AddHttpClient(InTestClients.Readiness, client => client.BaseAddress = baseUrl)
-                .AddHttpMessageHandler<RunIdHandler>();
+        RegisterInTestClients(services, baseUrl);
 
         ConfigureServices?.Invoke(services, Configuration);
         Root = services.BuildServiceProvider();
@@ -184,6 +183,40 @@ public static class TestHost
         context.DisplayMessage(
             FixtureValidationReport.HasProblems ? MessageLevel.Warning : MessageLevel.Informational,
             FixtureValidationReport.Message);
+    }
+
+    /// <summary>
+    /// Registers InTest's two named HTTP clients — <see cref="InTestClients.Api"/> and
+    /// <see cref="InTestClients.Readiness"/> — against the same <paramref name="baseUrl"/>, both
+    /// carrying only <see cref="RunIdHandler"/>. Extracted from <see cref="InitializeAsync"/> as
+    /// an internal seam (the csproj's own <c>InternalsVisibleTo</c> comment explains why an
+    /// internal seam is sanctioned here) so <c>InTest.Runtime.Tests</c> can prove that the
+    /// registration this method performs — not a hand-duplicated copy of it — keeps a handler an
+    /// adopter's <see cref="ConfigureServices"/> attaches to <see cref="InTestClients.Api"/> off
+    /// <see cref="InTestClients.Readiness"/> (F10, decision 1). <see cref="InitializeAsync"/> as a
+    /// whole is still not given an in-process harness — see <c>TestHostTests</c>'s note on
+    /// <c>ContextTextWriter</c> for why — but this narrower seam needs none of what makes that
+    /// true: no <c>AppContext.BaseDirectory</c>, no real <see cref="TestContext"/>, no live HTTP.
+    /// Requires <see cref="RunIdHandler"/> already registered in <paramref name="services"/>;
+    /// this method only wires the two named clients to it.
+    /// </summary>
+    internal static void RegisterInTestClients(IServiceCollection services, Uri baseUrl)
+    {
+        services.AddHttpClient(InTestClients.Api, client => client.BaseAddress = baseUrl)
+                .AddHttpMessageHandler<RunIdHandler>();
+
+        // Separate from Api so that the one attachment point the scaffold documents and adopters
+        // actually use — InTestClients.Api, via ConfigureServices — cannot carry an auth handler
+        // into the anonymous /health/ready probe (F10). Registration order buys nothing toward
+        // that: named-HttpClient configuration is additive IConfigureNamedOptions applied at
+        // CreateClient time, independent of which AddHttpClient call ran first, so nothing stops
+        // a ConfigureServices that deliberately names InTestClients.Readiness from attaching to
+        // it too. A future task adding AuthHandler must attach it to InTestClients.Api by name —
+        // never assume this ordering keeps it off the probe. RunIdHandler stays regardless: probe
+        // traffic should still carry X-Test-Run-Id and remain traceable, and it never throws
+        // regardless of identity-provider health, unlike an auth handler would.
+        services.AddHttpClient(InTestClients.Readiness, client => client.BaseAddress = baseUrl)
+                .AddHttpMessageHandler<RunIdHandler>();
     }
 
     /// <summary>
