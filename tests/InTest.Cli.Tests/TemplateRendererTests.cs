@@ -43,6 +43,22 @@ public class TemplateRendererTests
             Role: CaseRole.DeclaredError,
             NeedsFixture: false)]);
 
+    private static TestClassPlan PlanWithRole(CaseRole role) => new(
+        "OrdersTests", "Orders",
+        [new TestCasePlan(
+            MethodName: "DeleteOrder_UnknownRole",
+            DisplayName: "Given Orders, when deleteOrder, then unknown-role",
+            OperationKey: "deleteOrder",
+            OperationKeySynthesized: false,
+            HttpMethod: "DELETE",
+            PathTemplate: "/orders/{id}",
+            PathParameterNames: ["id"],
+            ExpectedStatus: 404,
+            SchemaKey: null,
+            Category: "Contract",
+            Role: role,
+            NeedsFixture: false)]);
+
     private static TestClassPlan PlanWithBody() => new(
         "OrdersTests", "Orders",
         [new TestCasePlan(
@@ -232,6 +248,23 @@ public class TemplateRendererTests
         rendered.ShouldNotContain("\n\n    }");
         rendered.ShouldContain("[DoNotParallelize]\n    public async Task DeleteOrder_NotFound()\n    {\n        using var request",
             customMessage: "no RequireFixture line and no leftover blank line between the two stacked conditionals");
+    }
+
+    [TestMethod]
+    public void ARoleNotYetDefinedDefaultsToTheFixtureFreeUnmatchableIdBehaviour()
+    {
+        // Review finding on Task 4: both conditionals in TemplateRenderer tested "is this
+        // DeclaredError" rather than "is this Success", so the unsafe, fixture-backed arm was
+        // the default for any role neither of today's two names — CaseRole's own doc comment
+        // says Task 5 adds Auth next. Decision 6 requires every non-success case to stay
+        // fixture-free and pointed at an unmatchable id; a role this code has never seen must
+        // fail *toward* that safety, not away from it. There's no third CaseRole member yet to
+        // prove it with, so an undefined enum value stands in for "a future role."
+        var rendered = Render(PlanWithRole((CaseRole)99));
+
+        rendered.ShouldNotContain("RequireFixture(");
+        rendered.ShouldContain("Guid.NewGuid().ToString()");
+        rendered.ShouldNotContain("FixtureParameter(");
     }
 
     [TestMethod]

@@ -35,7 +35,19 @@ public sealed class TemplateRenderer
                 // case beside it, so calling RequireFixture here would let that sibling's unfilled
                 // or unresolved fixture block a case that needs no data at all — the exact failure
                 // mode decision 6 exists to prevent.
-                emits_fixture_lookup = c.Role != CaseRole.DeclaredError
+                //
+                // Deliberately phrased as "== Success" rather than "!= DeclaredError": Task 5 adds
+                // CaseRole.Auth (see that enum's own doc comment), and decision 6 applies to auth
+                // cases too — a wrong-scope 403 pointed at a real id via FixtureParameter succeeds
+                // when auth is broken, deleting real data at exactly the moment something is
+                // already wrong. Testing positively for the one safe role means any role this code
+                // has not been told about yet — Auth included — takes the fixture-free arm by
+                // default, rather than the destructive one. Not TestCasePlan.NeedsFixture, which
+                // answers a different question: whether the operation gets a fixture *file* at all
+                // (FixtureComposer's verdict). That is already false for parameterless success
+                // cases like listOrders, which must still emit RequireFixture — using it here would
+                // silently change success-case output.
+                emits_fixture_lookup = c.Role == CaseRole.Success
             }).ToList()
         };
 
@@ -53,10 +65,14 @@ public sealed class TemplateRenderer
     /// <summary>
     /// Every path parameter on a success case is unconditionally required (decision 1), so its
     /// value always comes from the fixture via <c>FixtureParameter</c> — never a sentinel
-    /// constant, never TestData. A declared-error case is the deliberate exception (decision 6):
-    /// it sends a fresh, generated id no seeded row can match, precisely so an unfilled fixture
-    /// can never block it and a broken generator can never point a mutating declared-error case
-    /// at real data.
+    /// constant, never TestData. Every other role is the deliberate exception (decision 6): it
+    /// sends a fresh, generated id no seeded row can match, precisely so an unfilled fixture can
+    /// never block it and a broken generator can never point a mutating non-success case at real
+    /// data.
+    ///
+    /// The condition tests for Success, not "!= DeclaredError", for the same fail-safe reason as
+    /// <c>emits_fixture_lookup</c> above: Task 5's Auth role must default to this same
+    /// fixture-free arm the instant it exists, without anyone having to remember to add it here.
     /// </summary>
     private static string PathArguments(TestCasePlan plan)
     {
@@ -65,7 +81,7 @@ public sealed class TemplateRenderer
             return string.Empty;
         }
 
-        var values = plan.Role == CaseRole.DeclaredError
+        var values = plan.Role != CaseRole.Success
             ? plan.PathParameterNames.Select(_ => "Guid.NewGuid().ToString()")
             : plan.PathParameterNames.Select(n => $"FixtureParameter(\"{plan.OperationKey}\", \"{n}\")");
 
