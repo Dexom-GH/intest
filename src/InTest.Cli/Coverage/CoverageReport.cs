@@ -66,13 +66,17 @@ public static class CoverageReport
                     .Select(c => c.OperationKey).Distinct(StringComparer.Ordinal).Count(),
                 ["synthesizedOperationIds"] = cases.Where(c => c.Role == CaseRole.Success && c.OperationKeySynthesized)
                     .Select(c => c.OperationKey).Distinct(StringComparer.Ordinal).Count(),
-                // Role.Success only: a declared-error case's SchemaKey is null because decision 5
-                // never asks a 404 response for a schema, and an auth case's is null because
-                // decision 3's fixed 401/403 pair never reads a declared response at all (see
-                // TestCasePlan.SchemaKey's own doc on the Auth cases). Counting either here
-                // inflated a note whose stated meaning is "no response schema declared — fixable
-                // in the spec" with cases that never had a schema question to begin with — the
-                // same bodiless-204 mistake §12 already names, recurring under a new role.
+                // Role.Success only — not because a non-success case's SchemaKey is always null
+                // (it is not: TestPlanBuilder.cs:171 asks the 404 response itself for a schema,
+                // and every 404 in every shipped sample declares one, so a real DeclaredError
+                // case usually carries "ProblemDetails", not null). The filter exists because a
+                // non-success case's null SchemaKey, on the rare operation where it does occur,
+                // is never the gap this note names ("no response schema declared — fixable in
+                // the spec"): decision 3's auth pair reads no declared response at all, so it
+                // has no such question to have failed, and a declared-error case's 404 is not a
+                // success-contract gap even when its schema is absent. Either way, a non-success
+                // case has nothing to say about success-contract completeness, so it is excluded
+                // regardless of what its SchemaKey happens to be.
                 ["statusOnlyContractTests"] = cases.Count(c => c.SchemaKey is null && c.Role == CaseRole.Success),
                 ["inlineResponseSchemas"] = cases.Count(c => c.SchemaKey?.StartsWith("op:", StringComparison.Ordinal) == true),
                 ["declaredErrorTestsGenerated"] = cases.Count(c => c.Role == CaseRole.DeclaredError),

@@ -94,10 +94,15 @@ public class CoverageReportTests
     [TestMethod]
     public void ExcludesDeclaredErrorAndAuthCasesFromStatusOnlyContractTests()
     {
-        // Every declared-error and auth case has a null SchemaKey by construction (decision 5 /
-        // decision 3) — counting them here would inflate a note whose stated meaning is "no
-        // response schema declared — fixable in the spec" with cases that never had a schema
-        // question to begin with.
+        // Not "every declared-error and auth case has a null SchemaKey" — a real DeclaredError
+        // case commonly does not (TestPlanBuilder.cs:171 asks the 404 response for a schema,
+        // and every shipped sample's 404 declares one). This plan gives the DeclaredError case
+        // a null SchemaKey anyway, deliberately, to prove the filter is Role-based rather than
+        // leaning on "declared-error cases happen to have no schema": if the implementation
+        // instead filtered on `SchemaKey is not null`, this case would slip through undetected.
+        // Either way, a non-success case is excluded regardless of its SchemaKey, because a
+        // null SchemaKey on a non-success case is never the "no response schema declared —
+        // fixable in the spec" gap this note names (see CoverageReport.cs's own comment).
         var plan = new TestPlan(
             "Orders",
             [new TestClassPlan("DefaultTests", "Default",
@@ -180,6 +185,34 @@ public class CoverageReportTests
         // Only the no-path-parameter note counts here — the required-query-parameter note is a
         // different withheld reason and must not be conflated with it.
         doc.RootElement.GetProperty("notes").GetProperty("notFoundWithoutPathParameter").GetInt32().ShouldBe(1);
+    }
+
+    [TestMethod]
+    public void ExcludesNonSuccessRolesFromUntaggedOperationsAndSynthesizedOperationIds()
+    {
+        // Review finding on Task 6: the Role.Success filter on untaggedOperations and
+        // synthesizedOperationIds had no test that could tell it apart from the bare,
+        // unfiltered Distinct/Where it replaced — the only prior test used one operation
+        // whose success and declared-error cases share an OperationKey, so filtered and
+        // unfiltered counts agreed by coincidence. Here, operation "b" carries *only* a
+        // non-success case (Auth) and no success case of its own, so it must not be counted
+        // as an untagged operation, and its OperationKeySynthesized: true must not surface in
+        // synthesizedOperationIds either — a bare Distinct over every role would count both.
+        var plan = new TestPlan(
+            "Orders",
+            [new TestClassPlan("DefaultTests", "Default",
+                [new TestCasePlan("A_Contract", "d", "a", false, "GET", "/a/{id}", ["id"], 200, "Order", "Contract"),
+                 new TestCasePlan("B_Forbidden", "d", "b", true, "GET", "/b/{id}", ["id"], 403, null, "Contract",
+                     Role: CaseRole.Auth, NeedsFixture: false, Slot: IdentitySlot.Secondary)])],
+            [],
+            []);
+
+        using var doc = JsonDocument.Parse(CoverageReport.ToJson(plan));
+
+        doc.RootElement.GetProperty("notes").GetProperty("untaggedOperations").GetInt32().ShouldBe(1,
+            "operation \"b\" has no Role.Success case of its own and must not be counted");
+        doc.RootElement.GetProperty("notes").GetProperty("synthesizedOperationIds").GetInt32().ShouldBe(0,
+            "operation \"b\" is the only synthesized key, but it is not a Role.Success case");
     }
 
     [TestMethod]
