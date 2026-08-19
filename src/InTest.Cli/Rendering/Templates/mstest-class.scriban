@@ -21,8 +21,10 @@ public partial class {{ class_name }} : {{ base_class }}
 {{~ end ~}}
     public async Task {{ tc.method_name }}()
     {
+{{~ if tc.emits_fixture_lookup ~}}
         RequireFixture("{{ tc.operation_key }}");
 
+{{~ end ~}}
         using var request = new HttpRequestMessage(
             HttpMethod.{{ tc.http_method_pascal }},
             InTestUrl.Build("{{ tc.path_template }}"{{ tc.path_argument_list }}){{ tc.query_expression }});

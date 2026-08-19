@@ -33,6 +33,22 @@ public partial class OrdersTests : Orders.ApiTests.OrdersTestBase
     }
 
     [TestMethod, TestCategory("Contract")]
+    [Description("Given Orders, when getOrderById, then 404")]
+    public async Task GetOrderById_NotFound()
+    {
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            InTestUrl.Build("/orders/{id}", Guid.NewGuid().ToString()));
+
+        var stopwatch = Stopwatch.StartNew();
+        using var response = await Client.SendAsync(request, TestContext.CancellationToken);
+        stopwatch.Stop();
+
+        await ApiResponseAssertions.ShouldMatchStatusAsync(
+            response, 404, TestId, stopwatch.Elapsed, TestContext.CancellationToken);
+    }
+
+    [TestMethod, TestCategory("Contract")]
     [Description("Given Orders, when listOrders, then 200")]
     public async Task ListOrders_Contract()
     {

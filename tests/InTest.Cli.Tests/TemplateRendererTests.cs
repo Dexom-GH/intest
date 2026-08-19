@@ -27,6 +27,22 @@ public class TemplateRendererTests
             Category: "Contract",
             QueryParameterNames: queryParameterNames)]);
 
+    private static TestClassPlan PlanDeclaredError() => new(
+        "OrdersTests", "Orders",
+        [new TestCasePlan(
+            MethodName: "GetOrderById_NotFound",
+            DisplayName: "Given Orders, when getOrderById, then 404",
+            OperationKey: "getOrderById",
+            OperationKeySynthesized: false,
+            HttpMethod: "GET",
+            PathTemplate: "/orders/{id}",
+            PathParameterNames: ["id"],
+            ExpectedStatus: 404,
+            SchemaKey: null,
+            Category: "Contract",
+            Role: CaseRole.DeclaredError,
+            NeedsFixture: false)]);
+
     private static TestClassPlan PlanWithBody() => new(
         "OrdersTests", "Orders",
         [new TestCasePlan(
@@ -155,6 +171,52 @@ public class TemplateRendererTests
     {
         Render(PlanWithBody()).ShouldNotContain("TestData");
         Render(PlanWithQueryParameters("page")).ShouldNotContain("TestData");
+    }
+
+    [TestMethod]
+    public void ADeclaredErrorCaseCallsNoFixtureLookup()
+    {
+        // Decision 6: a declared-error case shares its operation key with the success case it
+        // sits beside. Calling RequireFixture here would let that sibling's unfilled or
+        // unresolved fixture block a case that needs no data at all — exactly what decision 6
+        // exists to prevent.
+        Render(PlanDeclaredError()).ShouldNotContain("RequireFixture(");
+    }
+
+    [TestMethod]
+    public void ADeclaredErrorCaseUsesAGeneratedUnmatchableIdRatherThanAFixtureParameter()
+    {
+        var rendered = Render(PlanDeclaredError());
+
+        rendered.ShouldContain("Guid.NewGuid().ToString()");
+        rendered.ShouldNotContain("FixtureParameter(");
+    }
+
+    [TestMethod]
+    public void ASuccessCaseIsUnaffectedByTheDeclaredErrorBranch()
+    {
+        // Guards the branch itself, not just one arm of it: without this, an implementation that
+        // always skips RequireFixture (satisfying the two tests above unconditionally) would pass
+        // unnoticed.
+        var rendered = Render(Plan());
+
+        rendered.ShouldContain("RequireFixture(\"getOrderById\")");
+        rendered.ShouldContain("FixtureParameter(\"getOrderById\", \"id\")");
+    }
+
+    [TestMethod]
+    public void EmitsNoStrayBlankLinesForADeclaredErrorCase()
+    {
+        // The RequireFixture conditional is new territory for whitespace control —
+        // EmitsNoStrayBlankLines above only exercises the mutates/[DoNotParallelize] branch, and
+        // EmitsNoStrayBlankLinesWithABodyOrQueryParameters only the has_body/query_expression
+        // ones. An unclosed '~}}' here leaks its own blank line the same way those did.
+        var rendered = Render(PlanDeclaredError());
+
+        rendered.ShouldNotContain("\n\n\n");
+        rendered.ShouldNotContain("\n\n    }");
+        rendered.ShouldContain("    {\n        using var request",
+            customMessage: "no RequireFixture line and no leftover blank line ahead of it");
     }
 
     [TestMethod]

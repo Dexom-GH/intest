@@ -170,6 +170,58 @@ public class GeneratedSuiteExecutionTests
     }
     """;
 
+    /// <summary>
+    /// Plan Task 4, Step 2(b) — the F1 lesson repeated: <see cref="Specs/orders.json"/>'s golden
+    /// regeneration proves a declared-error case's <i>text</i> is stable and compiles, never that
+    /// it runs. <see cref="GoldenApiStub"/> is unreachable from that corpus at all —
+    /// <c>GeneratedSuiteExecutionTests</c> writes its own inline specs to <c>spec.json</c>, so
+    /// only one of those can prove a generated 404 test actually receives one over the wire.
+    /// <para>
+    /// Deliberately its own path, not <c>/api/status/{id}</c> from
+    /// <see cref="SpecWithPathParameter"/>: <see cref="GoldenApiStub"/>'s <c>/api/status/</c>
+    /// catch-all answers 200 for anything under that prefix, so an unmatchable id sent there would
+    /// get a 200 — the opposite of what this test exists to prove. This path matches no arm of
+    /// the stub's dispatch at all, so it falls through to the bare <c>_ => (404, ...)</c> default.
+    /// </para>
+    /// </summary>
+    private const string SpecWithDeclaredNotFound = """
+    {
+      "openapi": "3.0.3",
+      "info": { "title": "Stub", "version": "1.0" },
+      "paths": {
+        "/api/widgets/{id}": {
+          "get": {
+            "operationId": "getWidgetById",
+            "tags": ["Widgets"],
+            "parameters": [
+              { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+            ],
+            "responses": {
+              "200": {
+                "description": "ok",
+                "content": {
+                  "application/json": {
+                    "schema": { "$ref": "#/components/schemas/Widget" }
+                  }
+                }
+              },
+              "404": { "description": "not found" }
+            }
+          }
+        }
+      },
+      "components": {
+        "schemas": {
+          "Widget": {
+            "type": "object",
+            "required": ["id"],
+            "properties": { "id": { "type": "string" } }
+          }
+        }
+      }
+    }
+    """;
+
     private string _root = null!;
     private GoldenApiStub _stub = null!;
 
@@ -571,6 +623,71 @@ public class GeneratedSuiteExecutionTests
             customMessage: $"the aggregated report never reached process output on this passing run:{Environment.NewLine}{test.Output}");
         test.Output.ShouldContain("is still unfilled (TODO:id)",
             customMessage: $"the report reached output but not with the expected problem detail:{Environment.NewLine}{test.Output}");
+    }
+
+    /// <summary>
+    /// Plan Task 4, Step 2(b)'s live proof. Unlike <see cref="FixtureParameterReachesALiveRequestEndToEnd"/>,
+    /// this deliberately never fills in <c>fixtures/getWidgetById.json</c>'s sentinel — decision
+    /// 6's whole point is that a declared-error case must not care whether that sibling fixture is
+    /// resolved, so the filter below runs only <c>GetWidgetById_NotFound</c> and never touches
+    /// <c>GetWidgetById_Contract</c>, which would otherwise fail on the sentinel it never received.
+    /// </summary>
+    [TestMethod]
+    public async Task DeclaredErrorCaseReceivesARealNotFoundOverTheWire()
+    {
+        File.WriteAllText(Path.Combine(_root, "spec.json"), SpecWithDeclaredNotFound);
+
+        InitCommand.Run(_root, "Stub.ApiTests", "spec.json").ShouldBe(0);
+        UseProjectReferenceInsteadOfPackage();
+        PointAtStub();
+
+        (await FixturesRepairCommand.RunAsync(_root, CancellationToken.None)).ShouldBe(0);
+        (await GenerateCommand.RunAsync(_root, CancellationToken.None)).ShouldBe(0);
+
+        // Guard against the generated suite silently missing the declared-error case entirely,
+        // the same way FixtureParameterReachesALiveRequestEndToEnd guards its own operation.
+        var generatedFile = Directory.GetFiles(_root, "WidgetsTests.g.cs", SearchOption.AllDirectories)
+            .ShouldHaveSingleItem("generate should have produced exactly one WidgetsTests.g.cs");
+        var generated = File.ReadAllText(generatedFile);
+        generated.ShouldContain("GetWidgetById_NotFound",
+            customMessage: "the declared-error case this test exists to prove must actually be generated");
+        generated.ShouldContain("Guid.NewGuid().ToString()",
+            customMessage: "decision 6: a declared-error case must send a generated, unmatchable id, never a fixture value");
+
+        var build = await RunAsync("dotnet", $"build \"{_root}\" --nologo -v q");
+        build.ExitCode.ShouldBe(0, $"generated project failed to build:{Environment.NewLine}{build.Output}");
+
+        var resultsDir = Path.Combine(_root, "TestResults");
+        var test = await RunAsync("dotnet",
+            $"test \"{_root}\" --no-build --nologo --filter \"FullyQualifiedName~GetWidgetById_NotFound\" " +
+            $"--logger \"trx;LogFileName=results.trx\" --results-directory \"{resultsDir}\"");
+
+        var trxPath = Directory.GetFiles(resultsDir, "results.trx", SearchOption.AllDirectories)
+            .ShouldHaveSingleItem($"expected exactly one results.trx under {resultsDir}:{Environment.NewLine}{test.Output}");
+
+        var trx = XDocument.Load(trxPath);
+        var results = trx.Descendants().Where(e => e.Name.LocalName == "UnitTestResult").ToList();
+
+        // The filter targets only the declared-error case: GetWidgetById_Contract's own fixture
+        // was never filled in above, and decision 6 exists precisely so that never matters here —
+        // if it did run and was blocked by RequireFixture, this count would catch it at 2.
+        results.Count.ShouldBe(1,
+            $"expected exactly 1 filtered test (GetWidgetById_NotFound) but the trx recorded {results.Count}:{Environment.NewLine}{test.Output}");
+
+        var notFoundResult = results.Single();
+        (notFoundResult.Attribute("testName")?.Value ?? "").ShouldContain("GetWidgetById_NotFound",
+            customMessage: $"the filtered trx result was not the expected test:{Environment.NewLine}{test.Output}");
+        notFoundResult.Attribute("outcome")?.Value.ShouldBe("Passed",
+            $"GetWidgetById_NotFound ran but did not pass — the declared-error case likely never received a real 404 over the wire:{Environment.NewLine}{test.Output}");
+
+        test.ExitCode.ShouldBe(0, test.Output);
+
+        // Closes the loop from the outside, the same pattern APublishedFixtureKeyReachesALiveRequest
+        // uses against ReceivedPaths: the generated request must have actually reached the stub
+        // under /api/widgets/, not merely have been built and never sent.
+        _stub.ReceivedPaths.Any(p => p.StartsWith("/api/widgets/", StringComparison.Ordinal))
+            .ShouldBeTrue($"the generated declared-error case never reached the stub over the wire. " +
+                $"Paths served: {string.Join(", ", _stub.ReceivedPaths)}");
     }
 
     /// <summary>

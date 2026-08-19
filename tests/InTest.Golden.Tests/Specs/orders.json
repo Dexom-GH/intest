@@ -15,8 +15,11 @@
         "operationId": "getOrderById",
         "tags": ["Orders"],
         "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
-        "responses": { "200": { "description": "ok", "content": { "application/json": {
-          "schema": { "$ref": "#/components/schemas/Order" } } } } }
+        "responses": {
+          "200": { "description": "ok", "content": { "application/json": {
+            "schema": { "$ref": "#/components/schemas/Order" } } } },
+          "404": { "description": "not found" }
+        }
       }
     }
   },

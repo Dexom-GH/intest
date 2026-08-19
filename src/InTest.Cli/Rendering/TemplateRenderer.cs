@@ -30,7 +30,12 @@ public sealed class TemplateRenderer
                 has_body = c.HasRequestBody,
                 expected_status = c.ExpectedStatus,
                 schema_key = c.SchemaKey,
-                mutates = c.HttpMethod is "POST" or "PUT" or "PATCH" or "DELETE"
+                mutates = c.HttpMethod is "POST" or "PUT" or "PATCH" or "DELETE",
+                // Decision 6: a declared-error case shares its operation key with the success
+                // case beside it, so calling RequireFixture here would let that sibling's unfilled
+                // or unresolved fixture block a case that needs no data at all — the exact failure
+                // mode decision 6 exists to prevent.
+                emits_fixture_lookup = c.Role != CaseRole.DeclaredError
             }).ToList()
         };
 
@@ -46,13 +51,26 @@ public sealed class TemplateRenderer
         => httpMethod.Length == 0 ? "Get" : char.ToUpperInvariant(httpMethod[0]) + httpMethod[1..].ToLowerInvariant();
 
     /// <summary>
-    /// Every path parameter is unconditionally required (decision 1), so its value always comes
-    /// from the fixture via <c>FixtureParameter</c> — never a sentinel constant, never TestData.
+    /// Every path parameter on a success case is unconditionally required (decision 1), so its
+    /// value always comes from the fixture via <c>FixtureParameter</c> — never a sentinel
+    /// constant, never TestData. A declared-error case is the deliberate exception (decision 6):
+    /// it sends a fresh, generated id no seeded row can match, precisely so an unfilled fixture
+    /// can never block it and a broken generator can never point a mutating declared-error case
+    /// at real data.
     /// </summary>
     private static string PathArguments(TestCasePlan plan)
-        => plan.PathParameterNames.Count == 0
-            ? string.Empty
-            : ", " + string.Join(", ", plan.PathParameterNames.Select(n => $"FixtureParameter(\"{plan.OperationKey}\", \"{n}\")"));
+    {
+        if (plan.PathParameterNames.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        var values = plan.Role == CaseRole.DeclaredError
+            ? plan.PathParameterNames.Select(_ => "Guid.NewGuid().ToString()")
+            : plan.PathParameterNames.Select(n => $"FixtureParameter(\"{plan.OperationKey}\", \"{n}\")");
+
+        return ", " + string.Join(", ", values);
+    }
 
     /// <summary>
     /// Appended to the built path so the query string comes entirely from whichever declared
