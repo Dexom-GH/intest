@@ -17,6 +17,15 @@ public static class TestPlanBuilder
     // decision for a later plan, not a constant to extend casually.
     private const int NotFoundStatus = 404;
 
+    // Task 6 review finding: this text used to live twice — once here, once hand-copied into
+    // CoverageReport.cs's Contains() match, with a third copy hand-copied again into
+    // CoverageReportTests.cs. Reword any of the three independently and the other two silently
+    // stop agreeing. Hoisted to a single constant that both the note text below and
+    // CoverageReport reference directly, so a reword here is the only place it can happen —
+    // there is no second copy left to drift out of sync.
+    internal const string NoPathParameterNoteReason =
+        "no path parameter to target with an unmatchable value";
+
     // Decision 3's fixed pair — never read off the operation's declared `responses`, unlike
     // NotFoundStatus above. An auth case exists because the operation declares `security`, so
     // these are the only two statuses it can ever assert.
@@ -113,7 +122,7 @@ public static class TestPlanBuilder
                         // operation as skipped, and put it in coverage-report.json's `skipped`
                         // array instead of the artefact `--check` would actually expect it in.
                         notes.Add(new CoverageNote(key.Value,
-                            $"declares {NotFoundStatus} but has no path parameter to target with an unmatchable value"));
+                            $"declares {NotFoundStatus} but has {NoPathParameterNoteReason}"));
                     }
                     else if (requiredQueryParameters.Count > 0)
                     {

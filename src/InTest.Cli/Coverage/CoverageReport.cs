@@ -52,13 +52,19 @@ public static class CoverageReport
             {
                 ["withheld"] = withheld,
                 // Both metrics name *operations*, not cases. An operation can emit more than one
-                // case since declared-error cases arrived (decision 5) — counting cases here
-                // double-counts every operation that also gets a 404 case, and every sample spec
-                // in the repo declares one, so this is a Distinct rather than a Count/Sum.
+                // case since declared-error and auth cases arrived (decisions 5 and 3) —
+                // counting cases here double-counts every operation that also gets a non-success
+                // case, and every sample spec in the repo declares a 404, so this is a Distinct
+                // over Role.Success cases only, not a Count/Sum or a Distinct over every role.
+                // Filtering to Success is what actually enforces "one entry per operation" —
+                // TestPlanBuilder only ever emits a non-success case for an operation whose
+                // success case already generated (TestPlanBuilder.cs:100-103), so a role filter
+                // and a bare Distinct happen to produce the same number today, but only the
+                // filter says so structurally rather than leaning on that cross-file invariant.
                 ["untaggedOperations"] = plan.Classes.Where(c => c.Tag == "Default")
-                    .SelectMany(c => c.Cases).Select(c => c.OperationKey)
-                    .Distinct(StringComparer.Ordinal).Count(),
-                ["synthesizedOperationIds"] = cases.Where(c => c.OperationKeySynthesized)
+                    .SelectMany(c => c.Cases).Where(c => c.Role == CaseRole.Success)
+                    .Select(c => c.OperationKey).Distinct(StringComparer.Ordinal).Count(),
+                ["synthesizedOperationIds"] = cases.Where(c => c.Role == CaseRole.Success && c.OperationKeySynthesized)
                     .Select(c => c.OperationKey).Distinct(StringComparer.Ordinal).Count(),
                 // Role.Success only: a declared-error case's SchemaKey is null because decision 5
                 // never asks a 404 response for a schema, and an auth case's is null because
@@ -79,11 +85,14 @@ public static class CoverageReport
                 // to run at all: only the wrong-scope 403 case (IdentitySlot.Secondary) does: the
                 // no-token 401 case always runs regardless of how many identities a provider has.
                 ["authTestsGatedOnSecondIdentity"] = authCases.Count(c => c.Slot == IdentitySlot.Secondary),
-                // TestPlanBuilder's no-path-parameter branch is the sole source of this exact
-                // reason text — matched here rather than restated, so this count can never drift
-                // from the message a reader of `withheld` actually sees for the same operations.
+                // Matched against TestPlanBuilder.NoPathParameterNoteReason — the constant the
+                // builder's no-path-parameter branch builds its note text from — rather than a
+                // second hand-copied literal here. A reword of that constant changes both sides
+                // at once, since there is only one string, not a restatement of it: this count
+                // cannot drift from the message a reader of `withheld` actually sees, because
+                // both are the same object in memory, not two copies that happen to agree today.
                 ["notFoundWithoutPathParameter"] = plan.Notes.Count(n =>
-                    n.Reason.Contains("no path parameter to target with an unmatchable value", StringComparison.Ordinal))
+                    n.Reason.Contains(TestPlanBuilder.NoPathParameterNoteReason, StringComparison.Ordinal))
             }
         };
 

@@ -1,6 +1,7 @@
 using System.Text.Json;
 using InTest.Cli.Coverage;
 using InTest.Cli.Planning;
+using InTest.Cli.Spec;
 using Shouldly;
 
 namespace InTest.Cli.Tests;
@@ -171,7 +172,7 @@ public class CoverageReportTests
             [new TestClassPlan("OrdersTests", "Orders",
                 [new TestCasePlan("A_Contract", "d", "a", true, "GET", "/a", [], 200, "Order", "Contract")])],
             [],
-            [new CoverageNote("a", "declares 404 but has no path parameter to target with an unmatchable value"),
+            [new CoverageNote("a", $"declares 404 but has {TestPlanBuilder.NoPathParameterNoteReason}"),
              new CoverageNote("b", "declares 404 but has required query parameter(s) (q) that an unmatchable-id-only request would omit")]);
 
         using var doc = JsonDocument.Parse(CoverageReport.ToJson(plan));
@@ -193,12 +194,49 @@ public class CoverageReportTests
             [new TestClassPlan("OrdersTests", "Orders",
                 [new TestCasePlan("A_Contract", "d", "a", true, "GET", "/a", [], 200, "Order", "Contract")])],
             [],
-            [new CoverageNote("a", "declares 404 but has no path parameter to target with an unmatchable value")]);
+            [new CoverageNote("a", $"declares 404 but has {TestPlanBuilder.NoPathParameterNoteReason}")]);
 
         var json = CoverageReport.ToJson(plan);
 
         json.ShouldContain("\"a\"");
-        json.ShouldContain("no path parameter to target with an unmatchable value");
+        json.ShouldContain(TestPlanBuilder.NoPathParameterNoteReason);
+    }
+
+    [TestMethod]
+    public async Task NotFoundWithoutPathParameterCountTracksTestPlanBuilderRatherThanACopiedString()
+    {
+        // Review finding on Task 6: a hand-copied reason string in this test file would keep
+        // passing even if TestPlanBuilder's wording drifted from CoverageReport's match. Building
+        // a real plan from TestPlanBuilder itself, from the same 404-declaring, path-parameterless
+        // spec TestPlanBuilderTests uses for
+        // SkipsAndNotesA404WithNoPathParameterRatherThanGuessingWhereToPutAnUnmatchableValue,
+        // proves the count tracks the operations TestPlanBuilder actually notes rather than a
+        // string this test happens to also know.
+        const string spec = """
+        {
+          "openapi": "3.0.3",
+          "info": { "title": "Orders", "version": "1.0" },
+          "paths": {
+            "/orders": {
+              "get": {
+                "operationId": "listOrders",
+                "tags": ["Orders"],
+                "responses": {
+                  "200": { "description": "ok", "content": { "application/json": {
+                    "schema": { "type": "array", "items": { "$ref": "#/components/schemas/Order" } } } } },
+                  "404": { "description": "not found" }
+                }
+              }
+            }
+          },
+          "components": { "schemas": { "Order": { "type": "object" } } }
+        }
+        """;
+
+        var plan = TestPlanBuilder.Build((await SpecLoader.LoadFromTextAsync(spec)).Document);
+
+        using var doc = JsonDocument.Parse(CoverageReport.ToJson(plan));
+        doc.RootElement.GetProperty("notes").GetProperty("notFoundWithoutPathParameter").GetInt32().ShouldBe(1);
     }
 
     [TestMethod]
