@@ -477,6 +477,54 @@ public class TestPlanBuilderTests
     }
 
     [TestMethod]
+    public async Task SkipsAndNotesA404WithARequiredRequestBodyRatherThanSendingAnIncompleteRequest()
+    {
+        // The strictly stronger case of the required-query-parameter branch above: against an
+        // ASP.NET Core [ApiController] with a non-nullable [FromBody] parameter, a bodyless
+        // request (decision 6: send no body) is rejected by model binding with 400 before the
+        // action's NotFound() path ever runs. Sending only the unmatchable path id and omitting
+        // a required request body risks asserting 404 against what a compliant API answers with
+        // 400 on every run — the exact wall of wrong failures decision 5 opens with. Treated the
+        // same as the no-path-parameter and required-query-parameter cases: a note, not a guess
+        // shipped as a test.
+        const string spec = """
+        {
+          "openapi": "3.0.3",
+          "info": { "title": "Orders", "version": "1.0" },
+          "paths": {
+            "/orders/{id}": {
+              "put": {
+                "operationId": "updateOrder",
+                "tags": ["Orders"],
+                "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+                "requestBody": {
+                  "required": true,
+                  "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Order" } } }
+                },
+                "responses": {
+                  "200": { "description": "ok", "content": { "application/json": {
+                    "schema": { "$ref": "#/components/schemas/Order" } } } },
+                  "404": { "description": "not found" }
+                }
+              }
+            }
+          },
+          "components": { "schemas": { "Order": { "type": "object" } } }
+        }
+        """;
+
+        var plan = await BuildAsync(spec);
+
+        var cases = plan.Classes.SelectMany(c => c.Cases).Where(c => c.OperationKey == "updateOrder").ToList();
+        cases.Count.ShouldBe(1, "the success case must still generate — only the declared-error case is affected");
+        cases.ShouldNotContain(c => c.Role == CaseRole.DeclaredError);
+
+        plan.Skipped.ShouldNotContain(s => s.OperationKey == "updateOrder");
+        plan.Notes.ShouldContain(n => n.OperationKey == "updateOrder" && n.Reason.Contains("request body"),
+            "a silently dropped 404 case is indistinguishable from a bug");
+    }
+
+    [TestMethod]
     public async Task NeitherStatusDeclaredMeansOnlyTheSuccessCase()
     {
         var plan = await BuildAsync(Spec);

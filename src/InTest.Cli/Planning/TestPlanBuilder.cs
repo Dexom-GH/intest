@@ -123,6 +123,22 @@ public static class TestPlanBuilder
                             $"declares {NotFoundStatus} but has required query parameter(s) " +
                             $"({string.Join(", ", requiredQueryParameters)}) that an unmatchable-id-only request would omit"));
                     }
+                    else if (operation.RequestBody?.Required == true)
+                    {
+                        // The strictly stronger case of the required-query-parameter branch
+                        // above: against an ASP.NET Core [ApiController] with a non-nullable
+                        // [FromBody] parameter, a bodyless request (decision 6: send no body) is
+                        // rejected by model binding with 400 ("A non-empty request body is
+                        // required.") before the action's NotFound() path ever runs — confirmed
+                        // by building plans from the shipped samples: PUT /api/products/{id} and
+                        // POST /api/stock/{sku}/adjustments both declare a required body and both
+                        // controllers bind it with a non-nullable [FromBody] parameter under
+                        // [ApiController]. Sending only the unmatchable path id and omitting a
+                        // required body would assert 404 against a guaranteed 400 on every run,
+                        // so this gets the same note-not-guess treatment as the branches above.
+                        notes.Add(new CoverageNote(key.Value,
+                            $"declares {NotFoundStatus} but has a required request body that an unmatchable-id-only, bodyless request would omit"));
+                    }
                     else
                     {
                         var notFoundMethodName = CSharpIdentifier.ToPascalCase(key.Value) + "_NotFound";
