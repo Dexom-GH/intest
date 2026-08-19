@@ -31,10 +31,22 @@ public static class CoverageReport
         foreach (var n in plan.Notes)
             withheld.Add(new JsonObject { ["operation"] = n.OperationKey, ["reason"] = n.Reason });
 
+        // Task 6: an operation can now emit more than one case (declared-error and auth cases,
+        // decisions 5 and 3), so a per-operation count is no longer the same number as a
+        // per-case count. authCases is also reused below by both the generated and gated counts.
+        var authCases = cases.Where(c => c.Role == CaseRole.Auth).ToList();
+
         var report = new JsonObject
         {
             ["title"] = plan.Title,
+            // Left as a case count, deliberately: GenerateCommand.cs's own console line
+            // ("Generated N test(s)") already fixes what this field means, so redefining it here
+            // would contradict output the same run just printed. operationsGenerated, below, is
+            // the field that now carries what "generated" only meant by coincidence before
+            // declared-error and auth cases existed — §12's own example ("Operations in spec: 148
+            // / Generated: 113") is that older, 1:1 meaning.
             ["generated"] = cases.Count,
+            ["operationsGenerated"] = cases.Select(c => c.OperationKey).Distinct(StringComparer.Ordinal).Count(),
             ["skipped"] = skipped,
             ["notes"] = new JsonObject
             {
@@ -48,8 +60,30 @@ public static class CoverageReport
                     .Distinct(StringComparer.Ordinal).Count(),
                 ["synthesizedOperationIds"] = cases.Where(c => c.OperationKeySynthesized)
                     .Select(c => c.OperationKey).Distinct(StringComparer.Ordinal).Count(),
-                ["statusOnlyContractTests"] = cases.Count(c => c.SchemaKey is null),
-                ["inlineResponseSchemas"] = cases.Count(c => c.SchemaKey?.StartsWith("op:", StringComparison.Ordinal) == true)
+                // Role.Success only: a declared-error case's SchemaKey is null because decision 5
+                // never asks a 404 response for a schema, and an auth case's is null because
+                // decision 3's fixed 401/403 pair never reads a declared response at all (see
+                // TestCasePlan.SchemaKey's own doc on the Auth cases). Counting either here
+                // inflated a note whose stated meaning is "no response schema declared — fixable
+                // in the spec" with cases that never had a schema question to begin with — the
+                // same bodiless-204 mistake §12 already names, recurring under a new role.
+                ["statusOnlyContractTests"] = cases.Count(c => c.SchemaKey is null && c.Role == CaseRole.Success),
+                ["inlineResponseSchemas"] = cases.Count(c => c.SchemaKey?.StartsWith("op:", StringComparison.Ordinal) == true),
+                ["declaredErrorTestsGenerated"] = cases.Count(c => c.Role == CaseRole.DeclaredError),
+                ["authTestsGenerated"] = authCases.Count,
+                // Named "gated on", not "skipped for want of": whether a generated case actually
+                // gets skipped is decided at runtime by RequireMultipleIdentities against whatever
+                // ITestTokenProvider a project registers (decision 3) — the CLI generates this
+                // report long before any provider exists (decision 7) and cannot know that number.
+                // What it can say honestly is how many generated cases *require* a second identity
+                // to run at all: only the wrong-scope 403 case (IdentitySlot.Secondary) does: the
+                // no-token 401 case always runs regardless of how many identities a provider has.
+                ["authTestsGatedOnSecondIdentity"] = authCases.Count(c => c.Slot == IdentitySlot.Secondary),
+                // TestPlanBuilder's no-path-parameter branch is the sole source of this exact
+                // reason text — matched here rather than restated, so this count can never drift
+                // from the message a reader of `withheld` actually sees for the same operations.
+                ["notFoundWithoutPathParameter"] = plan.Notes.Count(n =>
+                    n.Reason.Contains("no path parameter to target with an unmatchable value", StringComparison.Ordinal))
             }
         };
 

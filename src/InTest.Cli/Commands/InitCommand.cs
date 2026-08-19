@@ -127,6 +127,17 @@ public static class InitCommand
             /// example.</summary>
             private static void Register(IServiceCollection services, IConfiguration configuration)
             {
+                // StaticTokenProvider ships as the one-identity, one-token implementation; write
+                // your own (like YourTokenProvider below) for more than one identity, which the
+                // wrong-scope 403 cases need. Catalog and Inventory declare no `security` and
+                // register nothing at all — they cannot, since StaticTokenProvider needs a real
+                // token neither has a source for — so this stays commented for the same reason
+                // the IAssemblyFixture example below does: a live registration here would
+                // reference a type that does not exist yet, breaking every fresh scaffold's
+                // build before a team has written one. See "Auth" in Phase 3 of
+                // getting-started.md for a worked example.
+                // services.AddSingleton<ITestTokenProvider, YourTokenProvider>();
+
                 // Per-request fixtures: path and query parameter values live in fixtures/, not
                 // here — each operation that needs one has a fixture file with a "TODO:"
                 // sentinel for every value it requires. Fill those in by hand, or run

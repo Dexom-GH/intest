@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.RegularExpressions;
 using InTest.Cli.Commands;
 using Shouldly;
@@ -147,5 +148,59 @@ public class InitCommandTests
         // live call here would reference a fixture type that does not exist yet, breaking every
         // fresh scaffold's build before a team has written one.
         startup.ShouldContain("// services.AddSingleton<IAssemblyFixture,");
+    }
+
+    [TestMethod]
+    public void RegisterMethodShowsACommentedTokenProviderRegistrationExample()
+    {
+        InitCommand.Run(_root, "Orders.ApiTests", "orders.json");
+        var startup = File.ReadAllText(Path.Combine(_root, "TestStartup.cs"));
+
+        // Task 6: same precedent as the IAssemblyFixture example above — commented, not live.
+        // StaticTokenProvider needs a real token neither Catalog nor Inventory has a source for,
+        // so a live registration here would either fail to construct or issue a token that
+        // authenticates nothing. AuthHandler already no-ops when no provider is registered (Task
+        // 2(b)), which is exactly the state this scaffold must ship in.
+        startup.ShouldContain("// services.AddSingleton<ITestTokenProvider",
+            customMessage: "the scaffold must show the registration, but only as a comment");
+    }
+
+    [TestMethod]
+    public async Task ScaffoldStillBuildsWithNoTokenProviderRegistered()
+    {
+        // Task 6's own point: asserting the comment exists (above) would not have caught a live
+        // registration slipping in — only actually building the fresh scaffold, with nothing
+        // uncommented, does. StaticTokenProvider needs a token Catalog and Inventory have no
+        // source for, so a live registration here breaks Task 8 Step 5 the moment it is added;
+        // this test is what would fail if that ever happened.
+        InitCommand.Run(_root, "Orders.ApiTests", "orders.json").ShouldBe(0);
+
+        var runtimeProject = Path.GetFullPath(Path.Combine(
+            AppContext.BaseDirectory, "..", "..", "..", "..", "..", "src", "InTest.Runtime", "InTest.Runtime.csproj"));
+        var csprojPath = Path.Combine(_root, "Orders.ApiTests.csproj");
+        File.WriteAllText(csprojPath, File.ReadAllText(csprojPath).Replace(
+            """<PackageReference Include="InTest.Runtime" Version="0.1.0" />""",
+            $"""<ProjectReference Include="{runtimeProject}" />""",
+            StringComparison.Ordinal));
+
+        // The csproj copies Generated/spec-schemas.json and Generated/spec-paths.json to the
+        // output directory — this test never runs `generate`, so they must exist for the build
+        // to have anything to copy from.
+        Directory.CreateDirectory(Path.Combine(_root, "Generated"));
+        File.WriteAllText(Path.Combine(_root, "Generated", "spec-schemas.json"), "{}");
+        File.WriteAllText(Path.Combine(_root, "Generated", "spec-paths.json"), "{}");
+
+        using var process = Process.Start(new ProcessStartInfo("dotnet", $"build \"{_root}\" --nologo -v q")
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        })!;
+
+        var stdout = await process.StandardOutput.ReadToEndAsync();
+        var stderr = await process.StandardError.ReadToEndAsync();
+        await process.WaitForExitAsync();
+
+        process.ExitCode.ShouldBe(0,
+            $"a fresh scaffold with no ITestTokenProvider registered must still build:{Environment.NewLine}{stdout}{stderr}");
     }
 }
