@@ -11,7 +11,7 @@ integration test suite running as a post-deployment gate.
 > are verified end to end against live APIs, request bodies included — the three sample suites
 > pass **22 of 22** against running servers, with 44 fixture sentinels filled by hand
 > ([`v0-acceptance.md`](v0-acceptance.md), which also records what that run found). Not yet built: `survey`
-> (Phase 0), `generate --check` and `intest upgrade` (Phase 8), variation and auth tests, and
+> (Phase 0), `generate --check` and `intest upgrade` (Phase 8), variation tests, and
 > YAML input. Nothing is published to NuGet, so build from source for now.
 >
 > The walkthrough is kept whole rather than trimmed to what ships, because tracing it end to end

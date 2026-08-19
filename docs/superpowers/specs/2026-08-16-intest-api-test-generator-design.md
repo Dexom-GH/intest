@@ -1015,13 +1015,19 @@ public async Task GetOrderById_NotFound()
     using var response = await Client.SendAsync(request, TestContext.CancellationToken);
     stopwatch.Stop();
 
-    await ApiResponseAssertions.ShouldMatchStatusAsync(
-        response, 404, TestId, stopwatch.Elapsed, TestContext.CancellationToken);
+    await ApiResponseAssertions.ShouldMatchContractAsync(
+        response, 404, "ProblemDetails", Schemas, TestId, stopwatch.Elapsed,
+        TestContext.CancellationToken);
 }
 ```
 
 `Guid.NewGuid()`, not a fixture value (decision 6): a generated, unmatchable id so no seeded row
-can collide and an unfilled fixture can never block a case that needs no data.
+can collide and an unfilled fixture can never block a case that needs no data. The declared-error
+case asks the same `ResolveSchemaKey` the success case uses, so it schema-checks the body
+whenever the 404 declares one — as every 404 in every shipped sample does, which makes
+`ShouldMatchContractAsync` the form you will actually see generated. A 404 declared with no
+response schema falls back to `ShouldMatchStatusAsync` instead, status-only, the same way a
+success case does.
 
 ### Auth contract tests
 
@@ -1856,7 +1862,7 @@ public interface ITestTokenProvider
     /// case off. Also the source of the coverage-report count.
     IReadOnlyList<string> Identities { get; }
 
-    Task<string> GetTokenAsync(string audience, string? identity = null, CancellationToken ct = default);
+    Task<string> GetTokenAsync(string audience, string? identity = null, CancellationToken cancellationToken = default);
 }
 ```
 

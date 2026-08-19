@@ -16,7 +16,7 @@ or in a pull request, never as part of the deployment pipeline.
 > supply request bodies and path/query parameters, so operations with a request body no longer
 > generate a test that cannot send one — see "What day one actually looks like" below.
 >
-> **Not yet built:** variation tests, auth tests, `intest survey`, `generate --check`, and YAML
+> **Not yet built:** variation tests, `intest survey`, `generate --check`, and YAML
 > input. Packages are unpublished and the IDs are not reserved, so you cannot install this yet —
 > build from source.
 >
