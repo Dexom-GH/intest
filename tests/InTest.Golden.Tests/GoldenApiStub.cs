@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Net;
 using System.Text;
+using System.Text.Json;
 
 namespace InTest.Golden.Tests;
 
@@ -15,6 +16,18 @@ namespace InTest.Golden.Tests;
 /// Extracted out of <c>GeneratedSuiteExecutionTests</c> (M7 of Task 6's third review round) once
 /// that file had doubled in size from Task 6's own additions and a further test was already
 /// planned for the same file.
+/// </para>
+/// <para>
+/// Task 8a adds a small in-memory item store behind <c>POST /api/items</c> and
+/// <c>DELETE /api/items/{id}</c> only — every other path below is untouched, including the
+/// permissive <c>/api/status/</c> catch-all <c>FixtureParameterReachesALiveRequestEndToEnd</c>
+/// depends on. This is the narrower of the two options Task 8a's own plan step lays out: confine
+/// statefulness to the paths the new guard test needs, rather than pre-seeding every existing
+/// permissive arm. A duplicate <c>sku</c> 409s — the store never forgets one, deleted or not, the
+/// same way a real unique-constrained column would not free its value on a row's deletion unless
+/// the API said so — and deleting an id the store does not (or no longer) know about 404s. That
+/// pair is the exact shape F7 reproduced against <c>samples/Catalog.Api</c>
+/// (<c>docs/v0-acceptance.md</c>'s v1-b section).
 /// </para>
 /// </summary>
 internal sealed class GoldenApiStub : IDisposable
@@ -34,6 +47,8 @@ internal sealed class GoldenApiStub : IDisposable
     private readonly HttpListener _listener;
     private readonly CancellationTokenSource _serverCancellation;
     private readonly ConcurrentBag<string> _receivedPaths = [];
+    private readonly ConcurrentDictionary<string, string> _itemsById = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, byte> _skusInUse = new(StringComparer.Ordinal);
     private int _readyProbeCount;
 
     public int Port { get; }
@@ -44,6 +59,15 @@ internal sealed class GoldenApiStub : IDisposable
     /// (<c>ShouldContain</c>), never order- or index-based.
     /// </summary>
     public IReadOnlyCollection<string> ReceivedPaths => _receivedPaths;
+
+    /// <summary>
+    /// Item rows currently in the store — created by <c>POST /api/items</c>, removed by a
+    /// matching <c>DELETE /api/items/{id}</c>. Only <c>TheGeneratedSuitePassesTwiceAgainstTheSameStore</c>
+    /// reads this, to confirm a create genuinely happened each run rather than the second run
+    /// passing merely because nothing was attempted (Task 8a's own stated worry about a
+    /// vacuously-passing guard).
+    /// </summary>
+    public int ItemCount => _itemsById.Count;
 
     public GoldenApiStub()
     {
@@ -74,25 +98,37 @@ internal sealed class GoldenApiStub : IDisposable
 
             var path = context.Request.Url?.AbsolutePath ?? "/";
             _receivedPaths.Add(path);
-            var (status, body) = path switch
+
+            // The two new stateful paths are dispatched on (method, path) before falling through
+            // to the original path-only switch below, which stays exactly as it was — Task 8a,
+            // Step 1's narrower option (see this class's own doc): nothing here changes what any
+            // existing arm, including the permissive "/api/status/" catch-all, returns.
+            var (status, body) = context.Request.HttpMethod switch
             {
-                "/health/ready" => HandleHealthCheck(),
-                "/api/status" => (200, """{"state":"ok"}"""),
-                // Belt-and-braces, not the primary catch: RequireFixture already throws before a
-                // request carrying an unresolved sentinel is ever built (confirmed by sabotaging
-                // the replace step in FixtureParameterReachesALiveRequestEndToEnd — the failure
-                // surfaces as FixtureUnresolvedException, not a live 400). This exists so the
-                // live proof still fails loudly, rather than hanging on a request that never
-                // reaches the stub, if that call were ever removed from the template without a
-                // unit test catching it first.
-                "/api/status/TODO:id" => (400, """{"error":"unresolved fixture sentinel"}"""),
-                // Only SeedIdFixture (APublishedFixtureKeyReachesALiveRequest) calls this. 503
-                // until readiness has genuinely been satisfied — see RequiredReadyProbes' own
-                // doc — so a fixture that ran before Readiness.WaitAsync returned gets a real
-                // failure instead of a value that happened to work anyway.
-                "/api/seed" => HandleSeed(),
-                _ when path.StartsWith("/api/status/", StringComparison.Ordinal) => (200, """{"state":"ok"}"""),
-                _ => (404, """{"error":"not found"}""")
+                "POST" when path == "/api/items" =>
+                    await HandleCreateItemAsync(context.Request, cancellationToken),
+                "DELETE" when path.StartsWith("/api/items/", StringComparison.Ordinal) =>
+                    HandleDeleteItem(path),
+                _ => path switch
+                {
+                    "/health/ready" => HandleHealthCheck(),
+                    "/api/status" => (200, """{"state":"ok"}"""),
+                    // Belt-and-braces, not the primary catch: RequireFixture already throws before a
+                    // request carrying an unresolved sentinel is ever built (confirmed by sabotaging
+                    // the replace step in FixtureParameterReachesALiveRequestEndToEnd — the failure
+                    // surfaces as FixtureUnresolvedException, not a live 400). This exists so the
+                    // live proof still fails loudly, rather than hanging on a request that never
+                    // reaches the stub, if that call were ever removed from the template without a
+                    // unit test catching it first.
+                    "/api/status/TODO:id" => (400, """{"error":"unresolved fixture sentinel"}"""),
+                    // Only SeedIdFixture (APublishedFixtureKeyReachesALiveRequest) calls this. 503
+                    // until readiness has genuinely been satisfied — see RequiredReadyProbes' own
+                    // doc — so a fixture that ran before Readiness.WaitAsync returned gets a real
+                    // failure instead of a value that happened to work anyway.
+                    "/api/seed" => HandleSeed(),
+                    _ when path.StartsWith("/api/status/", StringComparison.Ordinal) => (200, """{"state":"ok"}"""),
+                    _ => (404, """{"error":"not found"}""")
+                }
             };
 
             var bytes = Encoding.UTF8.GetBytes(body);
@@ -114,6 +150,44 @@ internal sealed class GoldenApiStub : IDisposable
         Volatile.Read(ref _readyProbeCount) >= RequiredReadyProbes
             ? (200, """{"seedValue":"seeded-42"}""")
             : (503, """{"error":"not ready for seeding yet"}""");
+
+    /// <summary>
+    /// Creates an item row keyed by its <c>sku</c>, 409ing on a duplicate exactly the way
+    /// <c>samples/Catalog.Api</c>'s unique <c>Sku</c> column does — F7's "literal fixture values
+    /// collide with unique constraints" reproduced in-process. <c>sku</c> is read directly off
+    /// the request body rather than validated against a schema: this stub answers whatever a live
+    /// generated suite actually sends, the same trust level every other arm here already gives
+    /// the request.
+    /// </summary>
+    private async Task<(int, string)> HandleCreateItemAsync(HttpListenerRequest request, CancellationToken cancellationToken)
+    {
+        using var reader = new StreamReader(request.InputStream, request.ContentEncoding);
+        var requestBody = await reader.ReadToEndAsync(cancellationToken);
+        using var document = JsonDocument.Parse(requestBody);
+        var sku = document.RootElement.TryGetProperty("sku", out var skuElement) ? skuElement.GetString() ?? "" : "";
+
+        if (!_skusInUse.TryAdd(sku, 0))
+        {
+            return (409, $$"""{"error":"sku '{{sku}}' already exists"}""");
+        }
+
+        var id = Guid.NewGuid().ToString("N");
+        _itemsById[id] = sku;
+        return (201, $$"""{"id":"{{id}}","sku":"{{sku}}"}""");
+    }
+
+    /// <summary>
+    /// Removes an item row, 404ing if <paramref name="path"/>'s id is not currently in the store
+    /// — never created, or already deleted by an earlier call. F7's other reproduced failure: a
+    /// deleted row does not come back for a second run that targets it by the same, literal id.
+    /// </summary>
+    private (int, string) HandleDeleteItem(string path)
+    {
+        var id = path["/api/items/".Length..];
+        return _itemsById.TryRemove(id, out _)
+            ? (204, "")
+            : (404, """{"error":"not found"}""");
+    }
 
     private static int FreePort()
     {

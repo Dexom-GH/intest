@@ -115,6 +115,61 @@ public class GeneratedSuiteExecutionTests
     }
     """;
 
+    /// <summary>
+    /// A create-then-delete pair against <c>/api/items</c>, used only by
+    /// <see cref="TheGeneratedSuitePassesTwiceAgainstTheSameStore"/> (Task 8a). Deliberately
+    /// separate from <see cref="Spec"/> and <see cref="SpecWithPathParameter"/> for the same
+    /// reason those two are separate from each other: this is the only test that needs
+    /// <see cref="GoldenApiStub"/>'s stateful <c>POST /api/items</c> / <c>DELETE /api/items/{id}</c>
+    /// pair, and keeping it on its own spec means nothing else in this file is affected by it.
+    /// </summary>
+    private const string SpecWithItemsLifecycle = """
+    {
+      "openapi": "3.0.3",
+      "info": { "title": "Stub", "version": "1.0" },
+      "paths": {
+        "/api/items": {
+          "post": {
+            "operationId": "createItem",
+            "tags": ["Items"],
+            "requestBody": {
+              "required": true,
+              "content": {
+                "application/json": {
+                  "schema": { "$ref": "#/components/schemas/CreateItemRequest" }
+                }
+              }
+            },
+            "responses": {
+              "201": { "description": "Created" }
+            }
+          }
+        },
+        "/api/items/{id}": {
+          "delete": {
+            "operationId": "deleteItem",
+            "tags": ["Items"],
+            "parameters": [
+              { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+            ],
+            "responses": {
+              "204": { "description": "No Content" }
+            }
+          }
+        }
+      },
+      "components": {
+        "schemas": {
+          "CreateItemRequest": {
+            "type": "object",
+            "required": ["sku"],
+            "properties": { "sku": { "type": "string" } }
+          }
+        }
+      }
+    }
+    """;
+
     private string _root = null!;
     private GoldenApiStub _stub = null!;
 
@@ -452,6 +507,144 @@ public class GeneratedSuiteExecutionTests
             customMessage: $"the aggregated report never reached process output on this passing run:{Environment.NewLine}{test.Output}");
         test.Output.ShouldContain("is still unfilled (TODO:id)",
             customMessage: $"the report reached output but not with the expected problem detail:{Environment.NewLine}{test.Output}");
+    }
+
+    /// <summary>
+    /// Task 8's own guard: Task 8 is a transcript (the v1-b acceptance run against
+    /// <c>samples/Catalog.Api</c>, recorded in <c>docs/v0-acceptance.md</c>) proving F7 closed by
+    /// running a generated suite twice against the same store, by hand. A manual result regresses
+    /// silently — nobody notices until the next acceptance run — so this reproduces that same
+    /// shape automatically: <see cref="GoldenFixtureSources.RepeatableSeedFixture"/> is
+    /// <c>CatalogSeedFixture</c>'s create-then-clean-up pair reduced to what it needs, run against
+    /// <see cref="GoldenApiStub"/>'s stateful <c>/api/items</c> store, which 409s a duplicate
+    /// <c>sku</c> and 404s a delete of a row it does not know about — the exact two failure modes
+    /// F7 reproduced.
+    /// <para>
+    /// Strengthened past the plan's own snippet (<c>Output.ShouldContain("Passed!")</c> twice),
+    /// which several earlier tasks' plan-supplied snippets already turned out to be vacuous
+    /// against: a suite that ran zero tests, or one whose operations were all blocked by fixture
+    /// validation before a single request went out, would still print "Passed!". Both runs are
+    /// instead checked against their own trx — exact test count, and both operations individually
+    /// present and Passed, the same pattern <see cref="FixtureParameterReachesALiveRequestEndToEnd"/>
+    /// and <see cref="APublishedFixtureKeyReachesALiveRequest"/> already use above.
+    /// </para>
+    /// <para>
+    /// That still leaves the plan's own stated worry in Task 8 Step 3 open: a second run could
+    /// pass "for the wrong reason" — because nothing was ever created, rather than because
+    /// creation and teardown both genuinely worked. The three assertions on <see cref="_stub"/>
+    /// after both runs close that gap from the outside, in the same spirit as
+    /// <see cref="APublishedFixtureKeyReachesALiveRequest"/>'s check against
+    /// <see cref="GoldenApiStub.ReceivedPaths"/>: <see cref="GoldenApiStub.ItemCount"/> proves a
+    /// real, uncleaned-up row exists per run (the generated <c>CreateItem_Contract</c> test's own
+    /// create, which nothing deletes — the same permanent-leak shape as <c>CatalogSeedFixture</c>'s
+    /// product), and the create/delete call counts on <see cref="GoldenApiStub.ReceivedPaths"/>
+    /// prove both the fixture's own live calls and the generated suite's own live calls happened
+    /// every run, not merely once.
+    /// </para>
+    /// </summary>
+    [TestMethod]
+    public async Task TheGeneratedSuitePassesTwiceAgainstTheSameStore()
+    {
+        await ScaffoldGenerateAndBuildWithSeedingFixture();
+
+        await RunAndAssertBothOperationsPassAsync("run1");
+        await RunAndAssertBothOperationsPassAsync("run2");
+
+        // Distinguishes "passed because it worked" from "passed because nothing happened" (Task
+        // 8 Step 3's own stated worry). CreateItem_Contract's own item is never cleaned up
+        // (mirrors CatalogSeedFixture's permanently-leaked product), so two genuine runs leave
+        // exactly two rows behind; the seeding fixture's own item is deleted by its own cleanup
+        // every run, so it never adds to this count.
+        _stub.ItemCount.ShouldBe(2,
+            $"expected exactly 2 leaked items after two runs (one per run's CreateItem_Contract, " +
+            $"never cleaned up) but the store has {_stub.ItemCount} — a lower count means a create " +
+            $"silently did not happen; a higher count means a delete or its cleanup did not.");
+
+        var createCalls = _stub.ReceivedPaths.Count(p => p == "/api/items");
+        createCalls.ShouldBe(4,
+            $"expected 4 POST /api/items calls (the seeding fixture's own create plus the " +
+            $"generated CreateItem_Contract test, twice) but saw {createCalls}. Paths served: " +
+            $"{string.Join(", ", _stub.ReceivedPaths)}");
+
+        var deleteCalls = _stub.ReceivedPaths.Count(p => p.StartsWith("/api/items/", StringComparison.Ordinal));
+        deleteCalls.ShouldBe(4,
+            $"expected 4 DELETE /api/items/{{id}} calls (the seeding fixture's own cleanup plus " +
+            $"the generated DeleteItem_Contract test, twice) but saw {deleteCalls}. Paths served: " +
+            $"{string.Join(", ", _stub.ReceivedPaths)}");
+    }
+
+    /// <summary>
+    /// Builds once — generate, fill <c>fixtures/createItem.json</c>'s <c>sku</c> and
+    /// <c>fixtures/deleteItem.json</c>'s <c>id</c> with fixture tokens, register
+    /// <see cref="GoldenFixtureSources.RepeatableSeedFixture"/>, then build — mirroring the v1-b
+    /// acceptance run's own shape: one build, then two <c>dotnet test --no-build</c> invocations
+    /// against the same running <see cref="_stub"/>, exactly as its two invocations ran against
+    /// the same, never-restarted <c>samples/Catalog.Api</c> process and the same, never-reset
+    /// database.
+    /// </summary>
+    private async Task ScaffoldGenerateAndBuildWithSeedingFixture()
+    {
+        File.WriteAllText(Path.Combine(_root, "spec.json"), SpecWithItemsLifecycle);
+
+        InitCommand.Run(_root, "Stub.ApiTests", "spec.json").ShouldBe(0);
+        UseProjectReferenceInsteadOfPackage();
+        PointAtStub();
+
+        (await FixturesRepairCommand.RunAsync(_root, CancellationToken.None)).ShouldBe(0);
+        (await GenerateCommand.RunAsync(_root, CancellationToken.None)).ShouldBe(0);
+
+        var createFixturePath = Path.Combine(_root, "fixtures", "createItem.json");
+        var createFixture = File.ReadAllText(createFixturePath);
+        createFixture.ShouldContain("\"TODO:sku\"",
+            customMessage: "a required body property always gets a sentinel (decision 1)");
+        File.WriteAllText(createFixturePath,
+            createFixture.Replace("\"TODO:sku\"", "\"{{fixture:newItem.sku}}\"", StringComparison.Ordinal));
+
+        var deleteFixturePath = Path.Combine(_root, "fixtures", "deleteItem.json");
+        var deleteFixture = File.ReadAllText(deleteFixturePath);
+        deleteFixture.ShouldContain("\"TODO:id\"",
+            customMessage: "a required path parameter always gets a sentinel (decision 1)");
+        File.WriteAllText(deleteFixturePath,
+            deleteFixture.Replace("\"TODO:id\"", "\"{{fixture:seededItem.id}}\"", StringComparison.Ordinal));
+
+        File.WriteAllText(Path.Combine(_root, "RepeatableSeedFixture.cs"), GoldenFixtureSources.RepeatableSeedFixture);
+        RegisterFixture("RepeatableSeedFixture");
+
+        var build = await RunAsync("dotnet", $"build \"{_root}\" --nologo -v q");
+        build.ExitCode.ShouldBe(0, $"generated project failed to build:{Environment.NewLine}{build.Output}");
+    }
+
+    /// <summary>
+    /// Runs <c>dotnet test --no-build</c> once and asserts, from its trx rather than its console
+    /// text, that exactly two tests ran and both — <c>CreateItem_Contract</c> and
+    /// <c>DeleteItem_Contract</c> — passed. Checking the count is what closes the plan's own
+    /// stated gap in its snippet: a suite that silently ran zero tests still prints "Passed!".
+    /// </summary>
+    private async Task RunAndAssertBothOperationsPassAsync(string label)
+    {
+        var resultsDir = Path.Combine(_root, "TestResults", label);
+        var test = await RunAsync("dotnet",
+            $"test \"{_root}\" --no-build --nologo --logger \"trx;LogFileName=results.trx\" --results-directory \"{resultsDir}\"");
+
+        var trxPath = Directory.GetFiles(resultsDir, "results.trx", SearchOption.AllDirectories)
+            .ShouldHaveSingleItem($"[{label}] expected exactly one results.trx under {resultsDir}:{Environment.NewLine}{test.Output}");
+
+        var trx = XDocument.Load(trxPath);
+        var results = trx.Descendants().Where(e => e.Name.LocalName == "UnitTestResult").ToList();
+
+        results.Count.ShouldBe(2,
+            $"[{label}] expected exactly 2 tests (CreateItem_Contract, DeleteItem_Contract) but " +
+            $"the trx recorded {results.Count}:{Environment.NewLine}{test.Output}");
+
+        foreach (var name in new[] { "CreateItem_Contract", "DeleteItem_Contract" })
+        {
+            var result = results.SingleOrDefault(e => (e.Attribute("testName")?.Value ?? "").Contains(name, StringComparison.Ordinal));
+            result.ShouldNotBeNull($"[{label}] {name} did not appear in the trx at all:{Environment.NewLine}{test.Output}");
+            result!.Attribute("outcome")?.Value.ShouldBe("Passed",
+                $"[{label}] {name} ran but did not pass:{Environment.NewLine}{test.Output}");
+        }
+
+        test.ExitCode.ShouldBe(0, $"[{label}]{Environment.NewLine}{test.Output}");
     }
 
     private void PointAtStub()
