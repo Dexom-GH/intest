@@ -23,11 +23,16 @@ namespace InTest.Golden.Tests;
 /// permissive <c>/api/status/</c> catch-all <c>FixtureParameterReachesALiveRequestEndToEnd</c>
 /// depends on. This is the narrower of the two options Task 8a's own plan step lays out: confine
 /// statefulness to the paths the new guard test needs, rather than pre-seeding every existing
-/// permissive arm. A duplicate <c>sku</c> 409s — the store never forgets one, deleted or not, the
-/// same way a real unique-constrained column would not free its value on a row's deletion unless
-/// the API said so — and deleting an id the store does not (or no longer) know about 404s. That
-/// pair is the exact shape F7 reproduced against <c>samples/Catalog.Api</c>
-/// (<c>docs/v0-acceptance.md</c>'s v1-b section).
+/// permissive arm. A duplicate <c>sku</c> 409s while that id is still live, and deleting an id
+/// the store does not (or no longer) know about 404s — that pair is the exact shape F7 reproduced
+/// against <c>samples/Catalog.Api</c> (<c>docs/v0-acceptance.md</c>'s v1-b section). A successful
+/// delete frees its <c>sku</c> for reuse: <c>samples/Catalog.Api</c>'s
+/// <c>ProductsController</c> checks uniqueness with <c>Products.AnyAsync(p => p.Sku ==
+/// request.Sku)</c>, a query over live rows only, so a deleted product's SKU really does become
+/// available again there — a review round on Task 8a caught an earlier version of this doc
+/// claiming the opposite. A <c>sku</c> the store still refuses on a second run is therefore never
+/// because delete failed to free it; it is because nothing ever deleted that particular row (see
+/// <c>GoldenFixtureSources.RepeatableSeedFixture</c>'s own doc for exactly which one, and why).
 /// </para>
 /// </summary>
 internal sealed class GoldenApiStub : IDisposable
@@ -152,19 +157,39 @@ internal sealed class GoldenApiStub : IDisposable
             : (503, """{"error":"not ready for seeding yet"}""");
 
     /// <summary>
-    /// Creates an item row keyed by its <c>sku</c>, 409ing on a duplicate exactly the way
-    /// <c>samples/Catalog.Api</c>'s unique <c>Sku</c> column does — F7's "literal fixture values
-    /// collide with unique constraints" reproduced in-process. <c>sku</c> is read directly off
-    /// the request body rather than validated against a schema: this stub answers whatever a live
-    /// generated suite actually sends, the same trust level every other arm here already gives
-    /// the request.
+    /// Creates an item row keyed by its <c>sku</c>, 409ing on a duplicate <em>still-live</em>
+    /// <c>sku</c> exactly the way <c>samples/Catalog.Api</c>'s <c>ProductsController</c> does
+    /// (an <c>AnyAsync</c> query over live rows) — F7's "literal fixture values collide with
+    /// unique constraints" reproduced in-process. <c>sku</c> is read directly off the request
+    /// body rather than validated against a schema: this stub answers whatever a live generated
+    /// suite actually sends, the same trust level every other arm here already gives the request.
+    /// <para>
+    /// A malformed body (not valid JSON, or a non-string <c>sku</c>) 400s rather than throwing —
+    /// this is the first stub arm that parses a request body at all, and <see cref="ServeAsync"/>'s
+    /// own loop has no try/catch around request handling (only around
+    /// <see cref="HttpListener.GetContextAsync"/>): an unhandled exception here would fault the
+    /// whole serve loop, and every request after it — including the ones from the run that
+    /// caused the fault — would hang to the caller's own timeout instead of failing cleanly. Low
+    /// probability in practice (<c>FixtureValidation</c> guarantees the body a generated suite
+    /// actually sends), but cheap enough to close outright.
+    /// </para>
     /// </summary>
     private async Task<(int, string)> HandleCreateItemAsync(HttpListenerRequest request, CancellationToken cancellationToken)
     {
-        using var reader = new StreamReader(request.InputStream, request.ContentEncoding);
-        var requestBody = await reader.ReadToEndAsync(cancellationToken);
-        using var document = JsonDocument.Parse(requestBody);
-        var sku = document.RootElement.TryGetProperty("sku", out var skuElement) ? skuElement.GetString() ?? "" : "";
+        string sku;
+        try
+        {
+            using var reader = new StreamReader(request.InputStream, request.ContentEncoding);
+            var requestBody = await reader.ReadToEndAsync(cancellationToken);
+            using var document = JsonDocument.Parse(requestBody);
+            sku = document.RootElement.TryGetProperty("sku", out var skuElement) && skuElement.ValueKind == JsonValueKind.String
+                ? skuElement.GetString()!
+                : "";
+        }
+        catch (JsonException)
+        {
+            return (400, """{"error":"malformed request body"}""");
+        }
 
         if (!_skusInUse.TryAdd(sku, 0))
         {
@@ -180,13 +205,20 @@ internal sealed class GoldenApiStub : IDisposable
     /// Removes an item row, 404ing if <paramref name="path"/>'s id is not currently in the store
     /// — never created, or already deleted by an earlier call. F7's other reproduced failure: a
     /// deleted row does not come back for a second run that targets it by the same, literal id.
+    /// Frees the removed row's <c>sku</c> for reuse — matching <c>ProductsController</c>'s
+    /// live-rows-only uniqueness query, not a permanent reservation (see this class's own doc for
+    /// why an earlier version of this comment claimed the opposite).
     /// </summary>
     private (int, string) HandleDeleteItem(string path)
     {
         var id = path["/api/items/".Length..];
-        return _itemsById.TryRemove(id, out _)
-            ? (204, "")
-            : (404, """{"error":"not found"}""");
+        if (!_itemsById.TryRemove(id, out var sku))
+        {
+            return (404, """{"error":"not found"}""");
+        }
+
+        _skusInUse.TryRemove(sku, out _);
+        return (204, "");
     }
 
     private static int FreePort()

@@ -531,15 +531,24 @@ public class GeneratedSuiteExecutionTests
     /// <para>
     /// That still leaves the plan's own stated worry in Task 8 Step 3 open: a second run could
     /// pass "for the wrong reason" — because nothing was ever created, rather than because
-    /// creation and teardown both genuinely worked. The three assertions on <see cref="_stub"/>
-    /// after both runs close that gap from the outside, in the same spirit as
-    /// <see cref="APublishedFixtureKeyReachesALiveRequest"/>'s check against
-    /// <see cref="GoldenApiStub.ReceivedPaths"/>: <see cref="GoldenApiStub.ItemCount"/> proves a
-    /// real, uncleaned-up row exists per run (the generated <c>CreateItem_Contract</c> test's own
-    /// create, which nothing deletes — the same permanent-leak shape as <c>CatalogSeedFixture</c>'s
-    /// product), and the create/delete call counts on <see cref="GoldenApiStub.ReceivedPaths"/>
-    /// prove both the fixture's own live calls and the generated suite's own live calls happened
-    /// every run, not merely once.
+    /// creation and teardown both genuinely worked. A review round on this task found that the
+    /// first draft here only closed the "created" half: <see cref="TestHost.CleanupAsync"/> swallows
+    /// a <c>FixtureLifecycleException</c> by design (its own doc explains why — a teardown
+    /// complaint must not bury a real test failure), so a cleanup delete that targets the wrong
+    /// id neither fails a test nor fails the run; it only stops being observed. The reviewer
+    /// proved this by sabotaging <c>RepeatableSeedFixture</c>'s own cleanup to a bogus id and
+    /// watching the guard stay green. <see cref="GoldenFixtureSources.RepeatableSeedFixture"/> now
+    /// seeds a second item nothing else ever references or deletes, so its cleanup is the only
+    /// thing that can remove it — see that constant's own doc for the full reasoning. The three
+    /// assertions on <see cref="_stub"/> after both runs close the gap from the outside, in the
+    /// same spirit as <see cref="APublishedFixtureKeyReachesALiveRequest"/>'s check against
+    /// <see cref="GoldenApiStub.ReceivedPaths"/>: <see cref="GoldenApiStub.ItemCount"/> proves both
+    /// that a real, uncleaned-up row exists per run (the generated <c>CreateItem_Contract</c>
+    /// test's own create, which nothing deletes — the same permanent-leak shape as
+    /// <c>CatalogSeedFixture</c>'s product) <em>and</em> that the cleanup-only row from each run
+    /// was genuinely removed, not merely requested; the create/delete call counts on
+    /// <see cref="GoldenApiStub.ReceivedPaths"/> prove every one of those live calls — fixture and
+    /// generated-test alike — actually happened, every run, not merely once.
     /// </para>
     /// </summary>
     [TestMethod]
@@ -551,26 +560,36 @@ public class GeneratedSuiteExecutionTests
         await RunAndAssertBothOperationsPassAsync("run2");
 
         // Distinguishes "passed because it worked" from "passed because nothing happened" (Task
-        // 8 Step 3's own stated worry). CreateItem_Contract's own item is never cleaned up
-        // (mirrors CatalogSeedFixture's permanently-leaked product), so two genuine runs leave
-        // exactly two rows behind; the seeding fixture's own item is deleted by its own cleanup
-        // every run, so it never adds to this count.
+        // 8 Step 3's own stated worry) — including the teardown half a review round found this
+        // count alone did not originally cover (see this test's own doc). Per run: the seeded
+        // item and the cleanup-only item are both created and both genuinely deleted (net zero
+        // each), and CreateItem_Contract's own item is never cleaned up (mirrors
+        // CatalogSeedFixture's permanently-leaked product). Two genuine runs therefore leave
+        // exactly two rows behind — no more (a cleanup that no-ops, or deletes the wrong id,
+        // leaves the cleanup-only item behind too and this comes out higher) and no fewer (a
+        // create that silently did not happen brings it down).
         _stub.ItemCount.ShouldBe(2,
             $"expected exactly 2 leaked items after two runs (one per run's CreateItem_Contract, " +
             $"never cleaned up) but the store has {_stub.ItemCount} — a lower count means a create " +
-            $"silently did not happen; a higher count means a delete or its cleanup did not.");
+            $"silently did not happen; a higher count means a delete or its cleanup did not remove " +
+            $"the row it was supposed to.");
 
+        // 3 POSTs per run: the seeding fixture's own seed item, its cleanup-only item, and the
+        // generated CreateItem_Contract test's own create.
         var createCalls = _stub.ReceivedPaths.Count(p => p == "/api/items");
-        createCalls.ShouldBe(4,
-            $"expected 4 POST /api/items calls (the seeding fixture's own create plus the " +
-            $"generated CreateItem_Contract test, twice) but saw {createCalls}. Paths served: " +
-            $"{string.Join(", ", _stub.ReceivedPaths)}");
+        createCalls.ShouldBe(6,
+            $"expected 6 POST /api/items calls (3 per run: the seeding fixture's seed item, its " +
+            $"cleanup-only item, and the generated CreateItem_Contract test) but saw {createCalls}. " +
+            $"Paths served: {string.Join(", ", _stub.ReceivedPaths)}");
 
+        // 3 DELETEs per run: the generated DeleteItem_Contract test (targets the seed item), the
+        // seed item's own cleanup (tolerates the 404 from the line above), and the cleanup-only
+        // item's cleanup (must be a genuine 204 — nothing else could have deleted it first).
         var deleteCalls = _stub.ReceivedPaths.Count(p => p.StartsWith("/api/items/", StringComparison.Ordinal));
-        deleteCalls.ShouldBe(4,
-            $"expected 4 DELETE /api/items/{{id}} calls (the seeding fixture's own cleanup plus " +
-            $"the generated DeleteItem_Contract test, twice) but saw {deleteCalls}. Paths served: " +
-            $"{string.Join(", ", _stub.ReceivedPaths)}");
+        deleteCalls.ShouldBe(6,
+            $"expected 6 DELETE /api/items/{{id}} calls (3 per run: DeleteItem_Contract, the seed " +
+            $"item's cleanup, and the cleanup-only item's cleanup) but saw {deleteCalls}. Paths " +
+            $"served: {string.Join(", ", _stub.ReceivedPaths)}");
     }
 
     /// <summary>

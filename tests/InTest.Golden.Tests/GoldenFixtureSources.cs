@@ -77,17 +77,35 @@ internal static class GoldenFixtureSources
     /// <summary>
     /// An <see cref="InTest.Runtime.IAssemblyFixture"/> for
     /// <c>GeneratedSuiteExecutionTests.TheGeneratedSuitePassesTwiceAgainstTheSameStore</c> (Task
-    /// 8a) — the essential create-then-clean-up pair out of <c>docs/v0-acceptance.md</c>'s v1-b
-    /// <c>CatalogSeedFixture</c>, reduced to what this guard needs: <c>CatalogSeedFixture</c>'s
-    /// category (created, published, and deleted on cleanup) without its product (created and
-    /// deliberately never deleted, to prove a different, unrelated claim about permanent leaks
-    /// that this test does not need). Creates an item this run owns via a live
-    /// <c>POST /api/items</c>, publishes its id, and registers cleanup to delete it — so a second
-    /// run against the same <see cref="GoldenApiStub"/> store neither collides with the first
-    /// run's own seed <c>sku</c> nor tries to delete a row that already came and went. Also
-    /// publishes a second, independently generated <c>sku</c> for the suite's own generated
-    /// <c>CreateItem_Contract</c> test body — fresh every run, for the same reason a literal
-    /// there is exactly what <see cref="GoldenApiStub"/>'s store never forgets.
+    /// 8a) — <c>docs/v0-acceptance.md</c>'s v1-b <c>CatalogSeedFixture</c> reduced to what this
+    /// guard needs, plus one addition a review round on Task 8a's first draft found missing.
+    /// <para>
+    /// <b>Seeded item.</b> <c>CatalogSeedFixture</c>'s category, unchanged: created, published,
+    /// and deleted on cleanup, so a second run against the same <see cref="GoldenApiStub"/> store
+    /// neither collides with the first run's own seed <c>sku</c> nor tries to delete a row that
+    /// already came and went. Also publishes a second, independently generated <c>sku</c> for the
+    /// suite's own generated <c>CreateItem_Contract</c> test body — fresh every run, for the same
+    /// reason a literal there is exactly what a duplicate-<c>sku</c> 409 needs (the "literal
+    /// values collide with unique constraints" half of F7). Neither of those two rows is ever
+    /// cleaned up by anyone but their own creator here, and only the first is also targeted by a
+    /// generated test (<c>DeleteItem_Contract</c>).
+    /// </para>
+    /// <para>
+    /// <b>Cleanup-only item — the addition.</b> The first draft's cleanup for the seeded item
+    /// above always tolerated a 404, because <c>DeleteItem_Contract</c> genuinely may have
+    /// deleted that exact row already — but that also meant the cleanup delete's own outcome was
+    /// never actually load-bearing: it could target the wrong id entirely and the guard would
+    /// stay green, since nothing ever depended on <em>that specific delete</em> succeeding (only
+    /// on <em>a</em> delete request going out at all, which
+    /// <c>GeneratedSuiteExecutionTests.TheGeneratedSuitePassesTwiceAgainstTheSameStore</c>'s own
+    /// <c>deleteCalls</c> count already checked). This second item exists solely so one cleanup
+    /// delete's correctness is observable: nothing else in the generated suite ever references
+    /// or deletes it, so if its cleanup does not genuinely remove it —  wrong id, no-op, anything
+    /// short of a real 204 — the row is still in the store after <c>AssemblyCleanup</c>, and
+    /// <see cref="GoldenApiStub.ItemCount"/> comes out one higher than expected. Its own cleanup
+    /// does not tolerate 404: nothing else could legitimately have deleted this row first, so a
+    /// 404 here would itself be the bug, not a benign race with a generated test.
+    /// </para>
     /// </summary>
     public const string RepeatableSeedFixture = """
     using System.Net;
@@ -129,9 +147,28 @@ internal static class GoldenFixtureSources
 
             // A second, independent sku for the suite's own POST /api/items test body — must
             // differ from the seed sku above and be fresh every run, or a second run's create
-            // collides with a sku the store never forgot (the "literal values collide with
+            // collides with a sku still live from the first (the "literal values collide with
             // unique constraints" half of F7).
             ctx.Publish("newItem.sku", $"new-{Guid.NewGuid():N}");
+
+            // A second seeded item nothing else in the generated suite ever references or
+            // deletes — so its cleanup below is the only thing that can ever remove it. Proves
+            // the drain genuinely deletes the right row, not merely that a delete request went
+            // out: a wrong id, or a no-op registered in its place, leaves this row behind and
+            // GoldenApiStub.ItemCount comes out one higher than the test expects.
+            var cleanupOnlySku = $"cleanup-only-{Guid.NewGuid():N}";
+            using var cleanupOnlyResponse = await client.PostAsJsonAsync("/api/items", new { sku = cleanupOnlySku }, ct);
+            cleanupOnlyResponse.EnsureSuccessStatusCode();
+            var cleanupOnlyItem = await cleanupOnlyResponse.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: ct);
+            var cleanupOnlyId = cleanupOnlyItem.GetProperty("id").GetString()!;
+
+            ctx.OnCleanup(async () =>
+            {
+                // No 404 tolerance here: nothing else ever deletes this row, so a 404 would mean
+                // the cleanup itself targeted the wrong id, not a benign race.
+                using var response = await client.DeleteAsync($"/api/items/{cleanupOnlyId}", ct);
+                response.EnsureSuccessStatusCode();
+            });
         }
     }
     """;
