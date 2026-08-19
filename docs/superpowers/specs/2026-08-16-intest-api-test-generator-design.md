@@ -1043,6 +1043,7 @@ static-token provider only — one token, one identity:
 |---|---|---|
 | no token → 401 | Nothing. Send no `Authorization` header | **Always generated, always runs** |
 | wrong scope → 403 | A second identity | Generated; skips with a stated reason when unavailable |
+| wrong tenant → 403 | A concept of "another tenant" a spec has no way to declare | **Not in v1-c.** `IdentitySlot.Secondary` and `Identities[1]` are the same mechanism a team could seed as a second tenant, but `TestPlanBuilder` builds no case that asserts it — nothing in a spec distinguishes "wrong scope" from "wrong tenant" for it to key on. `ITestTokenProvider.cs`'s own doc comment and this section still name the possibility; recorded rather than lost, the same treatment decision 5 gives its own exclusions |
 
 Both send a generated, unmatchable id and no body — decision 6, and the reasoning is safety, not
 just tidiness: a `DELETE /orders/{id}` 403 case pointed at a real id succeeds exactly when auth
@@ -1574,7 +1575,7 @@ Notes:
   inline response schemas     19   (bundled under synthesized keys)
   status-only contract tests   6   (no response schema declared — see §9)
   bodiless statuses           11   (204/205/304 — status-only by design, not a gap)
-  auth tests gated            12   (no multi-identity ITestTokenProvider registered)
+  auth tests gated on a second identity  12   (wrong-scope 403 cases; whether they skip is decided at run time)
   multiple version prefixes        /v1 (49 operations), /v2 (64 operations)
   unevaluatable keywords       2   (const ×1, if/then ×1 — see §9)
 ```
@@ -1594,9 +1595,12 @@ Each note closes a silent-omission path:
   contract test. Fixable by adding a schema to the spec.
 - **`bodiless statuses`** — §9. Listed for completeness and explicitly *not* a gap; 204/205/304
   have no body by definition.
-- **`auth tests gated`** — §9. Present in the assembly but skipped for want of a multi-identity
-  `ITestTokenProvider`. Without this line, gated tests would be indistinguishable from tests
-  that were never generated.
+- **`auth tests gated on a second identity`** — §9. Named "gated on", not "skipped for want
+  of": the count is of generated wrong-scope 403 cases — the only ones that *require* a second
+  identity to run at all. Whether one actually skips is decided at run time by
+  `RequireMultipleIdentities`, against whatever `ITestTokenProvider` a project registers — the
+  CLI writes this report long before that provider exists and cannot know that number. Without
+  this line, gated tests would be indistinguishable from tests that were never generated.
 - **`unevaluatable keywords`** — §9. The only remaining route to a false green, made visible.
 
 The JSON form lets CI assert coverage has not silently dropped. It is also the v2 backlog,
@@ -1846,24 +1850,41 @@ team's base class or extension methods.
 ```csharp
 public interface ITestTokenProvider
 {
-    /// Identities this provider can issue tokens for. Empty or single-element gates the
-    /// 403/wrong-tenant auth tests off (§9). Also the source of the coverage-report count.
-    IReadOnlyCollection<string> Identities { get; }
+    /// Identities this provider can issue tokens for, in order. Index 0 is the default identity
+    /// every ordinary case authenticates as; index 1, when present, is the "some other identity"
+    /// the wrong-scope 403 case selects (v1-c decision 7). Empty or single-element gates that
+    /// case off. Also the source of the coverage-report count.
+    IReadOnlyList<string> Identities { get; }
 
     Task<string> GetTokenAsync(string audience, string? identity = null, CancellationToken ct = default);
 }
 ```
 
-The `identity` parameter is what the auth contract tests (§9) need — wrong scope, wrong tenant.
-(The no-token case sends no `Authorization` header at all and never reaches the provider.)
+The `identity` parameter is what the auth contract tests (§9) need — wrong scope. (The no-token
+case sends no `Authorization` header at all and never reaches the provider.)
+
+`IReadOnlyList`, not `IReadOnlyCollection`: the CLI generates test code long before an adopter
+has written a provider, so generated code can never reference an identity by name — only by
+position (decision 7). A case selects an identity by *slot*, never by name; nothing anywhere
+emits a literal identity name into a plan or a template. This is a breaking change from the
+`IReadOnlyCollection` this shipped as, made while nothing outside this repository implements the
+interface yet — the last point at which it was free. From the first published version onward,
+this ordering is a semver promise (§3), not an implementation detail.
 
 **`Identities` exists so the 403 gate is a property, not a probe.** Without it the only way to
 discover whether a provider supports a second identity is to call `GetTokenAsync` with an
 invented one and interpret the result — which would either throw, return the default token, or
 succeed misleadingly, none of which is a reliable signal, and all of which are worse than the
-day-one failure the gate exists to prevent. `InTestConditions.MultiIdentityAvailable` is
-`Identities.Count > 1`, and the coverage-report count of gated tests falls out of the same
-property.
+day-one failure the gate exists to prevent.
+
+**The gate is read at run time, not by `MemberCondition`.** `ApiTestBase.RequireMultipleIdentities()`
+reads `Identities.Count` from the registered provider and calls `Assert.Inconclusive` with a
+stated reason when it is below two — after `[AssemblyInitialize]` has genuinely run, which is
+what makes this reliable. §9 records the measurement this replaces: a `MemberCondition` evaluates
+*before* `[AssemblyInitialize]`, so it cannot see anything the DI container built, and the gated
+test came back `Skipped` inside a run the console reported `Passed!` — auth testing silently
+switched off with nothing surfacing. The coverage-report count of cases that *require* a second
+identity falls out of the same `Identities` property, at generation time (§12).
 
 **InTest ships exactly one implementation: a static-token provider**, whose `Identities`
 returns a single-element collection. The 403 tests therefore gate off by construction — no
@@ -2219,12 +2240,12 @@ one list that exists to be the backlog.
 | `--check` costs "one prerequisite, not two" | **Three.** API build (cross-repo: clone + build), pinned tool version, and a tool-version match check |
 | Bundle only `components.schemas` | **Every response schema.** Inline schemas get synthesized `op:{id}:{status}:{mediaType}` keys, or contract tests silently degrade to status-code checks |
 | Skip operations with no response schema | **Status-only contract test instead.** Skipping deleted every bodiless 204/205/304 operation from the suite, and discarded the status check that the inline-schema argument says has value |
-| Auth tests cost "a multi-identity token provider (§13)" | **The cost is the team's.** InTest ships a static provider, so 401 tests always run and 403 tests are `MemberCondition`-gated with a coverage note — never red on day one for a capability InTest chose not to ship |
+| Auth tests cost "a multi-identity token provider (§13)" | **The cost is the team's.** InTest ships a static provider, so 401 tests always run and 403 tests are gated at run time by `RequireMultipleIdentities` (§9) with a coverage note — never red on day one for a capability InTest chose not to ship |
 | `intest upgrade` referenced but undefined; no CLI inventory anywhere | **§5 command surface** — every command, what it writes, what it never writes, exit codes, and a stated exit-code convention |
 | No command created the **initial** fixtures — `generate` is read-only under `fixtures/` and `repair` only amended existing files | **Resolved.** `repair` owns creation too; a missing fixture is reported as drift, and the first run of a project is a deliberate `generate` then `repair` (§10) |
 | §2 claimed URL input, but every downstream mechanism assumed a local build artifact — MSBuild cannot copy from `https://` | **Resolved.** A URL source is snapshotted to a committed, generator-owned `spec.json` at generation time; `--check` compares the snapshot and never re-fetches (§9) |
 | Architecture free to bake in MSTest | **Constrained.** MSTest is 21.7% of test-framework downloads (§18), so §3 requires the neutral layers to name no MSTest type, with the MSTest-specific surface enumerated. v1 still ships MSTest only |
-| `ITestTokenProvider` had no way to advertise identities | **`Identities` property added.** `MultiIdentityAvailable` is `Identities.Count > 1` — a declared capability, not a probe. The shipped static provider returns one, so 403 tests gate off by construction |
+| `ITestTokenProvider` had no way to advertise identities | **`Identities` property added.** A declared capability, not a probe: `Identities.Count` below two gates the wrong-scope 403 case off, read at run time by `ApiTestBase.RequireMultipleIdentities()` (§9, §13), not by `MemberCondition`. The shipped static provider returns one, so 403 tests gate off by construction |
 | "only three commands write outside `Generated/`" | **False, and the wrong invariant.** `generate` writes `coverage-report.json`; `assertions add` edits `intest.json`. Restated as ownership: `generate` never writes `fixtures/` or a team-owned file |
 | `--check` compared `Generated/` only | **Also compares `coverage-report.json`**, the one generated artefact tracking spec *shape* rather than templates |
 | No exit code for tool failure | **`2` reserved.** Unparseable spec, missing `spec.source`, malformed `intest.json`, unhandled exception — so CI can tell a crash from fixture drift |

@@ -414,6 +414,13 @@ with this second-run result as its evidence, under getting-started Phase 5.
 > getting-started Phase 3 (this document's own edit) were updated alongside, so the extension
 > point an adopter reads points at a handler that actually runs, and the stand-in
 > `BearerTokenHandler` it used to show is gone rather than merely corrected.
+> The finding text below is preserved as the original v1-a evidence this finding was opened on —
+> including its description of what getting-started Phase 3 said and its closing line that the
+> interface "still has no consumers" — and is not a description of current behaviour. Phase 3 no
+> longer opens with a warning that nothing calls `GetTokenAsync`, because Task 7 of the v1-c plan
+> deleted that warning and the hand-written stand-in it introduced; what Phase 3 shows today is
+> the `ITestTokenProvider` implementation itself, the interface's only remaining consumer-facing
+> content.
 
 The scaffold's `TestStartup.cs` says "Add configuration providers and an ITestTokenProvider
 implementation here", and getting-started Phase 3 tells adopters to implement it. Nothing calls
