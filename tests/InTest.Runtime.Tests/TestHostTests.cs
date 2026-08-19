@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Configuration;
 using Shouldly;
 
 namespace InTest.Runtime.Tests;
@@ -67,6 +68,34 @@ public class TestHostTests
 
     [TestCleanup]
     public void ResetRetainedFixtureContextAfterTest() => TestHost.RetainedFixtureContext = null;
+
+    /// <summary>
+    /// Task 2 question (c): audience is <c>Api:Audience</c> when configured, falling back to the
+    /// base URL's authority — never the spec's security-scheme audience, since OpenAPI OAuth2
+    /// flows carry <c>tokenUrl</c> and <c>scopes</c>, not reliably an audience. Pulled out of
+    /// <see cref="TestHost.InitializeAsync"/> as an internal, dependency-free seam (the
+    /// <see cref="TestHost.RegisterInTestClients"/> precedent) specifically so this resolution
+    /// gets its own test independent of the full <c>InitializeAsync</c> weight — before this,
+    /// nothing anywhere asserted that a configured <c>Api:Audience</c> or the authority fallback
+    /// actually reached <see cref="AuthHandler"/>.
+    /// </summary>
+    [TestMethod]
+    public void ResolveAudienceUsesConfiguredApiAudienceWhenPresent()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["Api:Audience"] = "api://configured" })
+            .Build();
+
+        TestHost.ResolveAudience(configuration, new Uri("https://h.invalid/api/")).ShouldBe("api://configured");
+    }
+
+    [TestMethod]
+    public void ResolveAudienceFallsBackToTheBaseUrlsAuthorityWhenNotConfigured()
+    {
+        var configuration = new ConfigurationBuilder().Build();
+
+        TestHost.ResolveAudience(configuration, new Uri("https://h.invalid/api/")).ShouldBe("h.invalid");
+    }
 
     [TestMethod]
     public async Task CleanupAsyncDoesNotRethrowWhenDrainFails()

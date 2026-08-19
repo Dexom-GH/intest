@@ -97,12 +97,10 @@ public static class TestHost
             ?? throw new InvalidOperationException(
                 $"Api:BaseUrl is not configured for profile '{Profile}'."));
 
-        // Task 2 question (c): Api:Audience, falling back to the base URL's authority — not the
-        // spec's security-scheme audience, since OpenAPI OAuth2 flows carry tokenUrl and scopes,
-        // not reliably an audience. sp.GetService (not GetRequiredService) is question (b):
-        // Catalog and Inventory declare no `security` and register no provider, so AuthHandler
-        // must be constructible, and must no-op, when none is there.
-        var audience = Configuration["Api:Audience"] ?? baseUrl.Authority;
+        // Task 2 question (c): ResolveAudience below. sp.GetService (not GetRequiredService) is
+        // question (b): Catalog and Inventory declare no `security` and register no provider, so
+        // AuthHandler must be constructible, and must no-op, when none is there.
+        var audience = ResolveAudience(Configuration, baseUrl);
         services.AddTransient(sp => new AuthHandler(sp.GetService<ITestTokenProvider>(), audience));
 
         RegisterInTestClients(services, baseUrl);
@@ -192,6 +190,19 @@ public static class TestHost
             FixtureValidationReport.HasProblems ? MessageLevel.Warning : MessageLevel.Informational,
             FixtureValidationReport.Message);
     }
+
+    /// <summary>
+    /// Task 2 question (c): the audience passed to <see cref="ITestTokenProvider.GetTokenAsync"/>
+    /// is <c>Api:Audience</c> when configured, falling back to <paramref name="baseUrl"/>'s
+    /// authority — never the spec's security-scheme audience, since OpenAPI OAuth2 flows carry
+    /// <c>tokenUrl</c> and <c>scopes</c>, not reliably an audience. Pulled out of
+    /// <see cref="InitializeAsync"/> as an internal, dependency-free seam — the same reason
+    /// <see cref="RegisterInTestClients"/> is one — so this resolution has its own test
+    /// independent of <see cref="InitializeAsync"/>'s full weight (no <c>AppContext.BaseDirectory</c>,
+    /// no real <see cref="TestContext"/>, no live HTTP).
+    /// </summary>
+    internal static string ResolveAudience(IConfiguration configuration, Uri baseUrl) =>
+        configuration["Api:Audience"] ?? baseUrl.Authority;
 
     /// <summary>
     /// Registers InTest's two named HTTP clients — <see cref="InTestClients.Api"/> and

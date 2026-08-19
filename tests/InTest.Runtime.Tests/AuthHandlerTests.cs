@@ -83,6 +83,25 @@ public class AuthHandlerTests
         provider.LastIdentity.ShouldBe("secondary");
     }
 
+    /// <summary>
+    /// Makes the previously-dead <see cref="RecordingProvider.LastAudience"/> field load-bearing.
+    /// Question (c)'s audience resolution lives in <c>TestHost.ResolveAudience</c> (covered
+    /// separately in <c>TestHostTests</c>) and is passed into <see cref="AuthHandler"/>'s
+    /// constructor; this pins the second half — that whatever audience the handler was
+    /// constructed with is the one that actually reaches the provider, not a value hardcoded
+    /// somewhere in between.
+    /// </summary>
+    [TestMethod]
+    public async Task RequestsTheTokenForTheAudienceItWasConstructedWith()
+    {
+        InTestAmbient.Identity.Value = "default";
+        var provider = new RecordingProvider("tok-abc");
+
+        await SendThroughHandler(provider, audience: "api://custom-audience");
+
+        provider.LastAudience.ShouldBe("api://custom-audience");
+    }
+
     [TestMethod]
     public async Task SendsNoAuthorizationHeaderForTheNoTokenIdentity()
     {
@@ -110,20 +129,23 @@ public class AuthHandlerTests
     [TestMethod]
     public async Task AProviderThatThrowsNamesTheProviderAndTheIdentity()
     {
-        InTestAmbient.Identity.Value = "default";
+        // Deliberately not "default": the implementation's catch clause falls back to the
+        // literal string "(default)" when identity is null, so asserting on "default" is
+        // satisfied by that fallback whether or not the identity is ever actually interpolated
+        // into the message. A distinctive identity that cannot collide with the fallback is the
+        // only way this assertion discriminates.
+        InTestAmbient.Identity.Value = "identity-under-test";
 
         var ex = await Should.ThrowAsync<InvalidOperationException>(() => SendThroughHandler(new ThrowingProvider()));
 
         ex.Message.ShouldContain(nameof(ThrowingProvider),
             customMessage: "a bare HttpRequestException doesn't say which provider or identity failed");
-        ex.Message.ShouldContain("default");
+        ex.Message.ShouldContain("identity-under-test");
     }
 
     [TestMethod]
     public async Task AmbientIdentityIsIsolatedPerAsyncFlow()
     {
-        var provider = new RecordingProvider("tok", ["a", "b"]);
-
         async Task<string?> RunWith(string identity)
         {
             InTestAmbient.Identity.Value = identity;

@@ -180,7 +180,7 @@ The design this is standing in for, for when v1-c lands:
 ```csharp
 public sealed class OrdersTokenProvider : ITestTokenProvider
 {
-    public IReadOnlyCollection<string> Identities => ["default", "wrong-scope"];
+    public IReadOnlyList<string> Identities => ["default", "wrong-scope"];
 
     public Task<string> GetTokenAsync(string audience, string? identity = null,
                                       CancellationToken ct = default) => /* ... */;
