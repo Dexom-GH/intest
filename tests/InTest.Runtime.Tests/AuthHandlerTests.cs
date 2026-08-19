@@ -47,12 +47,31 @@ public class AuthHandlerTests
             throw new InvalidOperationException("identity server unreachable");
     }
 
-    private static async Task<HttpRequestMessage> SendThroughHandler(ITestTokenProvider? provider, string audience = "api://orders")
+    /// <summary>
+    /// Cancels the very <see cref="CancellationTokenSource"/> driving the request while
+    /// <c>GetTokenAsync</c> is "awaiting" it, then throws through that same token — modelling
+    /// HttpClient.Timeout or TestContext.CancellationToken firing mid-request, the path every
+    /// generated test sends through (mstest-class.scriban:34).
+    /// </summary>
+    private sealed class CancelingProvider(CancellationTokenSource cancellationTokenSource) : ITestTokenProvider
+    {
+        public IReadOnlyList<string> Identities { get; } = ["default"];
+
+        public Task<string> GetTokenAsync(string audience, string? identity = null, CancellationToken cancellationToken = default)
+        {
+            cancellationTokenSource.Cancel();
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult("unreachable");
+        }
+    }
+
+    private static async Task<HttpRequestMessage> SendThroughHandler(
+        ITestTokenProvider? provider, string audience = "api://orders", CancellationToken cancellationToken = default)
     {
         var inner = new CapturingHandler();
         var handler = new AuthHandler(provider, audience) { InnerHandler = inner };
         using var client = new HttpClient(handler);
-        await client.GetAsync("https://example.invalid/");
+        await client.GetAsync("https://example.invalid/", cancellationToken);
         return inner.SeenRequest!;
     }
 
@@ -141,6 +160,22 @@ public class AuthHandlerTests
         ex.Message.ShouldContain(nameof(ThrowingProvider),
             customMessage: "a bare HttpRequestException doesn't say which provider or identity failed");
         ex.Message.ShouldContain("identity-under-test");
+    }
+
+    [TestMethod]
+    public async Task CancellationPropagatesUnwrappedInsteadOfBeingReportedAsAProviderFailure()
+    {
+        // Mirrors FixtureRunner.cs:107-124's precedent: a cancelled run must not be reported as
+        // the token provider (here) or the fixture (there) failing. Without the fix, this catches
+        // OperationCanceledException in AuthHandler's catch-all and rethrows it as
+        // InvalidOperationException("...failed to issue a token...: A task was canceled."),
+        // exactly the misdiagnosis decision 1 exists to eliminate, one layer down.
+        InTestAmbient.Identity.Value = "default";
+        using var cts = new CancellationTokenSource();
+        var provider = new CancelingProvider(cts);
+
+        await Should.ThrowAsync<OperationCanceledException>(
+            () => SendThroughHandler(provider, cancellationToken: cts.Token));
     }
 
     [TestMethod]
