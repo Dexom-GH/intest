@@ -17,6 +17,12 @@ public static class TestPlanBuilder
     // decision for a later plan, not a constant to extend casually.
     private const int NotFoundStatus = 404;
 
+    // Decision 3's fixed pair — never read off the operation's declared `responses`, unlike
+    // NotFoundStatus above. An auth case exists because the operation declares `security`, so
+    // these are the only two statuses it can ever assert.
+    private const int UnauthorizedStatus = 401;
+    private const int ForbiddenStatus = 403;
+
     /// <summary>Statuses that carry no body by definition, so a missing schema is correct
     /// rather than a gap.</summary>
     private static readonly HashSet<int> BodilessStatuses = [204, 205, 304];
@@ -72,7 +78,7 @@ public static class TestPlanBuilder
 
                 var pathParameterNames = PathParameters(path);
                 var methodName = CSharpIdentifier.ToPascalCase(key.Value) + "_Contract";
-                proposedNames[CaseIdentity(key.Value, CaseRole.Success)] = methodName;
+                proposedNames[CaseIdentity(key.Value, CaseRole.Success, status)] = methodName;
 
                 draft.Add((tag, new TestCasePlan(
                     MethodName: methodName,
@@ -142,7 +148,7 @@ public static class TestPlanBuilder
                     else
                     {
                         var notFoundMethodName = CSharpIdentifier.ToPascalCase(key.Value) + "_NotFound";
-                        proposedNames[CaseIdentity(key.Value, CaseRole.DeclaredError)] = notFoundMethodName;
+                        proposedNames[CaseIdentity(key.Value, CaseRole.DeclaredError, NotFoundStatus)] = notFoundMethodName;
 
                         draft.Add((tag, new TestCasePlan(
                             MethodName: notFoundMethodName,
@@ -169,6 +175,61 @@ public static class TestPlanBuilder
                             PathParameterKinds: ResolvePathParameterKinds(operation, pathParameterNames))));
                     }
                 }
+
+                // Auth cases (Task 5, decision 3): generated once each for every operation that
+                // declares `security` — independent of whether the operation's own `responses`
+                // enumerate 401 or 403 at all, and independent of whether it has a path parameter.
+                // Unlike the declared-error 404 case above, an auth case has nowhere it *must*
+                // point an unmatchable value: sending no token, or the wrong scope, needs no
+                // target resource, so the no-path-parameter restriction that guards 404 does not
+                // apply here. Operation-level `security` only — an empty array here explicitly
+                // overrides a document-level default to "no auth", and v1-c does not attempt to
+                // resolve document-level inheritance.
+                if (operation.Security is { Count: > 0 })
+                {
+                    var authPathParameterKinds = ResolvePathParameterKinds(operation, pathParameterNames);
+
+                    var unauthorizedMethodName = CSharpIdentifier.ToPascalCase(key.Value) + "_Unauthorized";
+                    proposedNames[CaseIdentity(key.Value, CaseRole.Auth, UnauthorizedStatus)] = unauthorizedMethodName;
+
+                    draft.Add((tag, new TestCasePlan(
+                        MethodName: unauthorizedMethodName,
+                        DisplayName: $"Given {tag}, when {key.Value}, then {UnauthorizedStatus}",
+                        OperationKey: key.Value,
+                        OperationKeySynthesized: key.Synthesized,
+                        HttpMethod: method.Method.ToUpperInvariant(),
+                        PathTemplate: path,
+                        PathParameterNames: pathParameterNames,
+                        ExpectedStatus: UnauthorizedStatus,
+                        // Status-only, deliberately: decision 3 never asks a spec's declared 401
+                        // response schema for anything, and an operation need not declare one at
+                        // all for this case to exist.
+                        SchemaKey: null,
+                        Category: ContractCategory,
+                        Role: CaseRole.Auth,
+                        NeedsFixture: false, // Decision 6.
+                        PathParameterKinds: authPathParameterKinds,
+                        Slot: IdentitySlot.None)));
+
+                    var forbiddenMethodName = CSharpIdentifier.ToPascalCase(key.Value) + "_Forbidden";
+                    proposedNames[CaseIdentity(key.Value, CaseRole.Auth, ForbiddenStatus)] = forbiddenMethodName;
+
+                    draft.Add((tag, new TestCasePlan(
+                        MethodName: forbiddenMethodName,
+                        DisplayName: $"Given {tag}, when {key.Value}, then {ForbiddenStatus}",
+                        OperationKey: key.Value,
+                        OperationKeySynthesized: key.Synthesized,
+                        HttpMethod: method.Method.ToUpperInvariant(),
+                        PathTemplate: path,
+                        PathParameterNames: pathParameterNames,
+                        ExpectedStatus: ForbiddenStatus,
+                        SchemaKey: null,
+                        Category: ContractCategory,
+                        Role: CaseRole.Auth,
+                        NeedsFixture: false, // Decision 6.
+                        PathParameterKinds: authPathParameterKinds,
+                        Slot: IdentitySlot.Secondary)));
+                }
             }
         }
 
@@ -180,7 +241,7 @@ public static class TestPlanBuilder
             .Select(g => new TestClassPlan(
                 ClassName: g.Key + "Tests",
                 Tag: g.Key,
-                Cases: g.Select(d => d.Case with { MethodName = deduped[CaseIdentity(d.Case.OperationKey, d.Case.Role)] })
+                Cases: g.Select(d => d.Case with { MethodName = deduped[CaseIdentity(d.Case.OperationKey, d.Case.Role, d.Case.ExpectedStatus)] })
                         .OrderBy(c => c.MethodName, StringComparer.Ordinal)
                         .ToList()))
             .ToList();
@@ -199,8 +260,19 @@ public static class TestPlanBuilder
     /// one case. Combining role into the key keeps each case's proposed name — and, when a real
     /// collision with another operation's name exists, its hash suffix — independent of its
     /// siblings.
+    /// <para>
+    /// Role alone is still not unique once <see cref="CaseRole.Auth"/> exists: the no-token 401
+    /// case and the wrong-scope 403 case are <em>both</em> <see cref="CaseRole.Auth"/> on the same
+    /// operation, so <c>operationKey#Auth</c> would collide between them — the second
+    /// <c>proposedNames</c> write would silently overwrite the first, and both cases would be
+    /// reassigned the very same <c>MethodName</c> from <c>deduped</c>, the identical CS0111 failure
+    /// decision 4 already describes for role-less keys. <see cref="TestCasePlan.ExpectedStatus"/>
+    /// is what actually distinguishes them (and is already what every role's case count is capped
+    /// by — one case per operation per status), so it joins the key as a third component.
+    /// </para>
     /// </summary>
-    private static string CaseIdentity(string operationKey, CaseRole role) => $"{operationKey}#{role}";
+    private static string CaseIdentity(string operationKey, CaseRole role, int expectedStatus) =>
+        $"{operationKey}#{role}#{expectedStatus}";
 
     private static IOpenApiResponse? FindDeclaredResponse(OpenApiOperation operation, int status)
     {

@@ -14,6 +14,7 @@
       "get": {
         "operationId": "getOrderById",
         "tags": ["Orders"],
+        "security": [{ "bearerAuth": [] }],
         "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
         "responses": {
           "200": { "description": "ok", "content": { "application/json": {
@@ -24,6 +25,9 @@
     }
   },
   "components": {
+    "securitySchemes": {
+      "bearerAuth": { "type": "http", "scheme": "bearer" }
+    },
     "schemas": {
       "Order": {
         "type": "object",

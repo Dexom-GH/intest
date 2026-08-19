@@ -3,12 +3,52 @@ namespace InTest.Cli.Planning;
 /// <summary>
 /// What a case's <see cref="TestCasePlan.ExpectedStatus"/> represents. Declared errors are never
 /// inferred (decision 5) — a case exists in this role only because the spec itself declared the
-/// response InTest generated it from. Task 5 adds <c>Auth</c>; v1-c generates only these two.
+/// response InTest generated it from. <see cref="Auth"/> (Task 5) is different again: it is never
+/// read off a declared response either — it exists because the operation declares `security`, and
+/// its expected status (401 or 403) comes from decision 3's fixed pair, not from anything the spec
+/// enumerates in `responses`. v1-c generates only these three.
 /// </summary>
 public enum CaseRole
 {
     Success,
-    DeclaredError
+    DeclaredError,
+
+    /// <summary>
+    /// A no-token 401 case or a wrong-scope 403 case (decision 3), generated once each for every
+    /// operation that declares `security` — independent of whether the operation's own
+    /// `responses` enumerate 401 or 403 at all. Carries an <see cref="TestCasePlan.Slot"/>
+    /// (decision 7) selecting which identity the generated case authenticates as:
+    /// <see cref="IdentitySlot.None"/> for the 401 case, <see cref="IdentitySlot.Secondary"/> for
+    /// the 403 case. Like <see cref="DeclaredError"/>, always fixture-free and pointed at an
+    /// unmatchable id (decision 6) — see <see cref="TestCasePlan.NeedsFixture"/> and
+    /// <see cref="TestCasePlan.PathParameterKinds"/> on this role's cases.
+    /// </summary>
+    Auth
+}
+
+/// <summary>
+/// Which identity a generated auth case authenticates as (decision 7) — never a literal identity
+/// name, since the CLI generates this plan long before any adopter has written an
+/// <c>ITestTokenProvider</c> and cannot know one. Mirrors <c>InTest.Runtime.IdentitySlot</c> by
+/// name only: this project does not, and must not, reference <c>InTest.Runtime</c> (the CLI
+/// generates code for a project that references it, it does not consume it), so
+/// <see cref="Rendering.TemplateRenderer"/> is what turns a value here into the literal
+/// <c>IdentitySlot.Whatever</c> text the rendered method body names — the generated code's own
+/// <c>using InTest.Runtime;</c> is what makes that symbol resolve there.
+/// </summary>
+public enum IdentitySlot
+{
+    /// <summary>No override: the ambient identity <c>ApiTestBase.ApiTestInitialize</c> already
+    /// set. Every case that is not <see cref="CaseRole.Auth"/> carries this by default and the
+    /// template emits nothing for it — the reason every existing success case stays
+    /// byte-identical in the golden file once <see cref="CaseRole.Auth"/> exists.</summary>
+    Default,
+
+    /// <summary>Some other identity than <see cref="Default"/> — the wrong-scope 403 case.</summary>
+    Secondary,
+
+    /// <summary>Send no token at all — the no-token 401 case.</summary>
+    None
 }
 
 /// <summary>
@@ -64,9 +104,14 @@ public sealed record TestCasePlan(
     // — FixtureComposer.HasJsonBodyToCompose is the sole authority on this (same reasoning as
     // NeedsFixture above), so this is set from that method directly rather than re-derived here.
     bool HasRequestBody = false,
-    // Parallel to PathParameterNames — same order, same length when set. Only TestPlanBuilder's
-    // declared-error branch populates this (the only role that ever renders an unmatchable
-    // value from it); every other call site, including every one that predates this field, is
-    // read as "kind unknown", which TemplateRenderer treats identically to String — the same
-    // GUID it always rendered, so no existing behaviour changes silently.
-    IReadOnlyList<PathParameterKind>? PathParameterKinds = null);
+    // Parallel to PathParameterNames — same order, same length when set. TestPlanBuilder's
+    // declared-error and auth branches both populate this (the only roles that ever render an
+    // unmatchable value from it); every other call site, including every one that predates this
+    // field, is read as "kind unknown", which TemplateRenderer treats identically to String — the
+    // same GUID it always rendered, so no existing behaviour changes silently.
+    IReadOnlyList<PathParameterKind>? PathParameterKinds = null,
+    // Decision 7: which identity a CaseRole.Auth case authenticates as. Defaults to Default, the
+    // no-override slot, so every call site that predates Task 5 — none of which had a slot to
+    // state, including every Success and DeclaredError case — renders exactly as it always did:
+    // TemplateRenderer emits nothing for Default.
+    IdentitySlot Slot = IdentitySlot.Default);

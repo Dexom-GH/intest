@@ -33,6 +33,25 @@ public partial class OrdersTests : Orders.ApiTests.OrdersTestBase
     }
 
     [TestMethod, TestCategory("Contract")]
+    [Description("Given Orders, when getOrderById, then 403")]
+    public async Task GetOrderById_Forbidden()
+    {
+        RequireMultipleIdentities();
+        using var _ = UseIdentity(IdentitySlot.Secondary);
+
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            InTestUrl.Build("/orders/{id}", Guid.NewGuid().ToString()));
+
+        var stopwatch = Stopwatch.StartNew();
+        using var response = await Client.SendAsync(request, TestContext.CancellationToken);
+        stopwatch.Stop();
+
+        await ApiResponseAssertions.ShouldMatchStatusAsync(
+            response, 403, TestId, stopwatch.Elapsed, TestContext.CancellationToken);
+    }
+
+    [TestMethod, TestCategory("Contract")]
     [Description("Given Orders, when getOrderById, then 404")]
     public async Task GetOrderById_NotFound()
     {
@@ -46,6 +65,24 @@ public partial class OrdersTests : Orders.ApiTests.OrdersTestBase
 
         await ApiResponseAssertions.ShouldMatchStatusAsync(
             response, 404, TestId, stopwatch.Elapsed, TestContext.CancellationToken);
+    }
+
+    [TestMethod, TestCategory("Contract")]
+    [Description("Given Orders, when getOrderById, then 401")]
+    public async Task GetOrderById_Unauthorized()
+    {
+        using var _ = UseIdentity(IdentitySlot.None);
+
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            InTestUrl.Build("/orders/{id}", Guid.NewGuid().ToString()));
+
+        var stopwatch = Stopwatch.StartNew();
+        using var response = await Client.SendAsync(request, TestContext.CancellationToken);
+        stopwatch.Stop();
+
+        await ApiResponseAssertions.ShouldMatchStatusAsync(
+            response, 401, TestId, stopwatch.Elapsed, TestContext.CancellationToken);
     }
 
     [TestMethod, TestCategory("Contract")]

@@ -60,6 +60,23 @@ public class TemplateRendererTests
             NeedsFixture: false,
             PathParameterKinds: [PathParameterKind.Integer])]);
 
+    private static TestClassPlan PlanAuth(int expectedStatus, IdentitySlot slot, string httpMethod = "GET") => new(
+        "OrdersTests", "Orders",
+        [new TestCasePlan(
+            MethodName: expectedStatus == 401 ? "DeleteOrder_Unauthorized" : "DeleteOrder_Forbidden",
+            DisplayName: $"Given Orders, when deleteOrder, then {expectedStatus}",
+            OperationKey: "deleteOrder",
+            OperationKeySynthesized: false,
+            HttpMethod: httpMethod,
+            PathTemplate: "/orders/{id}",
+            PathParameterNames: ["id"],
+            ExpectedStatus: expectedStatus,
+            SchemaKey: null,
+            Category: "Contract",
+            Role: CaseRole.Auth,
+            NeedsFixture: false,
+            Slot: slot)]);
+
     private static TestClassPlan PlanWithRole(CaseRole role) => new(
         "OrdersTests", "Orders",
         [new TestCasePlan(
@@ -270,18 +287,137 @@ public class TemplateRendererTests
     }
 
     [TestMethod]
+    public void ADeclaredErrorCaseOnAMutatingMethodDoesNotGetDoNotParallelize()
+    {
+        // Task 5's own bug fix: [DoNotParallelize] existed to serialize cases that write real
+        // state, derived from HTTP method alone (TemplateRenderer.cs). A declared-error DELETE
+        // sends a generated, unmatchable id and no body (decision 6) — it mutates nothing real —
+        // so gating it behind [DoNotParallelize] bought nothing but slower runs. This is a
+        // regression test for the exact bug: before the fix, this DELETE case rendered
+        // [DoNotParallelize] because the flag never consulted Role.
+        var rendered = Render(PlanDeclaredError(httpMethod: "DELETE"));
+
+        rendered.ShouldNotContain("[DoNotParallelize]");
+    }
+
+    [TestMethod]
     public void EmitsNoStrayBlankLinesForAMutatingDeclaredErrorCase()
     {
-        // A declared 404 on a DELETE or PUT stacks the mutates/[DoNotParallelize] conditional
-        // (existing) with the new emits_fixture_lookup one on the very same method — the
-        // combination neither EmitsNoStrayBlankLinesForADeclaredErrorCase (GET) nor
-        // EmitsNoStrayBlankLines (mutates only, always emits RequireFixture) exercises alone.
+        // A declared 404 on a DELETE or PUT no longer stacks [DoNotParallelize] with
+        // emits_fixture_lookup (the fix above removes that combination), but it is still the one
+        // case with both a non-mutating attribute list and a fixture-free body — kept as its own
+        // guard against a regression reintroducing a leaked blank line.
         var rendered = Render(PlanDeclaredError(httpMethod: "DELETE"));
 
         rendered.ShouldNotContain("\n\n\n");
         rendered.ShouldNotContain("\n\n    }");
-        rendered.ShouldContain("[DoNotParallelize]\n    public async Task DeleteOrder_NotFound()\n    {\n        using var request",
-            customMessage: "no RequireFixture line and no leftover blank line between the two stacked conditionals");
+        rendered.ShouldContain("public async Task DeleteOrder_NotFound()\n    {\n        using var request",
+            customMessage: "no RequireFixture line and no leftover blank line ahead of it");
+    }
+
+    // --- Auth cases (Task 5, decisions 3, 6 & 7) ---
+
+    [TestMethod]
+    public void AWrongScopeCaseCallsTheGuardBeforeBuildingTheRequest()
+    {
+        var rendered = Render(PlanAuth(403, IdentitySlot.Secondary));
+
+        rendered.ShouldContain("RequireMultipleIdentities();");
+        rendered.IndexOf("RequireMultipleIdentities(", StringComparison.Ordinal)
+            .ShouldBeLessThan(rendered.IndexOf("new HttpRequestMessage(", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
+    public void ANoTokenCaseDoesNotCallTheGuard()
+    {
+        // Decision 3's table: the 401 case always runs — it needs no second identity, so it must
+        // never pay the guard's Assert.Inconclusive gate.
+        Render(PlanAuth(401, IdentitySlot.None)).ShouldNotContain("RequireMultipleIdentities(");
+    }
+
+    [TestMethod]
+    public void AWrongScopeCaseOverridesTheAmbientIdentityToSecondary()
+    {
+        var rendered = Render(PlanAuth(403, IdentitySlot.Secondary));
+
+        rendered.ShouldContain("using var _ = UseIdentity(IdentitySlot.Secondary);");
+        rendered.IndexOf("UseIdentity(", StringComparison.Ordinal)
+            .ShouldBeLessThan(rendered.IndexOf("new HttpRequestMessage(", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
+    public void ANoTokenCaseOverridesTheAmbientIdentityToNone()
+    {
+        // The 401 case's whole mechanism (decision 7): it does not send a bad token, it sends
+        // none, by overriding the ambient identity to the sentinel slot.
+        Render(PlanAuth(401, IdentitySlot.None)).ShouldContain("using var _ = UseIdentity(IdentitySlot.None);");
+    }
+
+    [TestMethod]
+    public void ADefaultSlotCaseEmitsNoIdentityOverride()
+    {
+        // Every existing Success case defaults to IdentitySlot.Default — this is what keeps the
+        // golden file byte-identical for every case that existed before Task 5.
+        Render(Plan()).ShouldNotContain("UseIdentity(");
+    }
+
+    [TestMethod]
+    public void AnAuthCaseCallsNoFixtureLookup()
+    {
+        // Decision 6, same reasoning as the declared-error case: an auth case's operation key can
+        // be shared with a success case whose fixture is unfilled, and that must never block it.
+        Render(PlanAuth(403, IdentitySlot.Secondary)).ShouldNotContain("RequireFixture(");
+    }
+
+    [TestMethod]
+    public void AnAuthCaseUsesAGeneratedUnmatchableIdRatherThanAFixtureParameter()
+    {
+        var rendered = Render(PlanAuth(403, IdentitySlot.Secondary));
+
+        rendered.ShouldContain("Guid.NewGuid().ToString()");
+        rendered.ShouldNotContain("FixtureParameter(");
+    }
+
+    [TestMethod]
+    public void AnAuthCaseSendsNoBody()
+    {
+        Render(PlanAuth(403, IdentitySlot.Secondary)).ShouldNotContain("request.Content");
+    }
+
+    [TestMethod]
+    public void AWrongScopeCaseOnAMutatingMethodDoesNotGetDoNotParallelize()
+    {
+        // The other half of Task 5's [DoNotParallelize] fix: a 403 case on a DELETE sends an
+        // unmatchable id (decision 6) and mutates nothing real, so it must not be serialized
+        // against other tests either.
+        Render(PlanAuth(403, IdentitySlot.Secondary, httpMethod: "DELETE")).ShouldNotContain("[DoNotParallelize]");
+    }
+
+    [TestMethod]
+    public void EmitsNoStrayBlankLinesForAWrongScopeAuthCase()
+    {
+        // The guard and the identity override are two body-level conditionals stacked directly
+        // on top of each other — a combination nothing before Task 5 exercises, and exactly
+        // where an unclosed '~}}' would leak its own blank line between them.
+        var rendered = Render(PlanAuth(403, IdentitySlot.Secondary));
+
+        rendered.ShouldNotContain("\n\n\n");
+        rendered.ShouldNotContain("\n\n    }");
+        rendered.ShouldContain(
+            "    {\n        RequireMultipleIdentities();\n        using var _ = UseIdentity(IdentitySlot.Secondary);\n\n        using var request",
+            customMessage: "guard and override must sit on adjacent lines, with exactly one blank line before the request");
+    }
+
+    [TestMethod]
+    public void EmitsNoStrayBlankLinesForANoTokenAuthCase()
+    {
+        var rendered = Render(PlanAuth(401, IdentitySlot.None));
+
+        rendered.ShouldNotContain("\n\n\n");
+        rendered.ShouldNotContain("\n\n    }");
+        rendered.ShouldContain(
+            "    {\n        using var _ = UseIdentity(IdentitySlot.None);\n\n        using var request",
+            customMessage: "no guard line for a 401 case, and no leftover blank line ahead of the override");
     }
 
     [TestMethod]

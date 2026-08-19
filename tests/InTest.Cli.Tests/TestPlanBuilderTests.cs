@@ -600,4 +600,171 @@ public class TestPlanBuilderTests
         // explains its absence; a second, 404-shaped skip reason would say the two disagreed.
         plan.Skipped.Count(sk => sk.OperationKey == "Orders/Get").ShouldBe(1);
     }
+
+    // --- Auth cases (Task 5, decision 3 & 7): generated only for an operation declaring `security`. ---
+
+    private const string SpecDeclaringSecurity = """
+    {
+      "openapi": "3.0.3",
+      "info": { "title": "Orders", "version": "1.0" },
+      "paths": {
+        "/orders/{id}": {
+          "delete": {
+            "operationId": "deleteOrder",
+            "tags": ["Orders"],
+            "security": [{ "bearerAuth": [] }],
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+            "responses": { "204": { "description": "no content" } }
+          }
+        }
+      },
+      "components": {
+        "schemas": {},
+        "securitySchemes": { "bearerAuth": { "type": "http", "scheme": "bearer" } }
+      }
+    }
+    """;
+
+    [TestMethod]
+    public async Task EmitsANoTokenCaseFor401WhenTheOperationDeclaresSecurity()
+    {
+        var plan = await BuildAsync(SpecDeclaringSecurity);
+        var cases = plan.Classes.SelectMany(c => c.Cases).Where(c => c.OperationKey == "deleteOrder").ToList();
+
+        cases.ShouldContain(c => c.ExpectedStatus == 401 && c.Role == CaseRole.Auth && c.Slot == IdentitySlot.None);
+    }
+
+    [TestMethod]
+    public async Task EmitsAWrongScopeCaseFor403WhenTheOperationDeclaresSecurity()
+    {
+        var plan = await BuildAsync(SpecDeclaringSecurity);
+        var cases = plan.Classes.SelectMany(c => c.Cases).Where(c => c.OperationKey == "deleteOrder").ToList();
+
+        cases.ShouldContain(c => c.ExpectedStatus == 403 && c.Role == CaseRole.Auth && c.Slot == IdentitySlot.Secondary);
+    }
+
+    [TestMethod]
+    public async Task AnOperationDeclaringNoSecurityYieldsNeitherAuthCase()
+    {
+        // The plain Spec at the top of this file declares no `security` anywhere.
+        var plan = await BuildAsync(Spec);
+        var cases = plan.Classes.SelectMany(c => c.Cases).Where(c => c.OperationKey == "getOrderById").ToList();
+
+        cases.ShouldNotContain(c => c.Role == CaseRole.Auth);
+    }
+
+    [TestMethod]
+    public async Task AuthCasesNeedNoFixture()
+    {
+        // Decision 6: an auth case must not be blocked by a sibling's unfilled fixture, and a
+        // broken auth 403 must never be able to reach real data.
+        var plan = await BuildAsync(SpecDeclaringSecurity);
+        var authCases = plan.Classes.SelectMany(c => c.Cases).Where(c => c.Role == CaseRole.Auth).ToList();
+
+        authCases.ShouldNotBeEmpty();
+        authCases.ShouldAllBe(c => !c.NeedsFixture);
+    }
+
+    [TestMethod]
+    public async Task TheTwoAuthCasesGetDistinctStableMethodNames()
+    {
+        // Decision 4's extension: operation key + role alone is not unique for two auth cases on
+        // the same operation (401 and 403 are both Role.Auth). Without expected status folded
+        // into the dedupe identity, the second case's proposed name silently overwrites the
+        // first's entry, and both cases end up assigned the very same MethodName — CS0111 the
+        // moment the generated file is compiled.
+        var plan = await BuildAsync(SpecDeclaringSecurity);
+        var authCases = plan.Classes.SelectMany(c => c.Cases).Where(c => c.Role == CaseRole.Auth).ToList();
+
+        authCases.Count.ShouldBe(2);
+        authCases.Select(c => c.MethodName).Distinct().Count().ShouldBe(2);
+    }
+
+    [TestMethod]
+    public async Task AllFourRolesOnOneOperationStayDistinctWhenSecurityAndA404BothApply()
+    {
+        // The strongest form of the dedupe-identity fix: success, declared-404, auth-401 and
+        // auth-403 all sharing one operation key must each keep their own MethodName. An
+        // implementation that only fixed the two auth cases against each other, and not against
+        // an operation that also has a DeclaredError case, could still collide here.
+        const string spec = """
+        {
+          "openapi": "3.0.3",
+          "info": { "title": "Orders", "version": "1.0" },
+          "paths": {
+            "/orders/{id}": {
+              "get": {
+                "operationId": "getOrderById",
+                "tags": ["Orders"],
+                "security": [{ "bearerAuth": [] }],
+                "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+                "responses": {
+                  "200": { "description": "ok", "content": { "application/json": {
+                    "schema": { "$ref": "#/components/schemas/Order" } } } },
+                  "404": { "description": "not found" }
+                }
+              }
+            }
+          },
+          "components": {
+            "schemas": { "Order": { "type": "object" } },
+            "securitySchemes": { "bearerAuth": { "type": "http", "scheme": "bearer" } }
+          }
+        }
+        """;
+
+        var plan = await BuildAsync(spec);
+        var cases = plan.Classes.SelectMany(c => c.Cases).Where(c => c.OperationKey == "getOrderById").ToList();
+
+        cases.Count.ShouldBe(4);
+        cases.Select(c => c.MethodName).Distinct().Count().ShouldBe(4);
+    }
+
+    [TestMethod]
+    public async Task AuthCasesAreGeneratedEvenWithoutAPathParameter()
+    {
+        // Unlike the declared-error 404 case, an auth case has nowhere it must point an
+        // unmatchable value at all — sending no token, or the wrong scope, needs no target
+        // resource. Decision 5's path-parameter restriction is specific to 404; it must not leak
+        // onto auth cases.
+        const string spec = """
+        {
+          "openapi": "3.0.3",
+          "info": { "title": "Orders", "version": "1.0" },
+          "paths": {
+            "/orders": {
+              "get": {
+                "operationId": "listOrders",
+                "tags": ["Orders"],
+                "security": [{ "bearerAuth": [] }],
+                "responses": { "200": { "description": "ok", "content": { "application/json": {
+                  "schema": { "type": "array", "items": { "$ref": "#/components/schemas/Order" } } } } } }
+              }
+            }
+          },
+          "components": {
+            "schemas": { "Order": { "type": "object" } },
+            "securitySchemes": { "bearerAuth": { "type": "http", "scheme": "bearer" } }
+          }
+        }
+        """;
+
+        var plan = await BuildAsync(spec);
+        var cases = plan.Classes.SelectMany(c => c.Cases).Where(c => c.OperationKey == "listOrders").ToList();
+
+        cases.ShouldContain(c => c.ExpectedStatus == 401 && c.Role == CaseRole.Auth);
+        cases.ShouldContain(c => c.ExpectedStatus == 403 && c.Role == CaseRole.Auth);
+    }
+
+    [TestMethod]
+    public async Task AuthCasesAreCategorizedContractLikeEveryOtherCase()
+    {
+        // Decision 8: §9's gate splits on TestCategory("Contract") vs ("Variation"). Auth cases
+        // are deterministic, fixture-free and gate-safe, so they belong in Contract like
+        // declared-error cases, never a separate category.
+        var plan = await BuildAsync(SpecDeclaringSecurity);
+        var authCases = plan.Classes.SelectMany(c => c.Cases).Where(c => c.Role == CaseRole.Auth).ToList();
+
+        authCases.ShouldAllBe(c => c.Category == "Contract");
+    }
 }

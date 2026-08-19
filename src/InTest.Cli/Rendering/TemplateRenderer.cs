@@ -30,7 +30,31 @@ public sealed class TemplateRenderer
                 has_body = c.HasRequestBody,
                 expected_status = c.ExpectedStatus,
                 schema_key = c.SchemaKey,
-                mutates = c.HttpMethod is "POST" or "PUT" or "PATCH" or "DELETE",
+                // [DoNotParallelize]'s source. Method alone was Task 4's implementation and, on
+                // review, its own bug: a declared-error or auth case always sends a generated,
+                // unmatchable id and no body (decision 6) — it mutates nothing real, regardless
+                // of HTTP method, so serializing it against other tests bought nothing but
+                // slower runs. Only a Success case's mutating method is real mutation, since only
+                // Success sends fixture-backed, real data. Tested for Success rather than
+                // "!= DeclaredError && != Auth" for the same fail-safe reason as
+                // emits_fixture_lookup and PathArguments below: a role this code has not been
+                // told about yet must fail toward "does not need serializing", the same direction
+                // decision 6 already requires of it.
+                mutates = c.Role == CaseRole.Success && c.HttpMethod is "POST" or "PUT" or "PATCH" or "DELETE",
+                // Decision 3: only the wrong-scope 403 case needs a second identity to exist at
+                // all, so only it carries the runtime guard call. Slot.Secondary is, today, the
+                // only slot that ever needs it — computed from the slot itself rather than the
+                // role so the condition stays meaningful if a future role ever reused Secondary.
+                identity_needs_guard = c.Slot == IdentitySlot.Secondary,
+                // Decision 7: Default (every case that predates Task 5, and every non-auth case)
+                // renders as null, which the template reads as "emit no override line at all" —
+                // the reason every existing Success case stays byte-identical in the golden file.
+                identity_override = c.Slot switch
+                {
+                    IdentitySlot.None => "IdentitySlot.None",
+                    IdentitySlot.Secondary => "IdentitySlot.Secondary",
+                    _ => null
+                },
                 // Decision 6: a declared-error case shares its operation key with the success
                 // case beside it, so calling RequireFixture here would let that sibling's unfilled
                 // or unresolved fixture block a case that needs no data at all — the exact failure

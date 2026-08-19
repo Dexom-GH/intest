@@ -222,6 +222,57 @@ public class GeneratedSuiteExecutionTests
     }
     """;
 
+    /// <summary>
+    /// Task 5 Step 2's live wire proof: <see cref="Specs/orders.json"/>'s golden regeneration
+    /// proves an auth case's <i>text</i> is stable and compiles, never that it runs — the same F1
+    /// lesson <see cref="SpecWithDeclaredNotFound"/> exists to close for declared-error cases.
+    /// <c>getSecureResource</c> deliberately takes no parameters and needs no request body, so
+    /// decision 1 means it composes no fixture at all — nothing here needs
+    /// <c>FixturesRepairCommand</c> to fill in a sentinel before the suite can run.
+    /// <para>
+    /// Its own path, <c>/api/secure</c>, rather than reusing <c>/api/status</c>: that path
+    /// already answers 200 unconditionally for several other tests in this file, none of which
+    /// register a token provider — folding security onto it would turn every one of those into
+    /// an auth test by accident and break them the moment <see cref="GoldenApiStub"/> started
+    /// inspecting <c>Authorization</c> there.
+    /// </para>
+    /// </summary>
+    private const string SpecWithSecuredOperation = """
+    {
+      "openapi": "3.0.3",
+      "info": { "title": "Stub", "version": "1.0" },
+      "paths": {
+        "/api/secure": {
+          "get": {
+            "operationId": "getSecureResource",
+            "tags": ["Secure"],
+            "security": [{ "bearerAuth": [] }],
+            "responses": {
+              "200": {
+                "description": "ok",
+                "content": {
+                  "application/json": {
+                    "schema": { "$ref": "#/components/schemas/Status" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "components": {
+        "securitySchemes": { "bearerAuth": { "type": "http", "scheme": "bearer" } },
+        "schemas": {
+          "Status": {
+            "type": "object",
+            "required": ["state"],
+            "properties": { "state": { "type": "string" } }
+          }
+        }
+      }
+    }
+    """;
+
     private string _root = null!;
     private GoldenApiStub _stub = null!;
 
@@ -691,6 +742,89 @@ public class GeneratedSuiteExecutionTests
     }
 
     /// <summary>
+    /// Task 5 Step 2's live wire proof — the auth half of the F1 lesson
+    /// <see cref="DeclaredErrorCaseReceivesARealNotFoundOverTheWire"/> already closed for
+    /// declared-error cases. Registers <see cref="GoldenTokenProviderSources.TwoIdentityTokenProvider"/>
+    /// so the wrong-scope 403 case's <c>RequireMultipleIdentities</c> guard passes, and runs the
+    /// whole generated suite — three tests, all for the one secured operation this spec declares.
+    /// <para>
+    /// The trap this test exists to catch, stated in the plan's own words: "a 401 test passes
+    /// trivially when every request is anonymous — which is precisely the day-one state." Merely
+    /// asserting <c>GetSecureResource_Unauthorized</c> passed would not distinguish "AuthHandler
+    /// correctly sent no token" from "AuthHandler never sends tokens at all" — both look
+    /// identical from that one test's own outcome. Asserting
+    /// <c>GetSecureResource_Contract</c> (the success case, which needs the <c>default</c>
+    /// token) also passed <em>in the same run</em> is what closes that gap:
+    /// <see cref="GoldenApiStub.HandleSecureResource"/> only answers 200 to a request that
+    /// actually carries <c>"Bearer token-for-default"</c>, so if <c>AuthHandler</c> ever
+    /// regressed to sending no token for the Default slot too, the success case would flip to 401
+    /// right alongside the 401 case and this assertion would catch it.
+    /// </para>
+    /// </summary>
+    [TestMethod]
+    public async Task AuthCasesReceiveRealStatusesOverTheWireAndSuccessCasesStillPass()
+    {
+        File.WriteAllText(Path.Combine(_root, "spec.json"), SpecWithSecuredOperation);
+
+        InitCommand.Run(_root, "Stub.ApiTests", "spec.json").ShouldBe(0);
+        UseProjectReferenceInsteadOfPackage();
+        PointAtStub();
+        RegisterTokenProvider();
+
+        (await FixturesRepairCommand.RunAsync(_root, CancellationToken.None)).ShouldBe(0);
+        (await GenerateCommand.RunAsync(_root, CancellationToken.None)).ShouldBe(0);
+
+        // Guard against the generated suite silently missing an auth case entirely, the same way
+        // DeclaredErrorCaseReceivesARealNotFoundOverTheWire guards its own operation.
+        var generatedFile = Directory.GetFiles(_root, "SecureTests.g.cs", SearchOption.AllDirectories)
+            .ShouldHaveSingleItem("generate should have produced exactly one SecureTests.g.cs");
+        var generated = File.ReadAllText(generatedFile);
+        generated.ShouldContain("GetSecureResource_Unauthorized",
+            customMessage: "the no-token 401 case this test exists to prove must actually be generated");
+        generated.ShouldContain("GetSecureResource_Forbidden",
+            customMessage: "the wrong-scope 403 case this test exists to prove must actually be generated");
+        generated.ShouldContain("RequireMultipleIdentities();",
+            customMessage: "decision 3: the 403 case must carry the runtime guard");
+
+        var build = await RunAsync("dotnet", $"build \"{_root}\" --nologo -v q");
+        build.ExitCode.ShouldBe(0, $"generated project failed to build:{Environment.NewLine}{build.Output}");
+
+        var resultsDir = Path.Combine(_root, "TestResults");
+        var test = await RunAsync("dotnet",
+            $"test \"{_root}\" --no-build --nologo --logger \"trx;LogFileName=results.trx\" --results-directory \"{resultsDir}\"");
+
+        var trxPath = Directory.GetFiles(resultsDir, "results.trx", SearchOption.AllDirectories)
+            .ShouldHaveSingleItem($"expected exactly one results.trx under {resultsDir}:{Environment.NewLine}{test.Output}");
+
+        var trx = XDocument.Load(trxPath);
+        var results = trx.Descendants().Where(e => e.Name.LocalName == "UnitTestResult").ToList();
+
+        results.Count.ShouldBe(3,
+            $"expected exactly 3 tests (Contract, Unauthorized, Forbidden) but the trx recorded {results.Count}:{Environment.NewLine}{test.Output}");
+
+        foreach (var (name, expectedOutcome) in new[]
+                 {
+                     ("GetSecureResource_Contract", "Passed"),
+                     ("GetSecureResource_Unauthorized", "Passed"),
+                     ("GetSecureResource_Forbidden", "Passed")
+                 })
+        {
+            var result = results.SingleOrDefault(e => (e.Attribute("testName")?.Value ?? "").Contains(name, StringComparison.Ordinal));
+            result.ShouldNotBeNull($"{name} did not appear in the trx at all:{Environment.NewLine}{test.Output}");
+            result!.Attribute("outcome")?.Value.ShouldBe(expectedOutcome,
+                $"{name} did not receive its expected real status over the wire:{Environment.NewLine}{test.Output}");
+        }
+
+        test.ExitCode.ShouldBe(0, test.Output);
+
+        // Closes the loop from the outside, the same pattern DeclaredErrorCaseReceivesARealNotFoundOverTheWire
+        // uses against ReceivedPaths: every one of the three generated requests must have
+        // actually reached the stub, not merely have been built and never sent.
+        _stub.ReceivedPaths.Count(p => p == "/api/secure").ShouldBe(3,
+            $"expected all 3 generated cases to reach the stub over the wire. Paths served: {string.Join(", ", _stub.ReceivedPaths)}");
+    }
+
+    /// <summary>
     /// Task 8's own guard: Task 8 is a transcript (the v1-b acceptance run against
     /// <c>samples/Catalog.Api</c>, recorded in <c>docs/v0-acceptance.md</c>) proving F7 closed by
     /// running a generated suite twice against the same store, by hand. A manual result regresses
@@ -910,6 +1044,29 @@ public class GeneratedSuiteExecutionTests
     /// handler ("A secured API needs a DelegatingHandler appended to InTestClients.Api"). Never
     /// touches <c>InTestClients.Readiness</c>: that omission is the entire point of Task 1.
     /// </summary>
+    /// <summary>
+    /// Writes <see cref="GoldenTokenProviderSources.TwoIdentityTokenProvider"/> into the project
+    /// and registers it in <c>TestStartup.cs</c>'s <c>Register</c> hook, anchored on the same
+    /// comment <see cref="AttachThrowingHandlerToApiClient"/> uses — <c>AuthHandler</c> is
+    /// already attached to <c>InTestClients.Api</c> (Task 2), so unlike that method this needs no
+    /// separate <c>AddHttpClient</c> wiring, only the provider registration itself.
+    /// </summary>
+    private void RegisterTokenProvider()
+    {
+        File.WriteAllText(Path.Combine(_root, "TwoIdentityTokenProvider.cs"), GoldenTokenProviderSources.TwoIdentityTokenProvider);
+
+        var testStartupPath = Path.Combine(_root, "TestStartup.cs");
+        var testStartup = File.ReadAllText(testStartupPath);
+        const string anchor = "// Per-request fixtures: path and query parameter values live in fixtures/, not";
+        testStartup.ShouldContain(anchor,
+            customMessage: "the scaffolded Register method's comment must still be present to anchor this edit");
+
+        File.WriteAllText(testStartupPath, testStartup.Replace(
+            anchor,
+            "services.AddSingleton<ITestTokenProvider, TwoIdentityTokenProvider>();\n\n        " + anchor,
+            StringComparison.Ordinal));
+    }
+
     private void AttachThrowingHandlerToApiClient()
     {
         File.WriteAllText(Path.Combine(_root, "AlwaysThrowsHandler.cs"), GoldenAuthHandlerSources.AlwaysThrowsHandler);

@@ -21,6 +21,13 @@ public partial class {{ class_name }} : {{ base_class }}
 {{~ end ~}}
     public async Task {{ tc.method_name }}()
     {
+{{~ if tc.identity_override ~}}
+{{~ if tc.identity_needs_guard ~}}
+        RequireMultipleIdentities();
+{{~ end ~}}
+        using var _ = UseIdentity({{ tc.identity_override }});
+
+{{~ end ~}}
 {{~ if tc.emits_fixture_lookup ~}}
         RequireFixture("{{ tc.operation_key }}");
 

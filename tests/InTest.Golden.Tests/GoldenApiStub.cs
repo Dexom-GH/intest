@@ -118,6 +118,9 @@ internal sealed class GoldenApiStub : IDisposable
                 {
                     "/health/ready" => HandleHealthCheck(),
                     "/api/status" => (200, """{"state":"ok"}"""),
+                    // Task 5 Step 2's live wire proof — the one path in this stub that actually
+                    // inspects Authorization, everything else here trusts the request unconditionally.
+                    "/api/secure" => HandleSecureResource(context.Request),
                     // Belt-and-braces, not the primary catch: RequireFixture already throws before a
                     // request carrying an unresolved sentinel is ever built (confirmed by sabotaging
                     // the replace step in FixtureParameterReachesALiveRequestEndToEnd — the failure
@@ -143,6 +146,28 @@ internal sealed class GoldenApiStub : IDisposable
             await context.Response.OutputStream.WriteAsync(bytes, cancellationToken);
             context.Response.Close();
         }
+    }
+
+    /// <summary>
+    /// Answers a generated auth case's request the way a real secured API would: no
+    /// <c>Authorization</c> header at all is 401 (the no-token case's whole mechanism — decision
+    /// 3); a header carrying <c>"Bearer token-for-default"</c> — <c>GoldenTokenProviderSources.
+    /// TwoIdentityTokenProvider</c>'s own naming convention — is the success arm; anything else,
+    /// specifically <c>"Bearer token-for-secondary"</c>, is 403. This is the only arm in this
+    /// stub that inspects <c>Authorization</c> at all; every other path here trusts whatever the
+    /// generated suite sends.
+    /// </summary>
+    private static (int, string) HandleSecureResource(HttpListenerRequest request)
+    {
+        var authorization = request.Headers["Authorization"];
+        if (string.IsNullOrEmpty(authorization))
+        {
+            return (401, """{"error":"unauthorized"}""");
+        }
+
+        return authorization == "Bearer token-for-default"
+            ? (200, """{"state":"ok"}""")
+            : (403, """{"error":"forbidden"}""");
     }
 
     private (int, string) HandleHealthCheck()

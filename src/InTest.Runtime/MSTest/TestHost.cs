@@ -38,6 +38,26 @@ public static class TestHost
     public static Action<IServiceCollection, IConfiguration>? ConfigureServices { get; set; }
 
     /// <summary>
+    /// The <see cref="ITestTokenProvider"/> the generated project's <c>ConfigureServices</c>
+    /// registered, resolved once from <see cref="Root"/> right after it is built — the same
+    /// instance <see cref="AuthHandler"/> resolves fresh per request via
+    /// <c>sp.GetService&lt;ITestTokenProvider&gt;()</c>, exposed here so
+    /// <c>ApiTestBase.RequireMultipleIdentities</c> and <c>ApiTestBase.UseIdentity</c> (v1-c Task
+    /// 5) have something to consult without needing a live scope of their own — unlike
+    /// <see cref="AuthHandler"/>, neither runs inside one. Null for every spec that declares no
+    /// <c>security</c>, exactly as <c>ApiTestBase.ResolveDefaultIdentity(null)</c> already treats
+    /// as ordinary rather than an error.
+    /// <para>
+    /// Internal, settable, hand-rolled the same way <see cref="RetainedFixtureContext"/> is: only
+    /// <see cref="InitializeAsync"/> writes it in production, and
+    /// <c>InTest.Runtime.Tests</c> sets it directly to drive <c>ApiTestBase</c>'s guard and
+    /// override without needing a real <see cref="InitializeAsync"/> run — the same reason that
+    /// method gets no in-process harness (see <see cref="ContextTextWriter"/>'s doc).
+    /// </para>
+    /// </summary>
+    internal static ITestTokenProvider? TokenProvider { get; set; }
+
+    /// <summary>
     /// The one <see cref="FixtureContext"/> instance <see cref="InitializeAsync"/> creates and
     /// passes to every fixture, retained here so <see cref="CleanupAsync"/> can drain the exact
     /// instance the fixtures wrote to rather than a fresh, empty one (v1-b decision 4). Reset to null
@@ -107,6 +127,13 @@ public static class TestHost
 
         ConfigureServices?.Invoke(services, Configuration);
         Root = services.BuildServiceProvider();
+
+        // Resolved once here, from the same container AuthHandler's own per-request resolution
+        // reads from — not a second, independent registration. GetService, not GetRequiredService:
+        // most specs declare no security and register no provider at all (question (b) from
+        // Task 2), which RequireMultipleIdentities' own zero-identity handling already treats as
+        // ordinary.
+        TokenProvider = Root.GetService<ITestTokenProvider>();
 
         Schemas = SchemaBundle.FromFile(Path.Combine(AppContext.BaseDirectory, "spec-schemas.json"));
 
