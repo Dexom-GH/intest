@@ -28,8 +28,15 @@ public static class CoverageReport
             ["skipped"] = skipped,
             ["notes"] = new JsonObject
             {
-                ["untaggedOperations"] = plan.Classes.Where(c => c.Tag == "Default").Sum(c => c.Cases.Count),
-                ["synthesizedOperationIds"] = cases.Count(c => c.OperationKeySynthesized),
+                // Both metrics name *operations*, not cases. An operation can emit more than one
+                // case since declared-error cases arrived (decision 5) — counting cases here
+                // double-counts every operation that also gets a 404 case, and every sample spec
+                // in the repo declares one, so this is a Distinct rather than a Count/Sum.
+                ["untaggedOperations"] = plan.Classes.Where(c => c.Tag == "Default")
+                    .SelectMany(c => c.Cases).Select(c => c.OperationKey)
+                    .Distinct(StringComparer.Ordinal).Count(),
+                ["synthesizedOperationIds"] = cases.Where(c => c.OperationKeySynthesized)
+                    .Select(c => c.OperationKey).Distinct(StringComparer.Ordinal).Count(),
                 ["statusOnlyContractTests"] = cases.Count(c => c.SchemaKey is null),
                 ["inlineResponseSchemas"] = cases.Count(c => c.SchemaKey?.StartsWith("op:", StringComparison.Ordinal) == true)
             }

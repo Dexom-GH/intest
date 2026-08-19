@@ -431,6 +431,52 @@ public class TestPlanBuilderTests
     }
 
     [TestMethod]
+    public async Task SkipsAndNotesA404WithARequiredQueryParameterRatherThanSendingAnIncompleteRequest()
+    {
+        // Decision 5's postscript: whether a missing *required* query parameter answers 400 or
+        // 404 depends on binding and route configuration, so it is a measurement to take, not an
+        // assumption to ship. A declared-error case that targets only the unmatchable path id and
+        // omits the required "tenant" query parameter risks asserting 404 against what a
+        // compliant, correctly-routed API actually answers with 400 — exactly the wall of wrong
+        // failures decision 5 opens with. Treated the same as the no-path-parameter case: a note,
+        // not a guess shipped as a test.
+        const string spec = """
+        {
+          "openapi": "3.0.3",
+          "info": { "title": "Orders", "version": "1.0" },
+          "paths": {
+            "/orders/{id}": {
+              "get": {
+                "operationId": "getOrderById",
+                "tags": ["Orders"],
+                "parameters": [
+                  { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } },
+                  { "name": "tenant", "in": "query", "required": true, "schema": { "type": "string" } }
+                ],
+                "responses": {
+                  "200": { "description": "ok", "content": { "application/json": {
+                    "schema": { "$ref": "#/components/schemas/Order" } } } },
+                  "404": { "description": "not found" }
+                }
+              }
+            }
+          },
+          "components": { "schemas": { "Order": { "type": "object" } } }
+        }
+        """;
+
+        var plan = await BuildAsync(spec);
+
+        var cases = plan.Classes.SelectMany(c => c.Cases).Where(c => c.OperationKey == "getOrderById").ToList();
+        cases.Count.ShouldBe(1, "the success case must still generate — only the declared-error case is affected");
+        cases.ShouldNotContain(c => c.Role == CaseRole.DeclaredError);
+
+        plan.Skipped.ShouldNotContain(s => s.OperationKey == "getOrderById");
+        plan.Notes.ShouldContain(n => n.OperationKey == "getOrderById" && n.Reason.Contains("tenant"),
+            "a silently dropped 404 case is indistinguishable from a bug");
+    }
+
+    [TestMethod]
     public async Task NeitherStatusDeclaredMeansOnlyTheSuccessCase()
     {
         var plan = await BuildAsync(Spec);

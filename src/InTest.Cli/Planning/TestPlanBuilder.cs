@@ -96,6 +96,8 @@ public static class TestPlanBuilder
                 // (the `continue`s above it) and the two can never disagree about the operation.
                 if (FindDeclaredResponse(operation, NotFoundStatus) is { } notFoundResponse)
                 {
+                    var requiredQueryParameters = RequiredQueryParameterNames(operation);
+
                     if (pathParameterNames.Count == 0)
                     {
                         // Nowhere to put an unmatchable value — telling a lookup query parameter
@@ -106,6 +108,20 @@ public static class TestPlanBuilder
                         // array instead of the artefact `--check` would actually expect it in.
                         notes.Add(new CoverageNote(key.Value,
                             $"declares {NotFoundStatus} but has no path parameter to target with an unmatchable value"));
+                    }
+                    else if (requiredQueryParameters.Count > 0)
+                    {
+                        // Decision 5's postscript: whether a missing *required* query parameter
+                        // is answered with 400 or 404 depends on binding and route configuration
+                        // — a measurement to take, not an assumption to ship. Sending only the
+                        // unmatchable path id and omitting a required query parameter risks
+                        // asserting 404 against what a compliant, correctly-routed API actually
+                        // answers with 400 — the same hazard the no-path-parameter branch above
+                        // exists to avoid, so it gets the same treatment: a note, not a guess
+                        // shipped as a test.
+                        notes.Add(new CoverageNote(key.Value,
+                            $"declares {NotFoundStatus} but has required query parameter(s) " +
+                            $"({string.Join(", ", requiredQueryParameters)}) that an unmatchable-id-only request would omit"));
                     }
                     else
                     {
@@ -228,6 +244,17 @@ public static class TestPlanBuilder
     private static IReadOnlyList<string> QueryParameters(OpenApiOperation operation)
         => (operation.Parameters ?? [])
             .Where(p => p.In == ParameterLocation.Query)
+            .Select(p => p.Name!)
+            .ToList();
+
+    /// <summary>
+    /// The subset of <see cref="QueryParameters"/> the spec marks <c>required: true</c> — the
+    /// ones a declared-error case cannot simply omit without risking a 400-vs-404 mismatch (see
+    /// the required-query-parameter branch above).
+    /// </summary>
+    private static IReadOnlyList<string> RequiredQueryParameterNames(OpenApiOperation operation)
+        => (operation.Parameters ?? [])
+            .Where(p => p.In == ParameterLocation.Query && p.Required)
             .Select(p => p.Name!)
             .ToList();
 

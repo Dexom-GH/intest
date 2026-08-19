@@ -39,6 +39,29 @@ public class CoverageReportTests
     }
 
     [TestMethod]
+    public void CountsDistinctOperationsRatherThanCasesForTheOperationNamedMetrics()
+    {
+        // untaggedOperations and synthesizedOperationIds name *operations*, not cases. Since an
+        // operation can now emit more than one case (success + declared error, decision 5), a
+        // plan with two cases sharing one OperationKey must still count as one operation — every
+        // sample spec in the repo declares 404s, so counting cases here double-counts in practice,
+        // not just in theory.
+        var plan = new TestPlan(
+            "Orders",
+            [new TestClassPlan("DefaultTests", "Default",
+                [new TestCasePlan("A_Contract", "d", "a", true, "GET", "/a/{id}", ["id"], 200, "Order", "Contract"),
+                 new TestCasePlan("A_NotFound", "d", "a", true, "GET", "/a/{id}", ["id"], 404, null, "Contract",
+                     Role: CaseRole.DeclaredError, NeedsFixture: false)])],
+            [],
+            []);
+
+        using var doc = JsonDocument.Parse(CoverageReport.ToJson(plan));
+
+        doc.RootElement.GetProperty("notes").GetProperty("untaggedOperations").GetInt32().ShouldBe(1);
+        doc.RootElement.GetProperty("notes").GetProperty("synthesizedOperationIds").GetInt32().ShouldBe(1);
+    }
+
+    [TestMethod]
     public void IsDeterministic()
     {
         CoverageReport.ToJson(Plan()).ShouldBe(CoverageReport.ToJson(Plan()));
