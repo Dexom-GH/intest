@@ -870,12 +870,43 @@ never finished — so nothing but the drain could have removed that row. This is
 "cleanup actually ran" claim for the ordinary two runs above credible rather than merely
 plausible: the same mechanism, exercised in isolation, demonstrably deletes.
 
-(No "drained N action(s)" line appears in this run's console output, and that absence is itself
-consistent with the runtime rather than a gap in it: that line is written only by
+(No "drained N action(s)" line appears in this run's console output. That line is written only by
 `TestHost.CleanupAsync`'s own drain in `[AssemblyCleanup]`, which still runs unconditionally
 afterward but finds nothing left — `FixtureRunner.RunAsync`'s catch block already drained the
-context, synchronously, before rethrowing. Two different, both-documented drain paths; this run
-exercises the other one.)
+context, synchronously, before rethrowing — so its absence here is expected. But "consistent with
+the runtime" is not, on its own, proof of anything: that same absence is equally consistent with
+`[AssemblyCleanup]` simply never running after a failed `[AssemblyInitialize]`, which would be a
+much bigger problem than a quiet log line. That question is checkable independently of this run,
+so it was checked directly rather than left as an inference. A minimal MSTest 4.3.3/net10.0
+project — no InTest code at all — with a throwing `[AssemblyInitialize]` and an
+`[AssemblyCleanup]` that only writes a marker file:
+
+```csharp
+[AssemblyInitialize]
+public static void AssemblyInit(TestContext context) =>
+    throw new InvalidOperationException("Forced failure to probe whether AssemblyCleanup still runs.");
+
+[AssemblyCleanup]
+public static void AssemblyClean() => File.WriteAllText(MarkerPath, "ran");
+```
+
+```
+Failed DoesNothing
+  Error Message:
+   Assembly Initialization method AssemblyCleanupProbe.TestStartup.AssemblyInit threw exception. System.InvalidOperationException: Forced failure to probe whether AssemblyCleanup still runs.. Aborting test execution.
+
+Failed!  - Failed:     1, Passed:     0, Skipped:     0, Total:     1, Duration: 31 ms - AssemblyCleanupProbe.dll (net10.0)
+```
+
+```
+$ cat bin/Debug/net10.0/cleanup-ran.marker
+ran
+```
+
+The marker was written. `[AssemblyCleanup]` does run after a failed `[AssemblyInitialize]` under
+this project's actual runner, independent of anything InTest does — which is what makes "this run's
+absent log line is merely the other, already-documented drain path" a safe reading rather than a
+hopeful one. Two different, both-documented drain paths; this run exercises the other one.)
 
 Products, queried with `X-Include-Inactive: true` — the plain endpoint hides `SPR-0002`
 (`IsActive: false`, `ProductsController.cs` line 31) and returns only 5 of the 6 rows that exist —

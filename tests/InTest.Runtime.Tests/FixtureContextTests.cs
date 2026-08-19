@@ -39,7 +39,7 @@ public class FixtureContextTests
     }
 
     [TestMethod]
-    public void PublishedKeysAreOrdinalSortedSoMessagesAreStable()
+    public void GetOnAnUnpublishedKeyNamesTheKeyAndListsWhatIsAvailable()
     {
         var context = new FixtureContext();
         context.Publish("zebra.id", "z");
@@ -47,8 +47,20 @@ public class FixtureContextTests
         context.Publish("Middle.id", "m");
 
         // Ordinal, not culture-aware: a stable, reproducible order for error messages that list
-        // every published key, independent of the machine's locale.
-        context.PublishedKeys.ShouldBe(["Middle.id", "apple.id", "zebra.id"]);
+        // every published key, independent of the machine's locale. Mirrors the courtesy
+        // TokenResolver's own {{fixture:...}} lookup gives a miss.
+        var ex = Should.Throw<FixtureLifecycleException>(() => context.Get("seededTenant.id"));
+        ex.Message.ShouldContain("seededTenant.id");
+        ex.Message.ShouldContain("Middle.id, apple.id, zebra.id");
+    }
+
+    [TestMethod]
+    public void GetOnAnEmptyContextReportsNoneAvailable()
+    {
+        var context = new FixtureContext();
+
+        Should.Throw<FixtureLifecycleException>(() => context.Get("seededTenant.id"))
+              .Message.ShouldContain("(none)");
     }
 
     [TestMethod]
@@ -74,12 +86,13 @@ public class FixtureContextTests
         context.Publish("seededTenant.id", "tenant-1");
         context.Publish("seededUser.id", "user-1");
 
-        context.PublishedValues.ShouldBe(
-            new Dictionary<string, string>
-            {
-                ["seededTenant.id"] = "tenant-1",
-                ["seededUser.id"] = "user-1",
-            });
+        // Compared by content, not by enumeration order: PublishedValues never documented an
+        // order guarantee, and the concurrent-safe backing store behind it does not preserve
+        // insertion order the way Dictionary incidentally does for a handful of entries.
+        var values = context.PublishedValues;
+        values.Count.ShouldBe(2);
+        values["seededTenant.id"].ShouldBe("tenant-1");
+        values["seededUser.id"].ShouldBe("user-1");
     }
 
     [TestMethod]
@@ -91,8 +104,8 @@ public class FixtureContextTests
 
         context.Publish("seededUser.id", "user-1");
 
-        // Same freshness contract as PublishedKeys and CleanupActions: a caller holding an
-        // earlier snapshot must not see it grow as more fixtures publish.
+        // Same freshness contract as CleanupActions: a caller holding an earlier snapshot must
+        // not see it grow as more fixtures publish.
         before.Count.ShouldBe(1);
         context.PublishedValues.Count.ShouldBe(2);
     }
@@ -110,5 +123,30 @@ public class FixtureContextTests
         context.CleanupActions.Count.ShouldBe(2);
         context.CleanupActions[0].ShouldBeSameAs(first);
         context.CleanupActions[1].ShouldBeSameAs(second);
+    }
+
+    [TestMethod]
+    public async Task ConcurrentPublishAndOnCleanupFromOneFixtureDoNotCorruptState()
+    {
+        // The realistic case final review flagged: a single fixture fanning seeding out with
+        // Task.WhenAll(...) to keep AssemblyInitialize fast, each branch calling Publish and
+        // OnCleanup independently. FixtureRunner itself still awaits fixtures sequentially, but
+        // nothing stops one fixture's own InitializeAsync from doing this internally, so
+        // FixtureContext must not corrupt under it.
+        const int count = 200;
+        var context = new FixtureContext();
+
+        await Task.WhenAll(Enumerable.Range(0, count).Select(i => Task.Run(() =>
+        {
+            context.Publish($"seeded{i}.id", $"value-{i}");
+            context.OnCleanup(() => Task.CompletedTask);
+        })));
+
+        context.PublishedValues.Count.ShouldBe(count);
+        context.CleanupActions.Count.ShouldBe(count);
+        for (var i = 0; i < count; i++)
+        {
+            context.Get($"seeded{i}.id").ShouldBe($"value-{i}");
+        }
     }
 }

@@ -122,13 +122,35 @@ public static class TestHost
         //
         // Resolved from the scope readiness already opened, so a fixture can take a constructor
         // dependency on anything ConfigureServices registered, including IHttpClientFactory
-        // (Task 6's own golden proof, SeedIdFixture, does exactly this). Only AddSingleton is a
+        // (v1-b Task 6's own golden proof, SeedIdFixture, does exactly this). Only AddSingleton is a
         // documented, supported registration for IAssemblyFixture (see TestStartup.cs's scaffold
         // comment): an AddScoped or AddTransient fixture that also implements IDisposable would
         // be disposed when this scope ends below, at the end of this method, while any OnCleanup
         // closure it registered survives on fixtureContext until AssemblyCleanup — a
         // disposed-object trap for anyone who strays from the scaffolded shape.
-        var fixtures = scope.ServiceProvider.GetServices<IAssemblyFixture>();
+        //
+        // GetServices<IAssemblyFixture>() resolves — and so constructs — every registered
+        // fixture eagerly, right here, not lazily as FixtureRunner enumerates them. A fixture
+        // whose constructor takes a dependency nobody registered therefore throws before
+        // FixtureRunner ever runs, which would otherwise bypass every guarantee it exists to
+        // give (§13: a failure names the fixture and says setup broke, not a bare framework
+        // exception with no such framing). Wrapped here so construction failures get the same
+        // treatment as an InitializeAsync failure, rather than a raw InvalidOperationException
+        // escaping [AssemblyInitialize] unexplained.
+        List<IAssemblyFixture> fixtures;
+        try
+        {
+            fixtures = scope.ServiceProvider.GetServices<IAssemblyFixture>().ToList();
+        }
+        catch (Exception ex)
+        {
+            throw new FixtureLifecycleException(
+                $"Failed to construct one or more registered IAssemblyFixture instances: {ex.Message} " +
+                "Check that every constructor dependency an IAssemblyFixture takes is itself " +
+                "registered in TestStartup's Register method.",
+                ex);
+        }
+
         await FixtureRunner.RunAsync(fixtures, fixtureContext, Profile, new ContextTextWriter(context), cancellationToken)
             .ConfigureAwait(false);
 
@@ -182,7 +204,7 @@ public static class TestHost
 
     /// <summary>
     /// Drains <see cref="RetainedFixtureContext"/> during the generated project's
-    /// [AssemblyCleanup] — the caller that makes <see cref="FixtureRunner.DrainAsync"/> (Task 3)
+    /// [AssemblyCleanup] — the caller that makes <see cref="FixtureRunner.DrainAsync"/> (v1-b Task 3)
     /// reachable at all, since <see cref="TestHost"/> is a plain static class and cannot carry
     /// the attribute itself.
     /// <para>
@@ -195,13 +217,13 @@ public static class TestHost
     /// </para>
     /// <para>
     /// <see cref="FixtureRunner.DrainAsync"/> throws <see cref="FixtureLifecycleException"/> by
-    /// design (Task 3) to report a teardown action that failed. That exception is caught here
+    /// design (v1-b Task 3) to report a teardown action that failed. That exception is caught here
     /// rather than rethrown: an exception escaping [AssemblyCleanup] becomes the whole run's
     /// headline, burying whatever test actually failed underneath a teardown complaint — the
     /// drain report is diagnostic, not a verdict. Only <see cref="FixtureLifecycleException"/>
     /// is caught, because that is the only type <see cref="FixtureRunner.DrainAsync"/>'s own
     /// contract promises to throw — a promise <see cref="FixtureRunner.DrainAsync"/> itself
-    /// defends even against a misbehaving cause (Task 5's hardening in
+    /// defends even against a misbehaving cause (v1-b Task 5's hardening in
     /// <c>FixtureRunnerTests.DrainWrapsACauseEvenWhenItsOwnMessageGetterThrows</c>) — so anything
     /// else escaping from here would be a genuine bug in <see cref="FixtureRunner"/> and must
     /// propagate rather than be swallowed alongside a legitimate teardown failure.
@@ -243,6 +265,14 @@ public static class TestHost
     /// would always see zero. Written only on success, since a failed drain already gets its own,
     /// more specific message below naming how many of how many threw.
     /// </para>
+    /// <para>
+    /// Deliberately does not dispose <see cref="Root"/>. This is the obvious place to try, but a
+    /// fixture's <see cref="FixtureContext.OnCleanup"/> closure can capture an <c>HttpClient</c>
+    /// pulled from <see cref="Root"/>'s <see cref="IHttpClientFactory"/> and that closure runs
+    /// during the drain this method performs — disposing <see cref="Root"/> first would tear
+    /// down the very client the drain is about to use. <see cref="Root"/> is process-lifetime by
+    /// design; nothing in this type ever disposes it.
+    /// </para>
     /// </summary>
     public static async Task CleanupAsync(TestContext context)
     {
@@ -271,7 +301,7 @@ public static class TestHost
             // one message that gives an operator something to search logs and a database for.
             var runId = RunIdValue ?? "unavailable (AssemblyInitialize did not complete)";
 
-            // DrainAsync's own message already carries its remediation clause (Task 3). "This
+            // DrainAsync's own message already carries its remediation clause (v1-b Task 3). "This
             // run's results are unaffected" is deliberately not said: it is true, but the risk
             // worth naming is that state this run failed to tear down can break a later one.
             var message =

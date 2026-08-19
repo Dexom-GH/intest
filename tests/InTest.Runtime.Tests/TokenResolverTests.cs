@@ -102,6 +102,9 @@ public class TokenResolverTests
         ex.Message.ShouldContain("secret:");
         ex.Message.ShouldContain("runId");
         ex.Message.ShouldContain("utcNow");
+        // SupportedTokens once omitted {{fixture:...}}; left unfixed, the "Unknown token" message
+        // would keep recommending a list missing the token that now works.
+        ex.Message.ShouldContain("{{fixture:");
     }
 
     [TestMethod]
@@ -258,15 +261,6 @@ public class TokenResolverTests
         var resolver = ResolverWith(("seededCustomer.id", ""));
 
         resolver.Resolve("{{fixture:seededCustomer.id}}", "f.json").ShouldBe(string.Empty);
-    }
-
-    [TestMethod]
-    public void TheUnknownTokenMessageAdvertisesFixtureToo()
-    {
-        // SupportedTokens omitted {{fixture:...}}. Left alone, the "Unknown token" message would
-        // keep recommending a list missing the token that now works.
-        Should.Throw<FixtureResolutionException>(() => ResolverWith().Resolve("{{nope}}", "f.json"))
-              .Message.ShouldContain("{{fixture:");
     }
 
     [TestMethod]

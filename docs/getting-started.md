@@ -322,16 +322,55 @@ Then, wherever a fixture needs that seeded value:
 orders fixtures that depend on each other's published values, and `AppliesTo` restricts a
 fixture to specific profiles (a fixture skipped this way also skips anything that transitively
 depends on it, logged by name). Reference a key nothing published, and it is reported the same
-way an unfilled `TODO:` sentinel is (above): once, in the aggregated report —
+way an unfilled `TODO:` sentinel is (above): once, in the aggregated report — this is real
+output from `FixtureValidation.Report.BuildMessage`, for a suite with two other fixtures still
+carrying unfilled `TODO:` sentinels alongside `update-order.json`'s unpublished `{{fixture:…}}`:
 
 ```
-Fixture validation failed (3 fixtures, 5 problems):
-  update-order.json    {{fixture:seededTenant.id}} — key not published
-                       available: seededCustomer.id, seededRegion.code
+5 problems found across fixtures. Run `intest fixtures repair` or fill them in by hand:
+  create-order:
+    - 'customerId' in create-order.json is still unfilled (TODO:customerId).
+    - 'items[0].sku' in create-order.json is still unfilled (TODO:sku).
+  ship-order:
+    - 'carrier' in ship-order.json is still unfilled (TODO:carrier).
+    - 'trackingNumber' in ship-order.json is still unfilled (TODO:trackingNumber).
+  update-order:
+    - 'customerId' in update-order.json: Fixture key 'seededTenant.id' required by 'update-order.json' is not published. Published keys: seededCustomer.id, seededRegion.code. Check the key name for a typo, or confirm the fixture that publishes it is registered and its AppliesTo includes the active profile.
 ```
 
 — naming the requested key and every key that *was* published, and only the operations that
 actually depend on it fail, not the rest of the suite.
+
+**A `DependsOn` dependent can also read a published value directly, in code**, with
+`ctx.Get(key)` — the supported alternative to a `{{fixture:…}}` token when a fixture needs the
+value itself rather than embedding it in a request body:
+
+```csharp
+public sealed class SeededOrderFixture(OrdersApiClient api) : IAssemblyFixture
+{
+    public Type[] DependsOn { get; } = [typeof(SeededCustomerFixture)];
+    public string[] AppliesTo { get; } = [];
+
+    public async Task InitializeAsync(FixtureContext ctx, CancellationToken ct)
+    {
+        var customerId = ctx.Get("seededCustomer.id");   // safe: DependsOn guarantees it already ran
+        var order = await api.CreateOrderAsync(customerId, ct);
+        ctx.Publish("seededOrder.id", order.Id);
+        ctx.OnCleanup(() => api.DeleteOrderAsync(order.Id));
+    }
+}
+```
+
+`Get` is only safe against a key published by a fixture actually listed in `DependsOn` —
+`FixtureGraph` orders fixtures so every dependency finishes before its dependent starts, which is
+what makes the value be there at all. Calling it for a key nothing has published yet (a missing
+`DependsOn` entry, or a typo) throws, naming the requested key and every key published so far, the
+same way an unpublished `{{fixture:…}}` token does.
+
+**`ctx.Publish` and `ctx.OnCleanup` are safe to call concurrently** from within one fixture's
+`InitializeAsync` — for example, several `Task.WhenAll(...)` branches each seeding a different row
+to keep `AssemblyInitialize` fast. `FixtureRunner` still runs different *fixtures* strictly one
+after another; the concurrency guarantee is only about calls made from inside a single fixture.
 
 Cleanup is registered next to what created it (`ctx.OnCleanup`, above) and drained in reverse
 when `AssemblyCleanup` runs. Make every cleanup idempotent.
