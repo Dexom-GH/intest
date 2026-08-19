@@ -1038,13 +1038,6 @@ public class GeneratedSuiteExecutionTests
     }
 
     /// <summary>
-    /// Writes <see cref="GoldenAuthHandlerSources.AlwaysThrowsHandler"/> into the project and
-    /// wires it onto <c>InTestClients.Api</c> in <c>TestStartup.cs</c>'s <c>Register</c> hook —
-    /// the same hook, same client, the scaffold's own doc comment names for a real bearer
-    /// handler ("A secured API needs a DelegatingHandler appended to InTestClients.Api"). Never
-    /// touches <c>InTestClients.Readiness</c>: that omission is the entire point of Task 1.
-    /// </summary>
-    /// <summary>
     /// Writes <see cref="GoldenTokenProviderSources.TwoIdentityTokenProvider"/> into the project
     /// and registers it in <c>TestStartup.cs</c>'s <c>Register</c> hook, anchored on the same
     /// comment <see cref="AttachThrowingHandlerToApiClient"/> uses — <c>AuthHandler</c> is
@@ -1067,6 +1060,13 @@ public class GeneratedSuiteExecutionTests
             StringComparison.Ordinal));
     }
 
+    /// <summary>
+    /// Writes <see cref="GoldenAuthHandlerSources.AlwaysThrowsHandler"/> into the project and
+    /// wires it onto <c>InTestClients.Api</c> in <c>TestStartup.cs</c>'s <c>Register</c> hook —
+    /// the same hook, same client, the scaffold's own doc comment names for a real bearer
+    /// handler ("A secured API needs a DelegatingHandler appended to InTestClients.Api"). Never
+    /// touches <c>InTestClients.Readiness</c>: that omission is the entire point of Task 1.
+    /// </summary>
     private void AttachThrowingHandlerToApiClient()
     {
         File.WriteAllText(Path.Combine(_root, "AlwaysThrowsHandler.cs"), GoldenAuthHandlerSources.AlwaysThrowsHandler);

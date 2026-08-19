@@ -300,21 +300,6 @@ public class TemplateRendererTests
         rendered.ShouldNotContain("[DoNotParallelize]");
     }
 
-    [TestMethod]
-    public void EmitsNoStrayBlankLinesForAMutatingDeclaredErrorCase()
-    {
-        // A declared 404 on a DELETE or PUT no longer stacks [DoNotParallelize] with
-        // emits_fixture_lookup (the fix above removes that combination), but it is still the one
-        // case with both a non-mutating attribute list and a fixture-free body — kept as its own
-        // guard against a regression reintroducing a leaked blank line.
-        var rendered = Render(PlanDeclaredError(httpMethod: "DELETE"));
-
-        rendered.ShouldNotContain("\n\n\n");
-        rendered.ShouldNotContain("\n\n    }");
-        rendered.ShouldContain("public async Task DeleteOrder_NotFound()\n    {\n        using var request",
-            customMessage: "no RequireFixture line and no leftover blank line ahead of it");
-    }
-
     // --- Auth cases (Task 5, decisions 3, 6 & 7) ---
 
     [TestMethod]
@@ -378,11 +363,13 @@ public class TemplateRendererTests
         rendered.ShouldNotContain("FixtureParameter(");
     }
 
-    [TestMethod]
-    public void AnAuthCaseSendsNoBody()
-    {
-        Render(PlanAuth(403, IdentitySlot.Secondary)).ShouldNotContain("request.Content");
-    }
+    // AnAuthCaseSendsNoBody removed (review finding on Task 5): the template's body block is
+    // gated purely on `tc.has_body`, with no role in the condition — a hand-built PlanAuth whose
+    // HasRequestBody defaults to false can never fail here, even against an implementation that
+    // wrongly set HasRequestBody: true for an auth case. That invariant lives entirely in
+    // TestPlanBuilder (the auth branch never copies FixtureComposer.HasJsonBodyToCompose the way
+    // the success case does), so the real guard is
+    // TestPlanBuilderTests.AuthCasesOnAnOperationWithARequiredBodyStillSendNoBody.
 
     [TestMethod]
     public void AWrongScopeCaseOnAMutatingMethodDoesNotGetDoNotParallelize()

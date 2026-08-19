@@ -230,6 +230,24 @@ public static class TestPlanBuilder
                         PathParameterKinds: authPathParameterKinds,
                         Slot: IdentitySlot.Secondary)));
                 }
+                else if (operation.Security is null && document.Security is { Count: > 0 })
+                {
+                    // Review finding on Task 5: an operation that omits `security` entirely
+                    // inherits the document-level block per the OpenAPI spec — valid, and
+                    // routine when a whole API shares one scheme. `operation.Security is {
+                    // Count: > 0 }` above only ever sees the operation's own declaration, so an
+                    // operation secured purely by inheritance got no auth cases and, unlike the
+                    // three note-not-guess branches guarding the 404 case above, no CoverageNote
+                    // either — an invisible gap in coverage-report.json. Resolving the
+                    // inheritance is deferred (same "measurement, not an assumption" reasoning as
+                    // decision 5's postscript); this branch only makes the omission visible.
+                    // `operation.Security is null` — not `{ Count: 0 }` — is deliberate: an
+                    // explicit empty array is the spec's own way of overriding the document
+                    // default to "no auth" for this operation, which is not a gap to report.
+                    notes.Add(new CoverageNote(key.Value,
+                        "document declares `security` but this operation does not; v1-c does not " +
+                        "resolve document-level inheritance, so no auth cases were generated for it"));
+                }
             }
         }
 

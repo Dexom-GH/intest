@@ -767,4 +767,93 @@ public class TestPlanBuilderTests
 
         authCases.ShouldAllBe(c => c.Category == "Contract");
     }
+
+    private const string SpecWithDocumentLevelSecurityOnly = """
+    {
+      "openapi": "3.0.3",
+      "info": { "title": "Orders", "version": "1.0" },
+      "security": [{ "bearerAuth": [] }],
+      "paths": {
+        "/orders/{id}": {
+          "get": {
+            "operationId": "getOrderById",
+            "tags": ["Orders"],
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+            "responses": { "200": { "description": "ok", "content": { "application/json": {
+              "schema": { "$ref": "#/components/schemas/Order" } } } } }
+          }
+        }
+      },
+      "components": {
+        "schemas": { "Order": { "type": "object" } },
+        "securitySchemes": { "bearerAuth": { "type": "http", "scheme": "bearer" } }
+      }
+    }
+    """;
+
+    [TestMethod]
+    public async Task AnOperationInheritingDocumentLevelSecurityGetsACoverageNoteInsteadOfSilentlyNoAuthCases()
+    {
+        // Review finding on Task 5: an operation that omits `security` entirely inherits the
+        // document-level block per the OpenAPI spec, but v1-c's operation.Security-only check
+        // (decision comment above) treats that the same as an operation with no auth at all —
+        // and, unlike every other withheld case in this method (the three notes.Add calls above
+        // the auth branch), it did so with no CoverageNote, so the gap was invisible in
+        // coverage-report.json. This spec has no per-operation `security`, so the plain
+        // AnOperationDeclaringNoSecurityYieldsNeitherAuthCase test above does not cover it.
+        var plan = await BuildAsync(SpecWithDocumentLevelSecurityOnly);
+        var cases = plan.Classes.SelectMany(c => c.Cases).Where(c => c.OperationKey == "getOrderById").ToList();
+
+        cases.ShouldNotContain(c => c.Role == CaseRole.Auth);
+        plan.Notes.ShouldContain(n => n.OperationKey == "getOrderById" &&
+            n.Reason.Contains("security", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private const string SpecDeclaringSecurityWithARequiredBody = """
+    {
+      "openapi": "3.0.3",
+      "info": { "title": "Orders", "version": "1.0" },
+      "paths": {
+        "/orders/{id}": {
+          "put": {
+            "operationId": "updateOrder",
+            "tags": ["Orders"],
+            "security": [{ "bearerAuth": [] }],
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+            "requestBody": {
+              "required": true,
+              "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Order" } } }
+            },
+            "responses": { "200": { "description": "ok", "content": { "application/json": {
+              "schema": { "$ref": "#/components/schemas/Order" } } } } }
+          }
+        }
+      },
+      "components": {
+        "schemas": { "Order": { "type": "object" } },
+        "securitySchemes": { "bearerAuth": { "type": "http", "scheme": "bearer" } }
+      }
+    }
+    """;
+
+    [TestMethod]
+    public async Task AuthCasesOnAnOperationWithARequiredBodyStillSendNoBody()
+    {
+        // Review finding on Task 5: the renderer-level test this replaced (AnAuthCaseSendsNoBody
+        // in TemplateRendererTests) rendered a hand-built plan whose HasRequestBody defaulted to
+        // false and could never fail — the template's body block is gated purely on
+        // `tc.has_body`, with no role in the condition. This is the real guard: it fails if the
+        // auth branch in TestPlanBuilder ever starts copying the success case's
+        // FixtureComposer.HasJsonBodyToCompose(operation), which is the only way an auth case
+        // could end up with a body at all.
+        var plan = await BuildAsync(SpecDeclaringSecurityWithARequiredBody);
+        var cases = plan.Classes.SelectMany(c => c.Cases).Where(c => c.OperationKey == "updateOrder").ToList();
+
+        var success = cases.Single(c => c.Role == CaseRole.Success);
+        var authCases = cases.Where(c => c.Role == CaseRole.Auth).ToList();
+
+        success.HasRequestBody.ShouldBeTrue();
+        authCases.Count.ShouldBe(2);
+        authCases.ShouldAllBe(c => !c.HasRequestBody);
+    }
 }
