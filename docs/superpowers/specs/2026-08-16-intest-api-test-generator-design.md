@@ -982,7 +982,7 @@ reason:
 
 | Status | Why not v1-c |
 |---|---|
-| `400` | No deterministic fixture-free trigger exists. Provoking one means sending malformed input — the variation subsystem this generator deliberately does not build |
+| `400` | No deterministic fixture-free trigger exists. Provoking one means sending malformed input — the variation subsystem, deferred to v1-c2 rather than built here |
 | `401`, `403` | The auth cases below already own these. An operation declaring 401 would otherwise get both an auth 401 (no token, correctly expects 401) and a declared-error 401 (a valid authenticated request, always fails) |
 | `409`, `422`, others | Need specific conflicting state or input the generator cannot construct fixture-free |
 

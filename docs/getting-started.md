@@ -177,7 +177,13 @@ anything past one identity is the team's to write.
 **Readiness never depends on any of this.** It probes on `InTestClients.Readiness`, a client
 with no auth handler attached at all, so an unreachable identity provider cannot make the
 anonymous `/health/ready` probe fail before a single token is ever requested — the failure mode
-that reads as a two-minute-long "dead API" and is actually a dead identity server (§13).
+that reads as a two-minute-long "dead API" and is actually a dead identity server (§13). The
+requirement runs the other way too: the readiness client carries no auth handler and can *never*
+send a token, so `/health/ready` itself must stay anonymous on your API. Put it behind
+authorization and readiness fails before the first test runs, for every run, on every machine —
+not a misdiagnosis this time but a hard block. The samples model this: `Orders.Api` — the one
+sample with auth at all — marks its `/health/ready` `.AllowAnonymous()` alongside every
+authorized endpoint it declares.
 
 ---
 
@@ -191,7 +197,8 @@ Writes `Generated/` — `TestHost.g.cs`, `OrdersTests.g.cs`, `Schemas.g.cs` — 
 `coverage-report.json`. All regenerated wholesale; never hand-edit them.
 
 Read `coverage-report.json` now. It tells you what was skipped and why, which operations run on
-synthesized IDs, which produce status-only tests, and which auth tests are gated off.
+synthesized IDs, which produce status-only tests, and which auth tests are gated on a second
+identity.
 
 If any operation takes a request body, `generate` exits non-zero and reports the missing
 fixtures. That is expected on a first run.

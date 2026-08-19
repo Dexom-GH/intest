@@ -1047,8 +1047,20 @@ what deletes it. `{{fixture:…}}` / `IAssemblyFixture` (v1-a action 5, above) i
 > moment an adopter tried to run more than one at a time, which `Orders.Api` needing
 > `Identity.Server` up makes the ordinary case, not an edge one. The replacement commands
 > (`http://localhost:5081`–`5084`) were run concurrently and all four answered `/health/ready`
-> with 200 at once. No InTest-side change; the fix is entirely `samples/README.md`, as this
-> finding predicted.
+> with 200 at once.
+>
+> `/health/ready` alone is not sufficient evidence, since it is anonymous on every sample and
+> would pass even with `Orders.Api` and `Identity.Server` unpaired — the port fix's first pass
+> stopped there and a review caught it. Measured past that: a bare port swap moves where
+> `Identity.Server` listens without moving where `Orders.Api` looks for it (both default to
+> `https://localhost:5443` in source), and `Orders.Api` additionally 500s on a plain-HTTP
+> authority while running in the `Production` hosting environment that no `launchSettings.json`
+> lets it leave. The commands now also set `IdentityServer__IssuerUri` /
+> `Identity__Authority` to the same address and `ASPNETCORE_ENVIRONMENT=Development` on
+> `Orders.Api`. With that in place: `GET /api/orders` with no `Authorization` header returned
+> `401`; a token requested from `Identity.Server`'s `/connect/token` and replayed on the same
+> request returned `200` with the seeded order list. No InTest-side change; the fix is entirely
+> `samples/README.md`, as this finding predicted.
 
 ```bash
 dotnet run --project samples/Catalog.Api        # http://localhost:5081

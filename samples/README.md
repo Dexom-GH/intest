@@ -56,15 +56,36 @@ ordinary case, since `Orders.Api` needs `Identity.Server` reachable to validate 
 
 ```bash
 ASPNETCORE_URLS="http://localhost:5081" dotnet run --project samples/Catalog.Api
-ASPNETCORE_URLS="http://localhost:5084" dotnet run --project samples/Identity.Server    # required only by Orders.Api
-ASPNETCORE_URLS="http://localhost:5082" dotnet run --project samples/Orders.Api
+ASPNETCORE_URLS="http://localhost:5084" IdentityServer__IssuerUri="http://localhost:5084" \
+  dotnet run --project samples/Identity.Server    # required only by Orders.Api
+ASPNETCORE_URLS="http://localhost:5082" ASPNETCORE_ENVIRONMENT="Development" \
+  Identity__Authority="http://localhost:5084" dotnet run --project samples/Orders.Api
 ASPNETCORE_URLS="http://localhost:5083" dotnet run --project samples/Inventory.Api
 ```
 
-Confirmed: all four stay up and answer `/health/ready` with the ports above set concurrently.
-Pick different ports freely — nothing below depends on these specific numbers — but each
-project's `Api:BaseUrl` (or `Identity:Authority`/`IdentityServer:IssuerUri` for the identity
-pair) must then point at whatever you actually chose.
+`Identity.Server` and `Orders.Api` need two more variables between them, not just a port, because
+both default to `https://localhost:5443` in source (`Identity.Server/Program.cs:9`,
+`Orders.Api/Program.cs:11`) — a bare `ASPNETCORE_URLS` override moves where `Identity.Server`
+listens without moving where `Orders.Api` looks for it, so token validation targets an address
+nothing answers on. `IdentityServer__IssuerUri` repoints the issuer `Identity.Server` stamps into
+every token to match where it actually listens; `Identity__Authority` repoints where `Orders.Api`
+goes looking for that issuer's metadata to the same address. They must name the same host and
+port, or the pairing fails the same way. `ASPNETCORE_ENVIRONMENT="Development"` is required too,
+separately: none of the four projects ships a `launchSettings.json` (by design, above), so without
+it every project defaults to the `Production` hosting environment, and `Orders.Api` refuses a
+plain-HTTP authority outright in Production (`RequireHttpsMetadata = builder.Environment.
+IsProduction()`, `Orders.Api/Program.cs:18`) — every request 500s with "The MetadataAddress or
+Authority must use HTTPS", not the 401 an unauthenticated request should get.
+
+Confirmed by measurement, not merely by `/health/ready`, which is anonymous and would pass even
+if the pairing above were wrong: with all four running as shown, `GET /api/orders` on `Orders.Api`
+with no `Authorization` header returns `401`; requesting a token from `Identity.Server`
+(`POST /connect/token`, `client_id=orders-client`) and retrying the same request with
+`Authorization: Bearer <token>` returns `200` with the seeded order list. Pick different ports
+freely — nothing below depends on these specific numbers — but each project's `Api:BaseUrl` (or
+`Identity:Authority`/`IdentityServer:IssuerUri` for the identity pair, kept equal to each other)
+must then point at whatever you actually chose, and `Orders.Api` still needs
+`ASPNETCORE_ENVIRONMENT=Development` for as long as its authority is plain HTTP.
 
 Each exposes `GET /health/ready`. Each writes its OpenAPI document beside its project file at
 build time, so `intest` can read an artifact rather than needing a running instance.
