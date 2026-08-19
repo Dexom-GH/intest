@@ -140,42 +140,10 @@ locally, whatever your organisation uses in CI — and reference them from fixtu
 
 ### Auth
 
-> **`ITestTokenProvider` is designed, not yet wired up.** The interface ships and
-> `StaticTokenProvider` implements it, but **nothing calls `GetTokenAsync`** — not the runtime,
-> not the generated tests. Registering a provider today has no effect on any request. Until the
-> generated template consumes it (v1-c, with the auth tests), a secured API needs a
-> `DelegatingHandler` you write yourself. This was found by running a generated suite against a
-> secured sample API: without the handler below, every operation returns 401.
-
-Append the handler to the same named client `TestHost` configures — registrations in
-`TestStartup.Register` compose with InTest's, so `AddHttpClient` with the same name adds to it
-rather than replacing it:
-
-```csharp
-private static void Register(IServiceCollection services, IConfiguration configuration)
-{
-    services.AddTransient<BearerTokenHandler>();
-    services.AddHttpClient(InTestClients.Api).AddHttpMessageHandler<BearerTokenHandler>();
-}
-
-public sealed class BearerTokenHandler(IConfiguration configuration) : DelegatingHandler
-{
-    protected override async Task<HttpResponseMessage> SendAsync(
-        HttpRequestMessage request, CancellationToken ct)
-    {
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", await GetTokenAsync(ct));
-        return await base.SendAsync(request, ct);
-    }
-
-    /// Fetch once and cache — this runs on every request, not once per run.
-    private Task<string> GetTokenAsync(CancellationToken ct) => /* your identity provider */;
-}
-```
-
-Readiness probes the health endpoint before any of this, so keep that endpoint anonymous or
-readiness will fail before the first test runs.
-
-The design this is standing in for, for when v1-c lands:
+`AuthHandler` is already attached to `InTestClients.Api`. It reads the ambient identity for
+each test, asks the registered `ITestTokenProvider` for a token, and sets `Authorization` before
+the request goes out. A secured API needs exactly one thing from a team: an implementation of
+the interface.
 
 ```csharp
 public sealed class OrdersTokenProvider : ITestTokenProvider
@@ -187,9 +155,29 @@ public sealed class OrdersTokenProvider : ITestTokenProvider
 }
 ```
 
-`Identities` will decide which auth tests run. Return one and the "wrong scope → 403" tests skip
-with a stated reason. Return more and they run. No-token → 401 tests always run regardless.
-InTest ships only a static-token provider — no cloud SDK, no identity library.
+Register it in `TestStartup.Register`:
+
+```csharp
+private static void Register(IServiceCollection services, IConfiguration configuration)
+{
+    services.AddSingleton<ITestTokenProvider, OrdersTokenProvider>();
+}
+```
+
+**Do not also append a `DelegatingHandler` of your own** to `InTestClients.Api` for auth. Two
+handlers both setting `Authorization` does not fail loudly — the one registered last silently
+wins, and whichever one lost looks, from the outside, like it was never called.
+
+`Identities` decides which auth tests run. Return one and the generated "wrong scope → 403"
+cases skip at run time with a stated reason (`RequireMultipleIdentities`, §9). Return more and
+they run. The "no token → 401" cases always run regardless of how many identities a provider
+advertises. InTest ships only a static-token provider — no cloud SDK, no identity library — so
+anything past one identity is the team's to write.
+
+**Readiness never depends on any of this.** It probes on `InTestClients.Readiness`, a client
+with no auth handler attached at all, so an unreachable identity provider cannot make the
+anonymous `/health/ready` probe fail before a single token is ever requested — the failure mode
+that reads as a two-minute-long "dead API" and is actually a dead identity server (§13).
 
 ---
 

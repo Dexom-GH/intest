@@ -763,16 +763,22 @@ HttpClient via `IHttpClientFactory`. Registration happens once, in scaffolded
 services.AddHttpClient(InTestClients.Api, c => c.BaseAddress = InTestUrl.NormalizeBase(baseUrl))
         .AddHttpMessageHandler<RunIdHandler>()     // X-Test-Run-Id
         .AddHttpMessageHandler<AuthHandler>();     // wraps ITestTokenProvider
+
+services.AddHttpClient(InTestClients.Readiness, c => c.BaseAddress = InTestUrl.NormalizeBase(baseUrl))
+        .AddHttpMessageHandler<RunIdHandler>();    // no AuthHandler — see Readiness, §13
 ```
 
 `RunIdHandler` stamps `X-Test-Run-Id` by reading an `AsyncLocal<string?>` accessor set in
 `[TestInitialize]`. It **must** be `AsyncLocal` rather than an injected scoped service:
 factory-created handlers are not scoped to the DI scope. *Measured:* the ambient value flows
-correctly into the handler across successive scopes.
+correctly into the handler across successive scopes. `AuthHandler` reads its own ambient
+identity the same way, for the same reason (below).
 
-**The ambient is null before any test runs.** Readiness probing and `IAssemblyFixture` seeding
-both issue HTTP through the same named client during `AssemblyInitialize`, when no test is in
-scope. The handler therefore falls back:
+**The ambient is null before any test runs.** `IAssemblyFixture` seeding issues HTTP through
+`InTestClients.Api` during `AssemblyInitialize`, when no test is in scope. Readiness probing no
+longer shares that client — it moved to `InTestClients.Readiness`, which carries no
+`AuthHandler` at all (F10, §13) — but fixture traffic still does, so the fallback below still
+matters for it. The handler therefore falls back:
 
 ```csharp
 request.Headers.TryAddWithoutValidation("X-Test-Run-Id",
@@ -968,24 +974,82 @@ contradicts §13's reason for existing. Elapsed time appears in the failure mess
 
 ### Declared-error contract tests
 
-Where the spec declares a 404 or 400 response, generate a test for it. Deterministic, needs no
-fixture, safe in a gate, and catches routing and middleware breakage.
+Generated today, from declared responses only — **never inferred**. v1-c generates a case for
+`404` only, and only for an operation with at least one path parameter — a 404 needs somewhere
+to put an unmatchable value, and telling a lookup query parameter from a filter is itself a
+guess InTest does not make. Everything else in the 4xx range is excluded, each for its own
+reason:
+
+| Status | Why not v1-c |
+|---|---|
+| `400` | No deterministic fixture-free trigger exists. Provoking one means sending malformed input — the variation subsystem this generator deliberately does not build |
+| `401`, `403` | The auth cases below already own these. An operation declaring 401 would otherwise get both an auth 401 (no token, correctly expects 401) and a declared-error 401 (a valid authenticated request, always fails) |
+| `409`, `422`, others | Need specific conflicting state or input the generator cannot construct fixture-free |
+
+An operation declaring 404 falls back to a coverage **note** — its other cases still generate;
+this is not a skip (§12) — rather than a guessed case, in three situations:
+
+- **no path parameter to target.** `GET /orders` declaring 404 has nowhere to send an
+  unmatchable value.
+- **a required query parameter.** Whether a framework answers 400 or 404 for a missing required
+  parameter depends on binding and route configuration — a measurement to take, not an
+  assumption to ship (recorded as a candidate deterministic 400 trigger for a later plan).
+  Sending only the unmatchable path id and omitting a required parameter risks asserting 404
+  against what a compliant, correctly-routed API answers with 400.
+- **a required request body.** The strictly stronger case of the one above: against an ASP.NET
+  Core `[ApiController]` with a non-nullable `[FromBody]` parameter, a bodyless request
+  (decision 6, below, sends no body) is rejected by model binding with 400 before the action's
+  `NotFound()` path ever runs — confirmed against the shipped samples' own controllers
+  (`PUT /api/products/{id}`, `POST /api/stock/{sku}/adjustments`), not assumed.
+
+```csharp
+[TestMethod, TestCategory("Contract")]
+[Description("Given Orders, when getOrderById, then 404")]
+public async Task GetOrderById_NotFound()
+{
+    using var request = new HttpRequestMessage(
+        HttpMethod.Get,
+        InTestUrl.Build("/orders/{id}", Guid.NewGuid().ToString()));
+
+    var stopwatch = Stopwatch.StartNew();
+    using var response = await Client.SendAsync(request, TestContext.CancellationToken);
+    stopwatch.Stop();
+
+    await ApiResponseAssertions.ShouldMatchStatusAsync(
+        response, 404, TestId, stopwatch.Elapsed, TestContext.CancellationToken);
+}
+```
+
+`Guid.NewGuid()`, not a fixture value (decision 6): a generated, unmatchable id so no seeded row
+can collide and an unfilled fixture can never block a case that needs no data.
 
 ### Auth contract tests
 
-Where the spec declares `security` on an operation. Deterministic, fixture-free, gate-safe, and
-it catches the accidental-`[AllowAnonymous]` class of bug that reaches production.
+Generated today for every operation that declares `security` at the operation level.
+Deterministic, fixture-free, gate-safe, and it catches the accidental-`[AllowAnonymous]` class
+of bug that reaches production. (Operation-level only — v1-c does not resolve document-level
+`security` inheritance; an operation that relies on it gets a coverage note instead, so the gap
+is visible rather than silent.)
+
+`AuthHandler` is what finally consumes the registered `ITestTokenProvider` (§13): a
+`DelegatingHandler`, attached to `InTestClients.Api` only, that sets `Authorization` from a
+token issued for the ambient identity. It reads that identity from an `AsyncLocal`, the same
+measured reason `RunIdHandler` does above — factory-created handlers are not DI-scoped.
 
 **These split by what the shipped token provider can actually do**, because §13 ships a
 static-token provider only — one token, one identity:
 
-| Test | Needs | Shipped behaviour |
+| Test | Needs | Behaviour |
 |---|---|---|
 | no token → 401 | Nothing. Send no `Authorization` header | **Always generated, always runs** |
-| wrong scope → 403 | A second identity | Generated, but **gated** |
-| wrong tenant → 403 | A second identity | Generated, but **gated** |
+| wrong scope → 403 | A second identity | Generated; skips with a stated reason when unavailable |
 
-The gate is framework-native, the same mechanism §9 already uses for variations:
+Both send a generated, unmatchable id and no body — decision 6, and the reasoning is safety, not
+just tidiness: a `DELETE /orders/{id}` 403 case pointed at a real id succeeds exactly when auth
+is broken, which is the one condition under which the test needs to fail.
+
+**The gate is a runtime guard, not `MemberCondition`.** An earlier draft of this document
+recommended the framework-native mechanism §9 already uses for variations:
 
 ```csharp
 [TestMethod, TestCategory("Contract")]
@@ -993,17 +1057,75 @@ The gate is framework-native, the same mechanism §9 already uses for variations
 public async Task GetOrderById_WrongScope_Returns403() { … }
 ```
 
-`InTestConditions.MultiIdentityAvailable` is `ITestTokenProvider.Identities.Count > 1` — a
-declared capability, not a probe (§13). The shipped static provider returns one identity, so
-these tests gate off by construction. When they are gated they **skip with a stated reason**
-rather than failing for a reason unrelated to the API: a generated suite must not be red on
-day one because of a capability InTest chose not to ship. The count also appears in the
-coverage report, so gated-off auth tests are visible rather than quietly absent:
+**Measured, on MSTest 4.3.3, not to work here.** `MemberCondition` is evaluated *before*
+`[AssemblyInitialize]` runs, so it cannot see anything the DI container built — including
+whatever `ITestTokenProvider` a project registered:
 
 ```
-Notes:
-  auth tests gated             12   (no multi-identity ITestTokenProvider registered)
+09:48:17.759  condition-read Root=NULL      <- MemberCondition evaluated
+09:48:17.774  assembly-initialize            <- 15ms later
+09:48:17.783  plain-test-body-ran
 ```
+
+The gated test was **Skipped and the run reported `Passed!`** — a green suite with auth testing
+silently switched off, worse than the exception one might expect, because nothing surfaces.
+`MemberCondition` remains correct where the condition is knowable without DI — a config or
+environment flag, which is how it is used for variations, below — and wrong wherever the answer
+lives in the service provider.
+
+The wrong-scope case therefore calls a plain method, in the test body, after
+`[AssemblyInitialize]` has genuinely finished:
+
+```csharp
+[TestMethod, TestCategory("Contract")]
+[Description("Given Orders, when getOrderById, then 403")]
+public async Task GetOrderById_Forbidden()
+{
+    RequireMultipleIdentities();
+    using var _ = UseIdentity(IdentitySlot.Secondary);
+
+    using var request = new HttpRequestMessage(
+        HttpMethod.Get,
+        InTestUrl.Build("/orders/{id}", Guid.NewGuid().ToString()));
+
+    var stopwatch = Stopwatch.StartNew();
+    using var response = await Client.SendAsync(request, TestContext.CancellationToken);
+    stopwatch.Stop();
+
+    await ApiResponseAssertions.ShouldMatchStatusAsync(
+        response, 403, TestId, stopwatch.Elapsed, TestContext.CancellationToken);
+}
+```
+
+`RequireMultipleIdentities` (`ApiTestBase`) reads the registered provider's `Identities.Count`
+and calls `Assert.Inconclusive` with a stated reason below two — confirmed to survive verbatim
+into the `.trx`'s `<Message>`, spelled `NotExecuted` there, not the console summary's "Skipped".
+The no-token case needs no such guard and always runs:
+
+```csharp
+[TestMethod, TestCategory("Contract")]
+[Description("Given Orders, when getOrderById, then 401")]
+public async Task GetOrderById_Unauthorized()
+{
+    using var _ = UseIdentity(IdentitySlot.None);
+    // … same request shape, expects 401
+}
+```
+
+**A case selects an identity by *slot*, never by name.** `IdentitySlot` is `Default`,
+`Secondary` or `None` — nothing anywhere emits a literal identity name into a plan or a
+template, because the CLI generates this code long before any provider exists and can never
+know one. `Secondary` resolves to `Identities[1]`; an empty or single-element `Identities`
+resolves `Default` to `InTestIdentities.None`, exactly as if no provider were registered at
+all — a documented state (§13), not an `ArgumentOutOfRangeException` waiting in
+`[TestInitialize]`.
+
+`coverage-report.json` records `authTestsGenerated` and `authTestsGatedOnSecondIdentity` —
+named "gated **on**", not "skipped for want of": whether a generated case is actually skipped is
+decided at runtime, against whatever `ITestTokenProvider` a project registers, and the CLI
+writes this report long before that provider exists. What it can say honestly is how many
+generated cases *require* a second identity to run at all — only the wrong-scope 403 case does;
+the no-token 401 case always runs regardless.
 
 **The cost is now entirely the team's** — rev 2 costed this as "a multi-identity token
 provider" that InTest would ship; rev 3 ships none, so the 401 half is free and the 403 half
@@ -1635,6 +1757,30 @@ endpoint exists.
 **Readiness gating, not per-test retries.** `RetryAttribute` exists (3.8+) and InTest does not
 emit it — retries hide real flakiness, and Microsoft's own guidance is to address the root
 cause.
+
+**Readiness probes on its own client — F10, measured.** An earlier draft attached `AuthHandler`
+to the same named client (`InTestClients.Api`) that both the generated tests *and* the readiness
+probe resolved, on the reasoning that one client was simpler than two. Measured against a
+secured sample with its identity provider unreachable: the handler throws on every request
+through that client, including the anonymous `/health/ready` probe that needed no token at all,
+and the failure surfaces as
+
+```
+ReadinessTimeoutException: Service did not become ready within 120s
+(last response: HttpRequestException)
+```
+
+— a dead identity server reported as a dead API, after a two-minute wait, with nothing in the
+message naming a token, an identity provider, or auth at all. `TestHost.InitializeAsync`
+therefore resolves a second named client, `InTestClients.Readiness`, registered with
+`RunIdHandler` but never `AuthHandler`, and probes on that one instead. `RegisterInTestClients`
+is the single seam both clients are registered through, so this cannot regress by one of the two
+call sites drifting from the other. Guarded by
+`InTestClientsTests.ReadinessProbeDoesNotRunApiClientHandlers` (a handler attached to
+`InTestClients.Api` must never run for a readiness probe on `InTestClients.Readiness`) and, over
+the wire, `GeneratedSuiteExecutionTests.ReadinessProbeSurvivesAThrowingApiHandler` (a throwing
+handler on the API client fails the first *test* that hits it, not readiness, against a real
+generated-and-built suite).
 
 ### Class scope
 

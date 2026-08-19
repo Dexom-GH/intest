@@ -396,7 +396,24 @@ honest guidance is: a generated suite expects a reset database per run, and adop
 `{{runId}}` wherever the uniqueness constraint is free-form. That guidance is now written down,
 with this second-run result as its evidence, under getting-started Phase 5.
 
-### F8 — `ITestTokenProvider` has no consumers · **scaffold and docs fixed; wiring it up is v1-c**
+### F8 — `ITestTokenProvider` has no consumers · **closed in v1-c**
+
+> **Closed.** `AuthHandler` (`src/InTest.Runtime/Neutral/AuthHandler.cs`, `ea2b979`) is the
+> consumer this finding was waiting on: a `DelegatingHandler` attached to `InTestClients.Api`
+> that calls `ITestTokenProvider.GetTokenAsync` for the ambient identity and sets
+> `Authorization`. `TestPlanBuilder` (`1d285c2`) now emits a no-token 401 case and a wrong-scope
+> 403 case for every operation that declares `security`, selecting identities by slot
+> (`IdentitySlot`), never by name. Proven over the wire, not just at the unit level, by
+> `GeneratedSuiteExecutionTests.AuthCasesReceiveRealStatusesOverTheWireAndSuccessCasesStillPass`
+> (`tests/InTest.Golden.Tests/GeneratedSuiteExecutionTests.cs`): a generated suite against a
+> secured stub receives real 401, 403 and 200 responses for its three cases, all three requests
+> reach the stub, and the run exits 0. This is the same negative-control shape this finding was
+> originally opened with, below — restoring the registration returns a suite from uniformly 401
+> to passing — now exercised by the generated tests themselves instead of ~40
+> lines of hand-written scaffold code. The scaffold's own `Register` doc comment (`ea2b979`) and
+> getting-started Phase 3 (this document's own edit) were updated alongside, so the extension
+> point an adopter reads points at a handler that actually runs, and the stand-in
+> `BearerTokenHandler` it used to show is gone rather than merely corrected.
 
 The scaffold's `TestStartup.cs` says "Add configuration providers and an ITestTokenProvider
 implementation here", and getting-started Phase 3 tells adopters to implement it. Nothing calls
@@ -1011,7 +1028,20 @@ what deletes it. `{{fixture:…}}` / `IAssemblyFixture` (v1-a action 5, above) i
 
 ## Defects found
 
-### F9 — following `samples/README.md`'s run commands literally does not reach the documented ports
+### F9 — following `samples/README.md`'s run commands literally does not reach the documented ports · **closed in v1-c**
+
+> **Closed.** `samples/README.md`'s "Running them" section now sets an explicit, distinct
+> `ASPNETCORE_URLS` per project rather than a bare `dotnet run`. Fixed by measurement, the same
+> discipline this finding itself demanded: each of the four sample projects was run alone, with
+> no `ASPNETCORE_URLS` set, and each bound to `http://localhost:5000` — the ASP.NET Core
+> default — confirmed from its own "Now listening on" line, not assumed from the one instance
+> this finding originally measured. Starting a second one alongside the first, still with no
+> port set, failed with `AddressInUse` — the collision this finding's own commands would hit the
+> moment an adopter tried to run more than one at a time, which `Orders.Api` needing
+> `Identity.Server` up makes the ordinary case, not an edge one. The replacement commands
+> (`http://localhost:5081`–`5084`) were run concurrently and all four answered `/health/ready`
+> with 200 at once. No InTest-side change; the fix is entirely `samples/README.md`, as this
+> finding predicted.
 
 ```bash
 dotnet run --project samples/Catalog.Api        # http://localhost:5081
@@ -1024,12 +1054,26 @@ one) must have set `ASPNETCORE_URLS` externally to reach the documented addresse
 records that. Followed as an adopter would follow it — copy the command, run it — the README's
 own worked example does not reach itself.
 
-**Not fixed here** — samples are explicitly out of scope for what this task may edit, and fixing
-it is a one-line addition to `samples/README.md` (`ASPNETCORE_URLS=http://localhost:5081` before
-each command, or a `launchSettings.json` per project) rather than anything InTest-side. Recorded
-so the next phase that touches `samples/` closes it.
+**Not fixed here** — samples were explicitly out of scope for what the v1-b task above could
+edit; see the closure note above this section for the fix, made when v1-c next touched
+`samples/`, exactly as recorded here it would be.
 
-### F10 — Phase 3's auth `DelegatingHandler` is registered on the same client the readiness probe uses, so a token failure surfaces as a misleading readiness timeout
+### F10 — Phase 3's auth `DelegatingHandler` is registered on the same client the readiness probe uses, so a token failure surfaces as a misleading readiness timeout · **closed in v1-c**
+
+> **Closed.** `TestHost.InitializeAsync` now resolves a second named client,
+> `InTestClients.Readiness`, registered with `RunIdHandler` but never `AuthHandler`
+> (`RegisterInTestClients`, `232cf46`/`c672db5`), and probes readiness on it instead of
+> `InTestClients.Api`. This is exactly the "obvious alternative" this finding named and
+> explained was not made here — now made. Guarded two ways: `InTestClientsTests.
+> ReadinessProbeDoesNotRunApiClientHandlers` proves, at the registration seam itself, that a
+> handler attached to `InTestClients.Api` never runs for a readiness probe resolved from
+> `InTestClients.Readiness`; `GeneratedSuiteExecutionTests.ReadinessProbeSurvivesAThrowingApiHandler`
+> proves it over the wire, against a real generated-and-built suite with a throwing handler
+> attached to the API client — the run's output never contains `ReadinessTimeoutException`, and
+> the first *test* that hits the throwing handler (`GetStatus_Contract`) fails with the
+> handler's own message, not readiness. getting-started Phase 3 was rewritten alongside (this
+> document's own edit) to state the guarantee plainly, next to the auth example, rather than
+> leaving it to be rediscovered.
 
 Following getting-started Phase 3's own worked example exactly —
 `services.AddHttpClient(InTestClients.Api).AddHttpMessageHandler<BearerTokenHandler>();` — attaches
@@ -1067,8 +1111,9 @@ it would be exactly the kind of edit this task's own rules say to report rather 
 Recorded as the concrete fix candidate for whichever phase next touches `TestHost`'s readiness
 wiring, rather than left as an unnamed possibility.
 
-**Not fixed here**, same reasoning as F9 — a docs-only fix, recorded for the phase that next
-touches getting-started Phase 3.
+**Not fixed here** at the time — both the runtime change above and the docs-only note were
+recorded rather than made, for the same out-of-scope reasoning as F9. See the closure note at
+the top of this section for what v1-c did with both.
 
 ## Environment note, not an InTest finding: this machine had an untrusted active dev certificate
 
@@ -1095,11 +1140,11 @@ time they stand up `Identity.Server` locally, and nothing currently warns about 
 | # | Action | Owner phase | Status |
 |---|---|---|---|
 | 1 | F7 — `{{fixture:…}}` / `IAssemblyFixture` closes both cases F7 named | v1-b | **Closed** — this run: two-run pass, negative control, drain-isolation run |
-| 2 | F9 — add the missing `ASPNETCORE_URLS` (or a `launchSettings.json` per project) to `samples/README.md`'s run commands | next phase touching `samples/` | Open |
-| 3 | F10 — note in getting-started Phase 3, next to the `DelegatingHandler` example, that it shares the readiness client and a token failure there reads as a plain readiness timeout | next phase touching getting-started Phase 3 | Open |
-| 4 | F10 — give the readiness probe its own client, decoupled from any team-registered auth handler | next phase touching `TestHost`'s readiness wiring | Open, candidate fix named above |
+| 2 | F9 — add the missing `ASPNETCORE_URLS` (or a `launchSettings.json` per project) to `samples/README.md`'s run commands | next phase touching `samples/` | **Closed** — v1-c, see F9's closure note above |
+| 3 | F10 — note in getting-started Phase 3, next to the `DelegatingHandler` example, that it shares the readiness client and a token failure there reads as a plain readiness timeout | next phase touching getting-started Phase 3 | **Closed** — v1-c, superseded: the stand-in example is gone, not annotated (see F10's closure note above and getting-started's Auth section) |
+| 4 | F10 — give the readiness probe its own client, decoupled from any team-registered auth handler | next phase touching `TestHost`'s readiness wiring | **Closed** — v1-c, `InTestClients.Readiness` (see F10's closure note above) |
 | 5 | The product-row leak (`CatalogSeedFixture` creates a product every run with no way to delete it) is a case §14's sweeper needs to cover explicitly, and getting-started's `IAssemblyFixture` section should say so | getting-started docs / v1-f | Open |
-| 6 | F8 — actually consume `ITestTokenProvider` from the generated template | v1-c | Open, carried from v1-a action 3, unchanged by this run |
+| 6 | F8 — actually consume `ITestTokenProvider` from the generated template | v1-c | **Closed** — v1-c, see F8's closure note above |
 | 7 | `intest survey` should predict from **total request-body leaf properties + path parameters** | v1-f | Open, carried from v1-a action 6, unchanged by this run |
 | 8 | Merge `allOf` composition (`[{$ref: Base}, {…}]`) rather than treating it as an ambiguous union | when a real spec needs it | Open, carried from v1-a action 7, unchanged by this run |
 
@@ -1124,9 +1169,11 @@ Closed by v1-b:
 
 Still open, stated rather than glossed:
 
-- **No auth tests were generated**, because v1-a does not generate them. Orders declares
-  `security` on all 7 operations, so it is ready for v1-c — but see F8: the token plumbing
-  those tests will need does not exist yet either.
+- **No auth tests were generated in v0/v1-a/v1-b**, because none of those phases generate them.
+  Orders declares `security` on all 7 operations, so it was ready the moment v1-c's generator
+  shipped one — see F8's closure note above for what v1-c built and its own evidence, over the
+  wire, that it works. Not the same claim as a fresh acceptance run against `samples/Orders.Api`
+  itself, which this document has not recorded since v1-a's 7-of-7.
 - **No pipeline run.** All runs were local. "In a real pipeline" remains unmet.
 - **`X-Test-Run-Id` was not verified in server-side telemetry.** The header is sent, but no
   sink was configured to confirm arrival.

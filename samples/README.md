@@ -47,12 +47,24 @@ without fixtures — which is what made a v0 acceptance run possible before fixt
 
 ## Running them
 
+None of the four sets a port in source, an `appsettings.json`, or a `launchSettings.json` (there
+is none). Run any one of them exactly as written below and it binds to the ASP.NET Core
+default, `http://localhost:5000` — confirmed by running each and reading its own "Now listening
+on" line, not assumed. Since all four share that same default, running more than one at a time
+needs an explicit, distinct `ASPNETCORE_URLS` per project — and more than one at a time is the
+ordinary case, since `Orders.Api` needs `Identity.Server` reachable to validate tokens:
+
 ```bash
-dotnet run --project samples/Catalog.Api        # http://localhost:5081
-dotnet run --project samples/Identity.Server    # required only by Orders.Api
-dotnet run --project samples/Orders.Api
-dotnet run --project samples/Inventory.Api
+ASPNETCORE_URLS="http://localhost:5081" dotnet run --project samples/Catalog.Api
+ASPNETCORE_URLS="http://localhost:5084" dotnet run --project samples/Identity.Server    # required only by Orders.Api
+ASPNETCORE_URLS="http://localhost:5082" dotnet run --project samples/Orders.Api
+ASPNETCORE_URLS="http://localhost:5083" dotnet run --project samples/Inventory.Api
 ```
+
+Confirmed: all four stay up and answer `/health/ready` with the ports above set concurrently.
+Pick different ports freely — nothing below depends on these specific numbers — but each
+project's `Api:BaseUrl` (or `Identity:Authority`/`IdentityServer:IssuerUri` for the identity
+pair) must then point at whatever you actually chose.
 
 Each exposes `GET /health/ready`. Each writes its OpenAPI document beside its project file at
 build time, so `intest` can read an artifact rather than needing a running instance.
