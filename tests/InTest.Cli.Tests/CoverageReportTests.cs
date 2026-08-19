@@ -13,7 +13,8 @@ public class CoverageReportTests
         [new TestClassPlan("OrdersTests", "Orders",
             [new TestCasePlan("A_Contract", "d", "a", true, "GET", "/a", [], 200, "Order", "Contract"),
              new TestCasePlan("B_Contract", "d", "b", false, "GET", "/b", [], 204, null, "Contract")])],
-        [new SkippedOperation("c", "request body media type(s) multipart/form-data not supported in v0")]);
+        [new SkippedOperation("c", "request body media type(s) multipart/form-data not supported in v0")],
+        []);
 
     [TestMethod]
     public void CountsGeneratedAndSkippedOperations()
@@ -47,7 +48,8 @@ public class CoverageReportTests
     public void CarriesAnUnusableOperationIdSkip()
     {
         var plan = new TestPlan("Api", [],
-            [new SkippedOperation("Orders/Create", "operationId 'Orders/Create' cannot be a fixture filename: it contains '/'.")]);
+            [new SkippedOperation("Orders/Create", "operationId 'Orders/Create' cannot be a fixture filename: it contains '/'.")],
+            []);
 
         var json = CoverageReport.ToJson(plan);
 

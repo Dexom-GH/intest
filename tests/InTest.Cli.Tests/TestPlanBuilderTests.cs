@@ -245,12 +245,59 @@ public class TestPlanBuilderTests
     }
 
     [TestMethod]
-    public async Task TheDeclaredErrorMethodNameIsStableAcrossRebuilds()
+    public async Task TheDeclaredErrorMethodNameDoesNotMoveWhenAnUnrelatedOperationIsAdded()
     {
-        var first = (await BuildAsync(SpecDeclaring404)).Classes.SelectMany(c => c.Cases).Single(c => c.ExpectedStatus == 404);
-        var second = (await BuildAsync(SpecDeclaring404)).Classes.SelectMany(c => c.Cases).Single(c => c.ExpectedStatus == 404);
+        // Decision 4 warns that keying the dedupe machinery on operation identity + role must
+        // never let the *number* or *order* of other declared-error cases in the document shift
+        // a name that has nothing to do with them — only a genuine name collision may add a
+        // suffix. Rebuilding the same document twice (the previous shape of this test) cannot
+        // exercise that: TestPlanBuilder.Build is a pure function, so identical input trivially
+        // produces identical output regardless of how names are derived. This spec instead adds
+        // an unrelated operation — also declaring 404, also with a path parameter, ordered before
+        // "getOrderById" in the document — and checks that getOrderById's declared-error name is
+        // unaffected. An implementation that assigns the "_NotFound" suffix by counting declared-
+        // error cases in processing order, rather than keying strictly on operation identity,
+        // fails this: getCustomerById's declared-error case is now first in doc order, so
+        // getOrderById's would shift.
+        const string specWithAPrecedingUnrelated404 = """
+        {
+          "openapi": "3.0.3",
+          "info": { "title": "Orders", "version": "1.0" },
+          "paths": {
+            "/customers/{id}": {
+              "get": {
+                "operationId": "getCustomerById",
+                "tags": ["Customers"],
+                "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+                "responses": {
+                  "200": { "description": "ok", "content": { "application/json": {
+                    "schema": { "$ref": "#/components/schemas/Order" } } } },
+                  "404": { "description": "not found" }
+                }
+              }
+            },
+            "/orders/{id}": {
+              "get": {
+                "operationId": "getOrderById",
+                "tags": ["Orders"],
+                "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+                "responses": {
+                  "200": { "description": "ok", "content": { "application/json": {
+                    "schema": { "$ref": "#/components/schemas/Order" } } } },
+                  "404": { "description": "not found" }
+                }
+              }
+            }
+          },
+          "components": { "schemas": { "Order": { "type": "object" } } }
+        }
+        """;
 
-        first.MethodName.ShouldBe(second.MethodName);
+        var plan = await BuildAsync(specWithAPrecedingUnrelated404);
+        var notFound = plan.Classes.SelectMany(c => c.Cases)
+            .Single(c => c.OperationKey == "getOrderById" && c.Role == CaseRole.DeclaredError);
+
+        notFound.MethodName.ShouldBe("GetOrderById_NotFound");
     }
 
     [TestMethod]
@@ -373,7 +420,13 @@ public class TestPlanBuilderTests
         cases.Count.ShouldBe(1, "the success case must still generate — only the declared-error case is affected");
         cases.ShouldNotContain(c => c.Role == CaseRole.DeclaredError);
 
-        plan.Skipped.ShouldContain(s => s.OperationKey == "listOrders" && s.Reason.Contains("404"),
+        // §12: skips remove tests, notes do not. listOrders' success case is generated and runs,
+        // so it must never appear in Skipped — GenerateCommand's "Skipped N operation(s)" line
+        // and coverage-report.json's `skipped` array both read that list verbatim, and either
+        // would misreport a live, passing operation as skipped.
+        plan.Skipped.ShouldNotContain(s => s.OperationKey == "listOrders");
+
+        plan.Notes.ShouldContain(n => n.OperationKey == "listOrders" && n.Reason.Contains("404"),
             "a silently dropped 404 case is indistinguishable from a bug");
     }
 

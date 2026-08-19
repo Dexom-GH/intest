@@ -26,6 +26,7 @@ public static class TestPlanBuilder
         ArgumentNullException.ThrowIfNull(document);
 
         var skipped = new List<SkippedOperation>();
+        var notes = new List<CoverageNote>();
         var draft = new List<(string Tag, TestCasePlan Case)>();
         var proposedNames = new Dictionary<string, string>(StringComparer.Ordinal);
 
@@ -98,8 +99,12 @@ public static class TestPlanBuilder
                     if (pathParameterNames.Count == 0)
                     {
                         // Nowhere to put an unmatchable value — telling a lookup query parameter
-                        // from a filter is itself a guess, so this is noted rather than guessed at.
-                        skipped.Add(new SkippedOperation(key.Value,
+                        // from a filter is itself a guess. The operation's success case above
+                        // still generated and runs, so this is a *note*, not a skip (§12): adding
+                        // it to `skipped` would make GenerateCommand report a live, passing
+                        // operation as skipped, and put it in coverage-report.json's `skipped`
+                        // array instead of the artefact `--check` would actually expect it in.
+                        notes.Add(new CoverageNote(key.Value,
                             $"declares {NotFoundStatus} but has no path parameter to target with an unmatchable value"));
                     }
                     else
@@ -145,7 +150,8 @@ public static class TestPlanBuilder
         return new TestPlan(
             document.Info?.Title ?? "Api",
             classes,
-            skipped.OrderBy(s => s.OperationKey, StringComparer.Ordinal).ToList());
+            skipped.OrderBy(s => s.OperationKey, StringComparer.Ordinal).ToList(),
+            notes.OrderBy(n => n.OperationKey, StringComparer.Ordinal).ToList());
     }
 
     /// <summary>

@@ -11,6 +11,7 @@ public class CommonPathPrefixTests
         "Api",
         [new TestClassPlan("T", "T", paths.Select((p, i) =>
             new TestCasePlan($"M{i}", "d", $"op{i}", false, "GET", p, [], 200, null, "Contract")).ToList())],
+        [],
         []);
 
     [TestMethod]
@@ -40,6 +41,6 @@ public class CommonPathPrefixTests
     [TestMethod]
     public void ReturnsEmptyForAnEmptyPlan()
     {
-        GenerateCommand.CommonPathPrefix(new TestPlan("Api", [], [])).ShouldBe(string.Empty);
+        GenerateCommand.CommonPathPrefix(new TestPlan("Api", [], [], [])).ShouldBe(string.Empty);
     }
 }
