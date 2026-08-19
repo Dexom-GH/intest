@@ -79,13 +79,20 @@ public static class TestHost
         var services = new ServiceCollection();
         services.AddSingleton(Configuration);
         services.AddTransient(_ => new RunIdHandler(() => RunIdValue));
-        services.AddHttpClient(InTestClients.Api, client =>
-                {
-                    client.BaseAddress = InTestUrl.NormalizeBase(
-                        Configuration["Api:BaseUrl"]
-                        ?? throw new InvalidOperationException(
-                            $"Api:BaseUrl is not configured for profile '{Profile}'."));
-                })
+        var baseUrl = InTestUrl.NormalizeBase(
+            Configuration["Api:BaseUrl"]
+            ?? throw new InvalidOperationException(
+                $"Api:BaseUrl is not configured for profile '{Profile}'."));
+
+        services.AddHttpClient(InTestClients.Api, client => client.BaseAddress = baseUrl)
+                .AddHttpMessageHandler<RunIdHandler>();
+
+        // Readiness gets its own client, registered before ConfigureServices runs so an
+        // adopter's ConfigureServices can only ever reach InTestClients.Api, never this one
+        // (F10). RunIdHandler stays: probe traffic should still carry X-Test-Run-Id and remain
+        // traceable, and it never throws regardless of identity-provider health, unlike an auth
+        // handler would.
+        services.AddHttpClient(InTestClients.Readiness, client => client.BaseAddress = baseUrl)
                 .AddHttpMessageHandler<RunIdHandler>();
 
         ConfigureServices?.Invoke(services, Configuration);
@@ -102,7 +109,11 @@ public static class TestHost
         Configuration.GetSection("InTest:Readiness").Bind(readiness);
 
         using var scope = Root.CreateScope();
-        var client = scope.ServiceProvider.GetRequiredService<IHttpClientFactory>().CreateClient(InTestClients.Api);
+
+        // InTestClients.Readiness, not .Api (F10): probing on the API client meant an adopter's
+        // auth handler ran on the anonymous /health/ready request too, so an unreachable identity
+        // provider surfaced as a 120-second "dead API" instead of the auth failure it actually was.
+        var client = scope.ServiceProvider.GetRequiredService<IHttpClientFactory>().CreateClient(InTestClients.Readiness);
         await Readiness.WaitAsync(client, readiness, cancellationToken).ConfigureAwait(false);
 
         // The reorder that is this task's whole substance (v1-b decision 1): seeding needs a service

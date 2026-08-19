@@ -223,6 +223,70 @@ public class GeneratedSuiteExecutionTests
         test.ExitCode.ShouldBe(0, test.Output);
     }
 
+    /// <summary>
+    /// F10 inverted (Task 1, Step 3). Before the readiness client existed, this exact scenario —
+    /// a throwing handler on <c>InTestClients.Api</c>, exactly where an adopter's own bearer
+    /// handler attaches via <c>TestStartup.cs</c>'s <c>Register</c> hook — made
+    /// <c>TestHost.InitializeAsync</c> burn the full readiness timeout and fail with
+    /// <c>ReadinessTimeoutException</c>, misreporting an unreachable identity provider as a dead
+    /// API. Now the probe runs on <c>InTestClients.Readiness</c>, which carries no such handler,
+    /// so readiness succeeds and the throwing handler's own exception surfaces where it actually
+    /// belongs: on the first generated test that sends a request through
+    /// <c>InTestClients.Api</c>.
+    /// <para>
+    /// Both halves matter. Asserting only "the suite failed" would also be satisfied by a
+    /// readiness timeout — exactly the bug this guards against — so this asserts readiness was
+    /// never the failure (no <c>ReadinessTimeoutException</c> anywhere in the run) <em>and</em>
+    /// that <c>GetStatus_Contract</c> specifically failed, carrying the throwing handler's own
+    /// message, not merely that something, somewhere, went wrong.
+    /// </para>
+    /// </summary>
+    [TestMethod]
+    public async Task ReadinessProbeSurvivesAThrowingApiHandler()
+    {
+        InitCommand.Run(_root, "Stub.ApiTests", "spec.json").ShouldBe(0);
+        UseProjectReferenceInsteadOfPackage();
+        PointAtStub();
+
+        (await FixturesRepairCommand.RunAsync(_root, CancellationToken.None)).ShouldBe(0);
+        (await GenerateCommand.RunAsync(_root, CancellationToken.None)).ShouldBe(0);
+
+        AttachThrowingHandlerToApiClient();
+
+        var build = await RunAsync("dotnet", $"build \"{_root}\" --nologo -v q");
+        build.ExitCode.ShouldBe(0, $"generated project failed to build:{Environment.NewLine}{build.Output}");
+
+        var resultsDir = Path.Combine(_root, "TestResults");
+        var test = await RunAsync("dotnet",
+            $"test \"{_root}\" --no-build --nologo --logger \"trx;LogFileName=results.trx\" --results-directory \"{resultsDir}\"");
+
+        // The misdiagnosis this task exists to close: readiness must never be what failed here.
+        test.Output.ShouldNotContain("ReadinessTimeoutException",
+            customMessage: $"the readiness probe ran on a client carrying the throwing handler — F10 regressed:{Environment.NewLine}{test.Output}");
+
+        var trxPath = Directory.GetFiles(resultsDir, "results.trx", SearchOption.AllDirectories)
+            .ShouldHaveSingleItem($"expected exactly one results.trx under {resultsDir}:{Environment.NewLine}{test.Output}");
+
+        var trx = XDocument.Load(trxPath);
+        var statusResult = trx.Descendants()
+            .Where(e => e.Name.LocalName == "UnitTestResult")
+            .SingleOrDefault(e => (e.Attribute("testName")?.Value ?? "").Contains("GetStatus_Contract", StringComparison.Ordinal));
+
+        statusResult.ShouldNotBeNull($"GetStatus_Contract did not appear in the trx at all:{Environment.NewLine}{test.Output}");
+        statusResult!.Attribute("outcome")?.Value.ShouldBe("Failed",
+            $"GetStatus_Contract should fail on the throwing handler's own exception, not pass or be skipped:{Environment.NewLine}{test.Output}");
+
+        // The actual failure, not just "some" failure: the throwing handler's own message must
+        // reach the test's own failure output, proving the first request — not readiness — is
+        // where this failed.
+        var failureText = statusResult.Descendants().Where(e => e.Name.LocalName == "Message")
+            .Select(e => e.Value).FirstOrDefault() ?? "";
+        failureText.ShouldContain("identity provider unreachable",
+            customMessage: $"GetStatus_Contract failed for an unexpected reason:{Environment.NewLine}{test.Output}");
+
+        test.ExitCode.ShouldBe(1, test.Output);
+    }
+
     [TestMethod]
     public async Task ScaffoldedConfigurationTravelsToTheOutputDirectory()
     {
@@ -719,6 +783,29 @@ public class GeneratedSuiteExecutionTests
         File.WriteAllText(testStartupPath, testStartup.Replace(
             placeholder,
             $"services.AddSingleton<IAssemblyFixture, {typeName}>();",
+            StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// Writes <see cref="GoldenAuthHandlerSources.AlwaysThrowsHandler"/> into the project and
+    /// wires it onto <c>InTestClients.Api</c> in <c>TestStartup.cs</c>'s <c>Register</c> hook —
+    /// the same hook, same client, the scaffold's own doc comment names for a real bearer
+    /// handler ("A secured API needs a DelegatingHandler appended to InTestClients.Api"). Never
+    /// touches <c>InTestClients.Readiness</c>: that omission is the entire point of Task 1.
+    /// </summary>
+    private void AttachThrowingHandlerToApiClient()
+    {
+        File.WriteAllText(Path.Combine(_root, "AlwaysThrowsHandler.cs"), GoldenAuthHandlerSources.AlwaysThrowsHandler);
+
+        var testStartupPath = Path.Combine(_root, "TestStartup.cs");
+        var testStartup = File.ReadAllText(testStartupPath);
+        const string anchor = "// Per-request fixtures: path and query parameter values live in fixtures/, not";
+        testStartup.ShouldContain(anchor,
+            customMessage: "the scaffolded Register method's comment must still be present to anchor this edit");
+
+        File.WriteAllText(testStartupPath, testStartup.Replace(
+            anchor,
+            "services.AddTransient<AlwaysThrowsHandler>();\n        services.AddHttpClient(InTestClients.Api).AddHttpMessageHandler<AlwaysThrowsHandler>();\n\n        " + anchor,
             StringComparison.Ordinal));
     }
 
