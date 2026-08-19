@@ -9,6 +9,7 @@ forward" list at the end is always the current one.
 | v0 | 2026-08-17 | `bec4ee1` + F1 fix | Catalog **6 of 9**; Orders and Inventory generated but never run |
 | v1-a | 2026-08-17 | `466e118` | All three run live: **22 of 22**; **44 sentinels** filled by hand |
 | v1-b | 2026-08-19 (UTC) | `f07ce4c` + this commit | Catalog **9 of 9 twice, sequentially** (not concurrently — §11), a negative control reproducing F7 on the same suite/database with the fixture unregistered, and a drain-isolation run proving cleanup, not a test, deletes the seeded row. **F7 closed** |
+| v1-c | 2026-08-19 (UTC) | `f09f2d5` + this commit | Orders live against a real Duende identity server: 401s real, write-scope 403s real (**F8 closed for real**), a dead identity server fails by name, not as a readiness timeout (**F10 closed for real**). Two new findings the live run — not the unit suite — exposed: 4 of 7 wrong-scope 403 tests cannot pass against the sample's only identity pair, because read operations need no scope the read-only identity lacks (**F11**); a mis-scoped write request 415s, not the 400 decision 6 predicted (**F12**). Catalog **13 of 13 twice**, Inventory **9 of 9 twice**, neither gains an auth test — v1-b's guarantee survives |
 
 ---
 
@@ -1186,13 +1187,19 @@ Closed by v1-b:
   license key for the Duende software...`) — `samples/Identity.Server` was started fresh for
   this acceptance run rather than reusing an already-running instance.
 
+Closed by v1-c:
+
+- ~~No auth tests were generated in v0/v1-a/v1-b, and no fresh acceptance run against
+  `samples/Orders.Api` itself had confirmed F8's golden-suite proof over the wire.~~ Closed —
+  see the v1-c acceptance run below: 24 tests generated live against Orders, 401s and 3 of 7
+  403s proven real (F11 records why the other 4 cannot be, against this sample's identity
+  pair), and the write-scope 403s proven able to fail (F12 records the exact status the
+  prediction got wrong).
+- ~~Inventory had no twice-run proof — only Catalog did, from v1-b.~~ Closed — see the v1-c
+  acceptance run below, `InventorySeedFixture`.
+
 Still open, stated rather than glossed:
 
-- **No auth tests were generated in v0/v1-a/v1-b**, because none of those phases generate them.
-  Orders declares `security` on all 7 operations, so it was ready the moment v1-c's generator
-  shipped one — see F8's closure note above for what v1-c built and its own evidence, over the
-  wire, that it works. Not the same claim as a fresh acceptance run against `samples/Orders.Api`
-  itself, which this document has not recorded since v1-a's 7-of-7.
 - **No pipeline run.** All runs were local. "In a real pipeline" remains unmet.
 - **`X-Test-Run-Id` was not verified in server-side telemetry.** The header is sent, but no
   sink was configured to confirm arrival.
@@ -1213,3 +1220,334 @@ Still open, stated rather than glossed:
 - **This run proves sequential repeatability only.** Both `dotnet test` invocations always ran
   one after the other, never concurrently — §11 states cross-process coordination is unsolved at
   this layer, and nothing here touches that.
+- **The wrong-scope 403 case assumes the Secondary identity lacks every scope any secured
+  operation needs — undocumented, and false for a "full access vs. read-only" identity pair on
+  its own read-scoped operations (F11).** Neither `TestPlanBuilder` nor `ITestTokenProvider`'s
+  own doc comment states this precondition; a "full access vs. read-only" split — arguably the
+  most common real-world shape — silently produces 4 unprovable wrong-scope 403 tests for every
+  3 provable ones on `samples/Orders.Api`. See "v1-c actions" below.
+- **Decision 6's predicted status for a mis-scoped, bodyless `POST` is wrong: 415, not 400
+  (F12).** `DELETE`'s prediction (404) is correct — the difference is `[ApiController]` model
+  binding returning 415 for a missing `Content-Type` before validation (400's source) ever
+  runs. Not yet corrected anywhere the prediction is repeated (§9, getting-started, this plan's
+  own decision 6 text). See "v1-c actions" below.
+- **`InventorySeedFixture` inserts directly into `inventory.db` rather than through
+  `Inventory.Api`'s own HTTP surface**, because `StockController` has no create endpoint —
+  unlike `CatalogSeedFixture`, which seeds entirely over HTTP. Not exercised: whether a direct-
+  write seeding pattern like this is worth naming as a supported shape in getting-started's
+  `IAssemblyFixture` section, alongside the HTTP-only pattern it currently shows.
+
+---
+
+# v1-c acceptance run — auth tests against a live identity server
+
+**Date:** 2026-08-19 (UTC) · **Commit:** `f09f2d5` + this commit
+**Task:** v1-c plan Task 8 — the verdict task. Tasks 1–7 (`AuthHandler`, `InTestClients.Readiness`,
+`TestPlanBuilder`'s declared-error and auth cases, the runtime multi-identity guard, coverage
+reporting) were all green in isolation before this run started. This is the only task that proves
+any of it works against a real identity server rather than a mock or the golden-suite stub.
+
+Unit suite before the run: **394 passing, 0 failing** — Architecture 2, Cli 193, Runtime 186,
+Golden 13, confirmed by running it before touching anything below. Unchanged after — this task
+generates and runs suites outside the repository (per its own instructions) and edits only
+documentation inside it.
+
+## Results
+
+| Step | What | Result |
+|---|---|---|
+| 1 | Two-identity `ITestTokenProvider` for Orders, against `samples/Identity.Server`'s two Duende clients | `OrdersTokenProvider` — `orders-client` (full access), `orders-readonly` (read only) |
+| 2 | Orders live, both identities correctly scoped | **20 of 24** — every success, every declared-404, every no-token 401, and the 3 auth-403 cases whose operation actually needs the write scope. 4 auth-403 cases fail — **F11**, not a defect in this run's setup |
+| 3 | Orders live, `orders-readonly` slot mis-scoped to request `orders-client`'s token | **17 of 24** — the 3 previously-passing write-scope 403s now fail, with the status decision 6 predicts for `DELETE` and a different one for `POST` — **F12** |
+| 4 | Orders live, `Identity.Server` stopped | **7 of 24** (the 7 no-token 401s only); every other failure names `OrdersTokenProvider`, none is a readiness timeout |
+| 5 | Catalog and Inventory, twice each, same unreset database | **13 of 13 twice**, **9 of 9 twice** — neither generates an auth test |
+
+## Step 1 — the two-identity token provider
+
+`samples/Identity.Server/Config.cs` names two Duende clients precisely for this: `orders-client`
+(`orders.read orders.write`) and `orders-readonly` (`orders.read` only), sharing one secret
+(`sample-secret-not-a-real-credential`). `OrdersTokenProvider` (in the scratch suite, not
+committed — see "Where this task sits" in the plan) implements `ITestTokenProvider` with
+`Identities => ["orders-client", "orders-readonly"]` — index 0 the Default slot every ordinary
+case authenticates as, index 1 the Secondary slot the wrong-scope 403 case selects (decision 7) —
+and requests a client-credentials token from `POST /connect/token` for whichever client id
+`AuthHandler` asks for.
+
+`Api:Audience` had to be set explicitly to `"orders-api"` in `appsettings.json`:
+`TestHost.ResolveAudience` falls back to the base URL's authority (`localhost:5082`) when unset,
+and Identity.Server never issues a token for that audience — every authenticated request would
+401 with a provider that is otherwise entirely correct. Not a defect: `ResolveAudience`'s own doc
+comment names exactly this fallback and why (v1-c Task 2 question (c)); it just has to actually be
+set for a secured sample whose audience isn't its own host.
+
+Sanity-measured before generating anything, the same way `samples/README.md` recommends:
+`GET /api/orders` with no `Authorization` returned `401`; a token from `orders-client` replayed on
+the same request returned `200`.
+
+## Step 2 — Orders live, correctly scoped
+
+Generated: **24 tests across 7 operations** — `coverage-report.json`:
+
+```json
+{
+  "generated": 24, "operationsGenerated": 7,
+  "declaredErrorTestsGenerated": 3, "authTestsGenerated": 14,
+  "authTestsGatedOnSecondIdentity": 7
+}
+```
+
+7 success + 3 declared-404 (the 3 operations with a path parameter — `delete_api_orders_id`,
+`get_api_orders_id`, `get_api_customers_id`) + 14 auth (401 and 403, one pair per operation).
+
+Run against a freshly-started `Orders.Api` (`orders.db` deleted first, so this is a genuinely
+clean comparison basis, the same discipline v1-b used for Catalog):
+
+```
+Passed GetApiCustomersId_Contract [289 ms]
+Failed GetApiCustomersId_Forbidden [104 ms]  → expected 403, got 404
+Passed GetApiCustomersId_NotFound [10 ms]
+Passed GetApiCustomersId_Unauthorized [4 ms]
+Passed GetApiCustomers_Contract [20 ms]
+Failed GetApiCustomers_Forbidden [6 ms]  → expected 403, got 200
+Passed GetApiCustomers_Unauthorized [1 ms]
+Passed PostApiCustomers_Contract [49 ms]
+Passed PostApiCustomers_Forbidden [4 ms]
+Passed PostApiCustomers_Unauthorized [1 ms]
+Passed DeleteApiOrdersId_Contract [25 ms]
+Passed DeleteApiOrdersId_Forbidden [4 ms]
+Passed DeleteApiOrdersId_NotFound [4 ms]
+Passed DeleteApiOrdersId_Unauthorized [1 ms]
+Passed GetApiOrdersId_Contract [80 ms]
+Failed GetApiOrdersId_Forbidden [7 ms]  → expected 403, got 404
+Passed GetApiOrdersId_NotFound [5 ms]
+Passed GetApiOrdersId_Unauthorized [1 ms]
+Passed GetApiOrders_Contract [39 ms]
+Failed GetApiOrders_Forbidden [6 ms]  → expected 403, got 200
+Passed GetApiOrders_Unauthorized [1 ms]
+Passed PostApiOrders_Contract [37 ms]
+Passed PostApiOrders_Forbidden [4 ms]
+Passed PostApiOrders_Unauthorized [1 ms]
+
+Test Run Failed.
+Total tests: 24
+     Passed: 20
+     Failed: 4
+```
+
+**The 4 failures are not a setup mistake — see F11.** Every other case passed.
+
+**The 7 no-token 401s are not passing vacuously.** With no provider registered, every request is
+anonymous and every 401 would go green while everything else went 401-red — that is exactly what
+v1-a's negative control (F8, above) demonstrated. Here the evidence is the opposite shape, in the
+same run: all 7 **success** cases (`*_Contract`) pass alongside the 7 401s, which is only possible
+if the requests the success cases send really do carry a valid, accepted bearer token — an
+anonymous run would fail every one of those 7 too. 401 and 200 both being real in the same run is
+the proof; no separate run is needed to show it, which is why it is stated here rather than left
+for the totals to imply.
+
+## Step 3 — proving the write-scope 403s can fail
+
+`OrdersTokenProvider` was edited so that requesting a token for `"orders-readonly"` requests
+`orders-client`'s token instead — the Secondary slot now points at full access. `Orders.Api`
+restarted fresh (`orders.db` deleted) so the comparison basis matches Step 2's.
+
+```
+Failed PostApiCustomers_Forbidden [7 ms]
+ → expected 403, got 415
+ Body: {"title":"Unsupported Media Type","status":415, …}
+
+Failed DeleteApiOrdersId_Forbidden [7 ms]
+ → expected 403, got 404
+ Body: {"title":"Not Found","status":404, …}
+
+Failed PostApiOrders_Forbidden [4 ms]
+ → expected 403, got 415
+ Body: {"title":"Unsupported Media Type","status":415, …}
+
+Test Run Failed.
+Total tests: 24
+     Passed: 17
+     Failed: 7
+```
+
+The 4 read-scope failures from Step 2 are unchanged (still 404/200/404/200 — mis-scoping the write
+client to also be read-capable changes nothing there, since it already was read-capable). The
+**new** failures are exactly the 3 previously-passing write-scope 403s —
+`DeleteApiOrdersId_Forbidden`, `PostApiOrders_Forbidden`, `PostApiCustomers_Forbidden` — 17 of 24
+instead of 20 of 24.
+
+**`DeleteApiOrdersId_Forbidden` matches decision 6's prediction exactly: `expected 403, got 404`,
+not `204`** — the unmatchable id (decision 6) means the request that is no longer denied still
+finds no row to delete, so nothing was actually deleted by this run.
+
+**`PostApiOrders_Forbidden` and `PostApiCustomers_Forbidden` do not match decision 6's
+prediction.** Decision 6's own text (this plan, above) says a mis-scoped POST should give
+`expected 403, got 400` — "no body is sent". The measured status is **415, not 400** — see F12.
+
+**The trade decision 6 makes, stated plainly:** a *passing* auth test proves the authorization
+check ran and denied — `DeleteApiOrdersId_Forbidden` and the two POST cases passing in Step 2 is
+real evidence Orders.Api's authorization is doing its job. A *failing* one, as here, proves only
+that authorization did not deny — it cannot distinguish "authorization allowed the request" from
+any other rejection downstream (routing, model binding), which is exactly why the failing status
+here is 404/415 rather than a real delete or create. That is the price decision 6 pays for
+guaranteeing a mis-scoped auth test is never destructive, and it costs no more to state than to
+leave implied.
+
+`OrdersTokenProvider` was reverted immediately after this run — restored to requesting
+`orders-readonly`'s own token for `"orders-readonly"` — before Step 4.
+
+## Step 4 — a dead identity server fails by name
+
+`Identity.Server` stopped (`taskkill`); `Orders.Api` and its database left exactly as Step 3
+finished. Rebuilt with the reverted provider, then run:
+
+```
+Failed GetApiCustomersId_Contract [4 s]
+Error Message:
+ Test method Orders.ApiTests.CustomersTests.GetApiCustomersId_Contract threw exception:
+System.InvalidOperationException: OrdersTokenProvider failed to issue a token for identity
+'orders-client': No connection could be made because the target machine actively refused it.
+(localhost:5084) ---> System.Net.Http.HttpRequestException: …
+   at Orders.ApiTests.OrdersTokenProvider.GetTokenAsync(...)
+   at InTest.Runtime.AuthHandler.SendAsync(...)
+```
+
+```
+Passed GetApiCustomersId_Unauthorized [8 ms]
+…
+Total tests: 24
+     Passed: 7
+     Failed: 17
+```
+
+**Every one of the 7 passes is a no-token 401** — `AuthHandler` never calls the provider at all
+for the `InTestIdentities.None` sentinel, so those 7 short-circuit correctly regardless of whether
+Identity.Server is reachable. **All 17 failures name `OrdersTokenProvider` and the identity it
+failed for**, not `ReadinessTimeoutException` — confirmed by grep, zero occurrences anywhere in
+the run's output. Each failing test took ~4s (a real TCP connection-refused round trip, not a
+120-second wait), which is itself corroborating: a masqueraded readiness timeout would have taken
+120s on the *first* test and never reached the rest. **F10 is closed against a real failure, not
+only the golden-suite stub `ReadinessProbeSurvivesAThrowingApiHandler` already covers.**
+
+## Step 5 — Catalog and Inventory unaffected
+
+Neither declares `security`; `coverage-report.json` for both: `"authTestsGenerated": 0`. Both
+scaffolded fresh (`ProjectReference` to `InTest.Runtime`, same substitution v1-a/v1-b/this task's
+Orders suite all make), both started against a freshly-deleted `.db`, both run twice back-to-back
+with nothing reset in between.
+
+**Catalog** reused v1-b's own `CatalogSeedFixture` verbatim (this document's own v1-b section) —
+this task needed the same twice-run guarantee, not a new one:
+
+```
+Run 1: Total tests: 13   Passed: 13
+Run 2: Total tests: 13   Passed: 13
+```
+
+**Inventory had no assembly fixture in v1-a or v1-b — it was never run twice before.**
+`StockController` exposes only `Adjust` and `Delete`, no create endpoint, so
+`Stock_Delete_Contract`'s target (a fixed seed row, ids 1–2) would be gone by the second run
+without a fixture to replace it — the same class of problem F7 named for Catalog. A new
+`InventorySeedFixture` inserts a fresh `StockItem` row directly into `inventory.db` via a minimal
+shadow `DbContext` (not raw SQL — letting EF write `LastCountedAt` is what guarantees
+`Inventory.Api`'s own EF stack reads it back correctly) and publishes its id for
+`Stock_Delete_Contract`; `Stock_Adjust_Contract` uses a fixed `delta: 1` against the permanent
+seed row, safe indefinitely since it only ever increases:
+
+```
+Run 1: Total tests: 9   Passed: 9
+Run 2: Total tests: 9   Passed: 9
+```
+
+Queried directly after both runs: `WGT-0001`'s `quantityOnHand` is 122 (120 + 1 per run), and only
+the two original seed rows (`WGT-0001`, `SPR-0002`) remain — both fixture-seeded rows were deleted
+by their own run's `Stock_Delete_Contract`, exactly as intended.
+
+**v1-b's guarantee survives v1-c's changes to `TestPlanBuilder`, `TestCasePlan` and the
+template.** Neither sample gained a spurious auth test, and Catalog's own repeat-run proof
+(fixture-driven, not incidental) still holds byte-for-byte.
+
+## Defects found
+
+### F11 — the wrong-scope 403 test is generated per operation, not per required scope — 4 of 7 cannot pass against the sample's own identity pair
+
+`TestPlanBuilder` emits a `_Forbidden` case for every operation that declares `security`
+(`TestPlanBuilder.cs:197-239`), unconditionally, independent of which scope that operation's own
+`security` requirement names. Decision 3 gates *whether* the case runs (on identity count) but not
+*whether it can be true* — that depends on the Secondary identity actually lacking whatever scope
+the specific operation needs.
+
+`samples/Orders.Api`'s own `AuthorizeOperationFilter` (measured directly against the generated
+spec) declares:
+
+```
+GET    /api/customers      → ["orders.read"]
+GET    /api/customers/{id} → ["orders.read"]
+GET    /api/orders         → ["orders.read"]
+GET    /api/orders/{id}    → ["orders.read"]
+POST   /api/customers      → ["orders.write"]
+POST   /api/orders         → ["orders.write"]
+DELETE /api/orders/{id}    → ["orders.write"]
+```
+
+`samples/Identity.Server/Config.cs`'s own doc comment names `orders-readonly` "used to prove write
+endpoints return 403" — it was built for exactly 3 of these 7, not all 7. It genuinely has
+`orders.read`, so it is not "wrong scope" for the 4 read-only operations: `GET /api/orders` and
+`GET /api/customers` (no path parameter, decision 6 doesn't apply) return a real `200` with real
+data; `GET /api/orders/{id}` and `GET /api/customers/{id}` (decision 6's unmatchable id) return a
+real `404`. Both are the API behaving correctly under a token that genuinely has the scope it
+needs — the generated test's `expected 403` is simply wrong for these 4, not the sample's fault
+and not this run's setup.
+
+This is not specific to this sample. A "full access vs. read-only" identity pair — the shape
+`Config.cs` chose — is one of the most common real-world role splits, and it produces exactly this
+outcome: every write-scoped operation's wrong-scope 403 is provable, every read-scoped operation's
+is not, for the structural reason that a read-only identity is never "wrong scope" for a read.
+`TestPlanBuilder` has no way to know this at generation time — it never sees real identity
+capabilities, by design (decision 7) — so it cannot restrict the case to write-scoped operations
+only; it would need to stop assuming the Secondary identity is universally wrong instead.
+
+**Not fixed here** — Task 8 is an acceptance run, not an implementation task, and this is a
+generation-logic question, not a runtime one. Recorded as the concrete gap for whichever phase
+next revisits `TestPlanBuilder`'s auth-case generation or `ITestTokenProvider`'s documented
+contract: either state explicitly (getting-started's Auth section, and `ITestTokenProvider.
+Identities`'s own doc comment) that the Secondary identity must lack every scope any secured
+operation could require — not merely "some other identity" — or teach the generator to reason
+about per-operation scope, which decision 7 currently rules out on principle (the CLI never sees
+real identity capabilities).
+
+### F12 — a mis-scoped, bodyless POST 415s, not the 400 decision 6 predicts
+
+Decision 6's own text (this plan) says: `POST /api/orders` mis-scoped gives "`expected 403, got
+400`" because "no body is sent". Measured in Step 3: both `PostApiOrders_Forbidden` and
+`PostApiCustomers_Forbidden` return **415 Unsupported Media Type**, not 400.
+
+The generated request (`Generated/OrdersTests.g.cs`) sets no `request.Content` and no
+`Content-Type` header at all for an auth case — decision 6's "no body" premise is accurate. But
+ASP.NET Core's `[ApiController]` model-binding pipeline returns **415**, not 400, when a request
+declaring a `[FromBody]` parameter arrives with no `Content-Type` header — no input formatter can
+be selected, and that failure is reported before model validation (the source of 400) ever runs.
+`DELETE /api/orders/{id}` has no body parameter at all, so it never enters this path and gives
+exactly the `404` decision 6 predicts — the DELETE case's prediction was correct precisely because
+it doesn't touch this mechanism.
+
+Consequential rather than merely cosmetic: an adopter reading decision 6 (or a future §9 revision
+carrying the same text) and asserting on the literal status `400` for a mis-scoped POST would find
+their own negative-control test failing against reality, the same class of surprise this whole
+task exists to catch before an adopter does.
+
+**Not fixed here**, same reasoning as F11. The concrete fix is textual: decision 6's table (and
+any place that repeats it — §9, getting-started) should read `expected 403, got 415` for a
+mis-scoped POST with no body, not `400`.
+
+## v1-c actions
+
+| # | Action | Owner phase | Status |
+|---|---|---|---|
+| 1 | F8 — actually consume `ITestTokenProvider` from the generated template, proven live against `samples/Orders.Api` and a real Duende identity server, not only the golden-suite stub | v1-c | **Closed** — Steps 1–2 above |
+| 2 | F10 — give the readiness probe its own client, proven by stopping the real `Identity.Server` and reading the failure, not only by the golden-suite stub | v1-c | **Closed** — Step 4 above |
+| 3 | F11 — the wrong-scope 403 case assumes the Secondary identity lacks every scope any secured operation needs; state that requirement explicitly wherever `ITestTokenProvider`/decision 3 is documented, or teach `TestPlanBuilder` to reason per-operation | next phase touching auth-case generation or its docs | Open |
+| 4 | F12 — correct decision 6's predicted status for a mis-scoped, bodyless POST from 400 to 415, everywhere the prediction is repeated (§9, getting-started, this plan) | next phase touching §9 or getting-started's Auth section | Open |
+| 5 | Inventory now has the same twice-run proof Catalog has had since v1-b (`InventorySeedFixture`, Step 5 above) — not previously true, closed incidentally by this task rather than a dedicated one | v1-c | **Closed** — Step 5 above |
+| 6 | README.md line 80 claimed "every declared-error test (404s, 400s)" — decision 5 excludes 400 declared-error tests outright (no deterministic fixture-free trigger). Dropped the "400s" claim | found by Task 7b review, fixed here | **Closed** |
+

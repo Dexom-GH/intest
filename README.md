@@ -77,7 +77,7 @@ In practice that means, on an API with lots of POSTs and few spec examples, your
   examples, so you can size the work in advance instead of discovering it. (Designed, not yet
   built.)
 - A useful suite runs immediately with no fixture work at all: every GET and DELETE contract
-  test, every declared-error test (404s, 400s), and every no-token 401 test needs no body.
+  test, every declared-error test (404s), and every no-token 401 test needs no body.
 
 ## Using it
 
