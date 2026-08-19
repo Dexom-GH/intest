@@ -162,12 +162,12 @@ rule, that step performs real deletes against the sample.
 | `MSTest/InTestClients.cs` *(modify)* | Add `Readiness` alongside `Api` |
 | **Modified** | |
 | `MSTest/TestHost.cs` | Register both clients; resolve the readiness one for probing; expose the token provider |
-| `MSTest/ApiTestBase.cs` | Set and clear the ambient identity per test |
+| `MSTest/ApiTestBase.cs` | Set and clear the ambient identity per test; host `RequireMultipleIdentities()` (Task 5) |
 | `Planning/TestCasePlan.cs` | Carry the expected status' role — success, declared error, or auth — and the identity to use |
 | `Planning/TestPlanBuilder.cs` | Emit declared-error and auth cases |
 | `Rendering/Templates/mstest-class.scriban` | Render them, including the runtime multi-identity guard |
 | `Coverage/CoverageReport.cs` | Count generated and gated auth tests |
-| `Commands/InitCommand.cs` | Scaffold registers a token provider; Phase 3's guidance changes |
+| `Commands/InitCommand.cs` | Scaffold shows a token provider **commented out**; its handler comment changes |
 
 `AuthHandler` and `InTestIdentities` are under `Neutral/`, so §3's portability boundary holds and
 the architecture test stays green. The multi-identity guard is an `ApiTestBase` helper — MSTest
@@ -246,7 +246,7 @@ public async Task SendsNoAuthorizationHeaderForTheNoTokenIdentity()
 }
 ```
 
-- [ ] **Step 2: Three interface questions the plan must answer before you implement**
+- [ ] **Step 2: Four interface questions the plan must answer before you implement**
 
 **a. `Identities` becomes `IReadOnlyList<string>`.** It is `IReadOnlyCollection<string>` today
 (`ITestTokenProvider.cs:14`), which guarantees no order — yet "the default is the provider's
@@ -300,7 +300,17 @@ git commit -m "feat(runtime): auth handler consuming the registered token provid
 
 - [ ] **Step 1: Write the failing tests**
 
-Cover: an operation declaring `404` yields a second case with `ExpectedStatus: 404` · an operation declaring `400` yields one · an operation declaring neither yields only its success case · the method name distinguishes them and is stable (`GetOrderById_NotFound`, not `GetOrderById_Contract2`) · a 404 case takes an **unmatchable generated id**, not a fixture value · declared errors on an operation whose success case was skipped are also skipped, so the two never disagree.
+Cover, for what **is** generated: an operation declaring `404` **and having at least one path parameter** yields a second case with `ExpectedStatus: 404` · the method name distinguishes them and is stable (`GetOrderById_NotFound`, not `GetOrderById_Contract2`) · a 404 case takes an **unmatchable generated id**, not a fixture value · declared errors on an operation whose success case was skipped are also skipped, so the two never disagree.
+
+Cover, for what is **not** — decision 5's exclusions are rules, so each needs a test that fails if
+someone later "helpfully" generates them:
+
+| Spec declares | Expected | Why it would otherwise break |
+|---|---|---|
+| `400` | **No** declared-error case | Nothing fixture-free provokes one; a 400 case sending the valid success request asserts 400 against a 200 forever |
+| `401` or `403` | **No** declared-error case | Task 5's auth cases own these. A declared-error 401 sends a *valid authenticated* request and expects 401 — it fails on every run, and specs declare these routinely |
+| `404`, no path parameter | **No** case, **and a coverage-report note** | Nowhere to put an unmatchable value. Silent omission is indistinguishable from a bug (Task 6) |
+| Neither | Only the success case | — |
 
 ```csharp
 [TestMethod]
@@ -309,7 +319,7 @@ public async Task ANotFoundCaseUsesAnUnmatchableIdRatherThanAFixture()
     var plan = await BuildAsync(SpecDeclaring404);
     var notFound = plan.Classes.SelectMany(c => c.Cases).Single(c => c.ExpectedStatus == 404);
 
-    // A 404 test needs no data, so it must not be blocked by an unfilled fixture. Decision 4.
+    // A 404 test needs no data, so it must not be blocked by an unfilled fixture. Decision 6.
     notFound.NeedsFixture.ShouldBeFalse();
 }
 ```
@@ -352,7 +362,7 @@ dotnet test tests/InTest.Golden.Tests --filter "FullyQualifiedName~GoldenFileTes
 
 Read the regenerated file before committing. It locks in whatever it is handed.
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
 git commit -m "feat(cli): render declared-error contract tests"
@@ -364,24 +374,70 @@ git commit -m "feat(cli): render declared-error contract tests"
 
 **Files:**
 - Modify: `src/InTest.Cli/Planning/TestPlanBuilder.cs`, `src/InTest.Cli/Rendering/Templates/mstest-class.scriban`
-- Create: `src/InTest.Runtime/Neutral/InTestConditions.cs`
+- Modify: `src/InTest.Runtime/MSTest/ApiTestBase.cs` — the `RequireMultipleIdentities()` guard
 - Test: `tests/InTest.Cli.Tests/`, `tests/InTest.Runtime.Tests/`
+
+> **There is no `InTestConditions.cs`.** Decision 3 measured `MemberCondition` to fail silently
+> here and replaced it with a runtime guard. Nothing in this task creates a condition class or
+> emits a `MemberCondition` attribute. The guard lives on `ApiTestBase` because
+> `Assert.Inconclusive` is an MSTest type and must not cross §3's portability boundary.
 
 - [ ] **Step 1: Write the failing tests**
 
-Planning: an operation declaring `security` yields a no-token 401 case · it also yields a wrong-scope 403 case **carrying the gate** · an operation declaring no `security` yields neither · the 403 case names a non-default identity · neither case needs a fixture.
+Planning: an operation declaring `security` yields a no-token 401 case · it also yields a wrong-scope 403 case **carrying the guard call** · an operation declaring no `security` yields neither · the 403 case names a non-default identity · neither case needs a fixture.
 
-Gating: `InTestConditions.MultiIdentityAvailable` is `Identities.Count > 1` · it is false for `StaticTokenProvider`, which advertises one · a gated test skips rather than fails.
+Guarding — the pair that actually exercises `RequireMultipleIdentities()`, one provider each side
+of the boundary:
+
+| Registered provider | `RequireMultipleIdentities()` | Asserted |
+|---|---|---|
+| One identity (what `StaticTokenProvider` advertises) | Skips | Throws `AssertInconclusiveException`, **and its message names the missing capability** |
+| Two identities | Passes through | Returns without throwing; the test body runs |
+
+Asserting the *message*, not just the skip, is the point: "skips with a stated reason" is decision
+3's whole argument for `Assert.Inconclusive` over anything quieter. A skip with an empty reason is
+the silent-switch-off failure decision 3 exists to prevent.
 
 ```csharp
 [TestMethod]
-public void TheShippedProviderGatesTheForbiddenTestsOff()
+public void AOneIdentityProviderSkipsTheForbiddenTestAndSaysWhy()
 {
-    // StaticTokenProvider advertises exactly one identity, so 403 tests gate off by
-    // construction. A suite must not be red on day one for a capability we chose not to ship.
-    InTestConditions.MultiIdentityAvailable.ShouldBeFalse();
+    // Must fail if the guard stops throwing OR stops explaining. A bare ShouldBeFalse on some
+    // condition property would pass just as well with nothing registered at all — which is why
+    // this asserts through the guard, on a provider deliberately built one-identity.
+    using var host = TestHostFixture.With(new FakeTokenProvider("only-one"));
+
+    var ex = Should.Throw<AssertInconclusiveException>(() => host.Base.RequireMultipleIdentities());
+
+    ex.Message.ShouldContain("identit");   // names the capability, not just "skipped"
+    ex.Message.ShouldContain("403");
+}
+
+[TestMethod]
+public void ATwoIdentityProviderLetsTheForbiddenTestRun()
+{
+    using var host = TestHostFixture.With(new FakeTokenProvider("default", "wrong-scope"));
+
+    Should.NotThrow(() => host.Base.RequireMultipleIdentities());
 }
 ```
+
+**Already measured — do not re-litigate, and do not weaken the assertion to match a guess.** A
+runtime `Assert.Inconclusive` carrying a message was run on MSTest 4.3.3 / .NET 10 to confirm the
+reason survives the run:
+
+```
+Passed!  - Failed: 0, Passed: 1, Skipped: 1, Total: 2
+
+trx:  outcome="NotExecuted"  testName="GuardSkipsWithAStatedReason"
+      <Message>Assert.Inconclusive. Skipped: the registered ITestTokenProvider advertises
+               1 identity; a wrong-scope 403 test needs at least 2.</Message>
+```
+
+Two things to carry forward: the message survives **verbatim** into `<ErrorInfo><Message>` with an
+`Assert.Inconclusive. ` prefix, and the `.trx` spells the outcome **`NotExecuted`** — "Skipped" is
+the console summary's word, not the file's. Anything that later parses a `.trx` for gated auth
+tests must match `NotExecuted`.
 
 - [ ] **Step 2: Regenerate the golden file again**
 
@@ -434,7 +490,16 @@ no path parameter** (decision 5). Those last two are why a reader can tell "skip
 applicable" from "never generated" — without them they are indistinguishable, which §12 treats as
 the same failure as a silent skip.
 
-The scaffold's `TestStartup.cs` shows registering an `ITestTokenProvider`, and Phase 3's example must attach `AuthHandler` to `InTestClients.Api` **only** — never to readiness (Task 1). Assert on the registration call, not on prose.
+**The scaffold shows the registration commented out — it must not actually register one.** Task 2(b)
+established that Catalog and Inventory cannot: `StaticTokenProvider` needs a token they have no
+source for, which is why `AuthHandler` no-ops when the provider is absent. A scaffold that registers
+a provider with no token breaks Task 8 Step 5. Follow the precedent already in the same file —
+`InitCommand.cs:138` ships `// services.AddSingleton<IAssemblyFixture, YourFixture>();` commented out
+with the explanation above it. Do the same for `ITestTokenProvider`.
+
+Assert on the emitted text containing the commented registration **and on the scaffold still
+building with no provider registered** — the second is the one that would have caught this.
+`AuthHandler` attaches to `InTestClients.Api` **only**, never to readiness (Task 1).
 
 - [ ] **Step 2–4: Run, implement, re-run, commit**
 
@@ -448,7 +513,10 @@ git commit -m "feat(cli): report auth coverage and scaffold a token provider"
 
 - [ ] **Step 1: §9 — declared-error and auth tests are built**
 
-Remove the deferrals; keep the reasoning. Record decision 4: declared errors come from declared responses, never inferred.
+Remove the deferrals; keep the reasoning. Record decision 5: declared errors come from declared
+responses, never inferred — with its exclusions, since "404 only, and only with a path parameter"
+is the part a future reader will otherwise treat as an oversight. Amend §9's `MemberCondition`
+recommendation with decision 3's measurement.
 
 - [ ] **Step 2: §13 — readiness uses its own client**
 
@@ -492,7 +560,7 @@ git commit -m "docs: declared-error and auth tests are built; F8, F9 and F10 clo
 
 - [ ] **Step 1: Implement a two-identity `ITestTokenProvider` in the generated Orders suite**
 
-`Identities` returns both client ids, so the 403 tests un-gate. Note F9: `samples/README.md`'s documented port is wrong — use the port the app actually binds, and fix the README as part of this task.
+`Identities` returns both client ids, so the 403 tests un-gate. Use the port the app actually binds — **F9's README fix is Task 7 Step 4's, already done by the time you get here**; if the documented port still disagrees with the binding, that is a Task 7 regression, not work to repeat here.
 
 - [ ] **Step 2: Run the Orders suite**
 
@@ -500,7 +568,25 @@ git commit -m "docs: declared-error and auth tests are built; F8, F9 and F10 clo
 
 - [ ] **Step 3: Prove the 403 tests can fail**
 
-Point the read-only identity at the full-access client. The write-scope 403 tests must now **fail** — because the request succeeds where a 403 was expected. Restore. A gate that passes whatever the token is, is not testing auth.
+Point the read-only identity at the full-access client, run, then restore. The write-scope 403
+tests must **fail** — but record the reason precisely, because decision 6 changed what they
+produce. Every auth case sends an unmatchable id and no body, so the request that is no longer
+denied does not succeed either:
+
+| Case | Mis-scoped result | Not |
+|---|---|---|
+| `DELETE /api/orders/{id}` | `expected 403, got 404` | `204` — the id matches no row |
+| `POST /api/orders` | `expected 403, got 400` | `201` — no body is sent |
+
+**That is the proof**: the authorization check is no longer denying, so the request now reaches
+routing and model binding, which are what answer 404 and 400. Expect those two statuses by name in
+the log — "the test failed" alone would not distinguish this from a broken sample.
+
+Note the trade decision 6 makes, so the acceptance log states it rather than implying more than
+was shown: a **passing** auth test still proves the authz check ran and denied. A **failing** one
+proves only that it did not deny — it cannot separate "authz allowed the request" from any other
+rejection downstream. That is the right trade for never pointing a delete at a real row, and it
+costs one sentence to say.
 
 - [ ] **Step 4: Confirm F10 is closed against a real failure**
 
