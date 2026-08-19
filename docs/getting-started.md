@@ -530,56 +530,12 @@ an agent timeout. Everything is tagged with a run ID whose timestamp is UTC, so 
 sweeper can delete anything older than a day using the ID alone. Write one. Without it,
 cancelled pipelines slowly fill your environment with orphans nobody can reproduce locally.
 
+To confirm cleanup is running at all, run `dotnet test --logger "console;verbosity=detailed"`
+once a fixture has registered at least one `OnCleanup`, and look for
+`InTest fixture cleanup: drained N action(s).` Unlike `[AssemblyInitialize]` output on a passing
+run (above), that line does reach both the console at that verbosity and the `.trx`'s last test
+result — so seeing neither means cleanup did not run, not that it succeeded quietly.
+
 **This is for pre-production.** InTest adds no guard rails against being pointed at production,
 deliberately. Pointing it there is your decision and your consequences.
 
----
-
-## Adding fixture cleanup to an existing project
-
-> **Check first:** open `TestStartup.cs` and search for `AssemblyCleanup`. If it is not there,
-> this section is for you. If it is, you already have it.
-
-`TestStartup.cs` is yours, and Phase 2's table already says it: **never regenerated.** No
-command adds this for you. `intest upgrade` is designed to bump `intestVersion` in
-`intest.json` and the pinned version in `.config/dotnet-tools.json`, then re-run `generate`, but
-it is not built yet — and even once it is, its job stops at `Generated/` and `intest.json`. It
-was never going to touch `TestStartup.cs`, because nothing is allowed to touch a file `init`
-marks yours to keep.
-
-The concrete cost of skipping this: no `[AssemblyCleanup]` means whatever `OnCleanup` a fixture
-registers never drains. That is not a build error and not a test failure — it is the failure
-mode with no failure in it, just a database that fills up a little more with every run, noticed
-months later as "why do we have four thousand test customers."
-
-Paste this into your `TestStartup` class, alongside `[AssemblyInitialize]`. MSTest allows only
-one `[AssemblyCleanup]` per assembly — if your project already has one, add the
-`TestHost.CleanupAsync(context)` call inside it instead of pasting a second method:
-
-```csharp
-[AssemblyCleanup]
-public static async Task AssemblyCleanup(TestContext context)
-{
-    await TestHost.CleanupAsync(context);
-}
-```
-
-That is the entire fix — `TestHost.CleanupAsync` does the actual draining; this method only has
-to exist so MSTest calls it. Add it even if you have not written an `IAssemblyFixture` yet —
-with nothing registered, it's a safe no-op.
-
-**Confirm it worked.** Unlike a passing `[AssemblyInitialize]` (above), `[AssemblyCleanup]`'s
-output is not swallowed. Once a fixture registers at least one `OnCleanup` action, run
-`dotnet test --logger "console;verbosity=detailed"` and look for
-`InTest fixture cleanup: drained N action(s).` — that line reaches the console at that
-verbosity and the `.trx`'s last test result either way, so seeing neither means the paste did
-not take, not that cleanup silently succeeded. Before your first fixture exists there is nothing
-to drain and nothing to see yet; the method compiling and the run staying green is the whole
-signal until then.
-
-If you are about to write your first `IAssemblyFixture`, also add the registration hook to the
-`Register` method in the same file:
-
-```csharp
-services.AddSingleton<IAssemblyFixture, YourFixture>();
-```

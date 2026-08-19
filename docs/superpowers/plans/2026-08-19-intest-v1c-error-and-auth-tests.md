@@ -254,9 +254,10 @@ first identity" and the 403 case must select a *different* one by position, beca
 generates code long before any adopter has written a provider and cannot know an identity name.
 Position is the only thing generated code can reference, so order has to be part of the contract.
 
-This is a breaking change to a public interface in `InTest.Runtime`, which §3's semver contract
-covers — **and the packages are still unpublished, so this is the last moment it is free.** Take
-it now or accept a major bump later. Document that index 0 is the default identity.
+It is a breaking change to a public interface in `InTest.Runtime`, but nothing is published and
+no provider has been implemented outside this repository, so it costs nothing. Document that
+index 0 is the default identity — §3's semver contract makes that ordering a promise from the
+first published version onward.
 
 **b. `AuthHandler` no-ops when no provider is registered.** `GetTokenAsync(string audience, ...)`
 requires a provider, but Catalog and Inventory declare no `security` and their scaffolds register
@@ -273,13 +274,14 @@ implementing the interface needs to know what arrives. Use configuration `Api:Au
 back to the base URL's authority. **Not** the spec's security-scheme audience: OpenAPI OAuth2
 flows carry `tokenUrl` and `scopes`, not reliably an audience.
 
-- [ ] **Step 3: An adopter who already wrote their own handler now has two**
+**d. The scaffold comment stops telling people to write their own handler.**
+`InitCommand.cs:123` currently says a secured API "needs a `DelegatingHandler` appended to
+`InTestClients.Api`". Once `AuthHandler` ships attached, that instruction produces two handlers
+both setting `Authorization`, where the last one silently wins. Replace it with a line saying
+`AuthHandler` is already attached and only `ITestTokenProvider` needs implementing. The matching
+prose in `getting-started.md` Phase 3 is Task 7's.
 
-Phase 3 told adopters to write a `BearerTokenHandler` and attach it. Anyone who did now has that
-plus `AuthHandler`, both setting `Authorization` — last one wins, silently. Task 7's upgrade note
-must say to remove theirs, and the scaffold comment must say `AuthHandler` is already attached.
-
-- [ ] **Step 4–5: Run, implement, re-run, commit**
+- [ ] **Step 3–4: Run, implement, re-run, commit**
 
 `ApiTestBase` sets the ambient identity in `[TestInitialize]` and clears it in `[TestCleanup]`,
 exactly as it already does for `TestId`. The default is `Identities[0]`.
@@ -452,9 +454,18 @@ Remove the deferrals; keep the reasoning. Record decision 4: declared errors com
 
 With F10's evidence, so the reason survives.
 
-- [ ] **Step 3: `docs/getting-started.md` Phase 3 — fix the example that caused F10**
+- [ ] **Step 3: `docs/getting-started.md` Phase 3 — delete the hand-written handler, don't correct it**
 
-It currently attaches the handler to the client readiness also uses. Correct it, and say why plainly enough that nobody reverts it: an anonymous probe must not fail because a token provider is unreachable.
+Phase 3 opens with "**`ITestTokenProvider` is designed, not yet wired up** ... nothing calls
+`GetTokenAsync`", then gives a `BearerTokenHandler` to write by hand as the stand-in. After Task 2
+every clause of that is false, and following it produces the two-handlers collision Task 2's
+question (d) describes. Delete the warning block and the stand-in both; what remains is the
+`ITestTokenProvider` implementation, which Phase 3 already shows as "the design this is standing
+in for" and which becomes the only thing an adopter writes.
+
+Keep F10's lesson in the replacement rather than losing it with the example that carried it:
+readiness probes on its own client, so an anonymous probe cannot fail because a token provider is
+unreachable. Say it plainly enough that nobody reverts it.
 
 - [ ] **Step 4: Fix F9 — `samples/README.md`'s documented port is unreachable**
 
@@ -520,6 +531,6 @@ reports `Passed!`. Task 7 amends §9 with the trace rather than quietly doing so
 
 **Deliberately deferred.** Variation tests — the reasoning is at the top, and it is a scope call worth overriding now rather than at Task 8 if you disagree. `IControllerFixture` — still no measured need. Multi-identity providers beyond client-credentials — the interface takes an identity string; what an adopter does with it is theirs.
 
-**The risk worth stating.** Task 3 changes the shape of `TestCasePlan`, which every consumer touches — the template, the coverage report, `FixtureComposer`'s `NeedsFixture` verdict, and `fixtures repair`. v1-b added two fields to that record with comments explaining why the value is carried rather than recomputed; a third field with a different role invites exactly the divergence those comments warn about. If the record starts feeling like a bag of flags, that is a signal to split success and error cases into distinct types, and better noticed at Task 3 than at Task 8.
+**The risk worth stating.** Task 3 changes the shape of `TestCasePlan`, which every consumer touches — the template, the coverage report, `FixtureComposer`'s `NeedsFixture` verdict, and `fixtures repair`. v1-b added two fields to that record with comments explaining why the value is carried rather than recomputed; a third field with a different role invites exactly the divergence those comments warn about. If the record starts feeling like a bag of flags, split success and error cases into distinct types **at Task 3 rather than noting it for later** — `TestCasePlan` is internal to `InTest.Cli`, nothing outside this repository depends on its shape, and the only cost of getting it right now is the same edit done once instead of twice.
 
 **What this plan does not do.** It generates no test for an undeclared error. An API that 404s correctly but does not say so in its spec gets no 404 test, and that is deliberate — §9's expected-outcome policy holds that a guessed assertion is worse than none, because a wall of wrong failures gets bulk-ignored and takes the real failures with it.
