@@ -972,13 +972,66 @@ contradicts §13's reason for existing. Elapsed time appears in the failure mess
 
 **This is the post-deployment gate.**
 
+### The precondition every generated case must clear
+
+**Before emitting a case, ask what else guarantees a different status.**
+
+This is the general rule the exclusions below are instances of, and it is stated as a rule
+because enumerating the instances has repeatedly turned out to be enumerating the ones found so
+far. Five have been *measured*, four of them by running a generated suite rather than by reading
+the generator; each was a case asserting one status against a guaranteed different one, forever.
+
+The reason they keep recurring is structural. A fixture-free case sends a **deliberately
+incomplete** request — no body, an unmatchable id, no token, a different identity — and every
+element it omits or substitutes is a chance for something *upstream of the behaviour under test*
+to answer first. A request is answered by the first stage that can reject it:
+
+```
+content negotiation  →  model binding  →  routing  →  authentication  →  authorization  →  handler
+```
+
+**A case is valid only when the status it asserts is produced by the stage it means to test, and
+nothing earlier can answer first.** The generator's omissions move the answer leftward; the
+assertion sits at the right. That gap is the defect.
+
+| Measured instance | Asserts | Actually answered by | Stage |
+|---|---|---|---|
+| Bodyless request to a required `[FromBody]` | 404 | 400 | model binding |
+| Bodyless `POST` under `[ApiController]` — no `Content-Type` | 403 | **415** | content negotiation |
+| Required query parameter omitted | 404 | 400 *or* 404, framework-dependent | model binding |
+| 404 case on an operation with no path parameter | 404 | 200 — nowhere to put an unmatchable value | handler |
+| Wrong-scope 403 where the second identity holds the scope | 403 | 200 or 404 — the API is correct | authorization |
+
+The last is F11, and it is the one that shows why the rule needs stating in this form: it is not
+about a *malformed* request at all. The request is perfectly well-formed and correctly
+authorized — the assertion is simply not true of it. A rule phrased around malformed input, which
+the first four would have suggested, does not catch it.
+
+**When the precondition cannot be cleared, note it — never guess.** The case is not generated,
+its operation's other cases still generate, and `coverage-report.json` carries a note saying
+which operation and why. This is not a skip (§12): a skip is a test that exists and did not run,
+and conflating the two is what makes a coverage number unreadable.
+
+**Where the answer depends on something the generator cannot know**, the question moves to
+runtime rather than being guessed or dropped — the same move as §9's `MemberCondition` amendment
+below, where the question turned out to be answerable just not at the moment the original design
+asked it.
+
+> **F11 is the worked example, and is planned rather than built**
+> (`docs/superpowers/plans/2026-08-20-intest-f11-scope-aware-403.md`). Which scopes an identity
+> holds is unknowable when the code is generated and knowable when it runs, so the case will
+> carry the operation's declared scopes and a runtime guard will skip it with a stated reason.
+> **Today the generator still emits a wrong-scope 403 for every secured operation**, so against a
+> read-only second identity the read-scoped ones fail. The row above describes the defect, not
+> current behaviour.
+
 ### Declared-error contract tests
 
 Generated today, from declared responses only — **never inferred**. v1-c generates a case for
 `404` only, and only for an operation with at least one path parameter — a 404 needs somewhere
 to put an unmatchable value, and telling a lookup query parameter from a filter is itself a
-guess InTest does not make. Everything else in the 4xx range is excluded, each for its own
-reason:
+guess InTest does not make. Everything else in the 4xx range is excluded; each exclusion is the
+precondition above failing for a different reason, not a separate rule:
 
 | Status | Why not v1-c |
 |---|---|
@@ -986,8 +1039,9 @@ reason:
 | `401`, `403` | The auth cases below already own these. An operation declaring 401 would otherwise get both an auth 401 (no token, correctly expects 401) and a declared-error 401 (a valid authenticated request, always fails) |
 | `409`, `422`, others | Need specific conflicting state or input the generator cannot construct fixture-free |
 
-An operation declaring 404 falls back to a coverage **note** — its other cases still generate;
-this is not a skip (§12) — rather than a guessed case, in three situations:
+An operation declaring 404 falls back to a coverage **note** rather than a guessed case in three
+situations — the precondition above, applied to the 404 case specifically. The list is open: a
+fourth situation is a defect to record, not a contradiction of this section.
 
 - **no path parameter to target.** `GET /orders` declaring 404 has nowhere to send an
   unmatchable value.
