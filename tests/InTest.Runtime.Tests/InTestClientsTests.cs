@@ -49,14 +49,6 @@ public class InTestClientsTests
             Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
     }
 
-    private static ReadinessOptions Options() => new()
-    {
-        Enabled = true, Path = "health/ready", ExpectStatus = 200,
-        ConsecutiveSuccesses = 1, TimeoutSeconds = 5, IntervalSeconds = 0
-    };
-
-    private static CancellationToken TestContextCancellation() => new CancellationTokenSource(TimeSpan.FromSeconds(30)).Token;
-
     [TestMethod]
     public async Task ReadinessProbeDoesNotRunApiClientHandlers()
     {
@@ -82,23 +74,11 @@ public class InTestClientsTests
         using var provider = services.BuildServiceProvider();
         using var scope = provider.CreateScope();
         var client = scope.ServiceProvider.GetRequiredService<IHttpClientFactory>().CreateClient(InTestClients.Readiness);
+        using var cts = TestSupport.TimeoutToken();
 
-        await Readiness.WaitAsync(client, Options(), TestContextCancellation());
+        await Readiness.WaitAsync(client, TestSupport.Options(consecutiveSuccesses: 1), cts.Token);
 
         throwing.Ran.ShouldBeFalse("a handler attached to InTestClients.Api must never run for the readiness probe");
-    }
-
-    /// <summary>Records the request it saw so a test can inspect headers a handler upstream of
-    /// it set, and answers 200 without any real network traffic.</summary>
-    private sealed class CapturingHandler : HttpMessageHandler
-    {
-        public HttpRequestMessage? SeenRequest;
-
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-        {
-            SeenRequest = request;
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
-        }
     }
 
     /// <summary>
@@ -111,8 +91,8 @@ public class InTestClientsTests
     [TestMethod]
     public async Task ApiClientCarriesAuthHandlerButReadinessDoesNotEvenWhenAProviderIsRegistered()
     {
-        var apiInner = new CapturingHandler();
-        var readinessInner = new CapturingHandler();
+        var apiInner = new TestSupport.CapturingHandler();
+        var readinessInner = new TestSupport.CapturingHandler();
 
         var services = new ServiceCollection();
         services.AddTransient(_ => new RunIdHandler(() => "run-1"));

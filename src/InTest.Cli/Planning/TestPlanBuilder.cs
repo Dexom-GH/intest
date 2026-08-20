@@ -86,6 +86,7 @@ public static class TestPlanBuilder
                     : DefaultTag;
 
                 var pathParameterNames = PathParameters(path);
+                var httpMethod = method.Method.ToUpperInvariant();
                 var methodName = CSharpIdentifier.ToPascalCase(key.Value) + "_Contract";
                 proposedNames[CaseIdentity(key.Value, CaseRole.Success, status)] = methodName;
 
@@ -94,7 +95,7 @@ public static class TestPlanBuilder
                     DisplayName: $"Given {tag}, when {key.Value}, then {status}",
                     OperationKey: key.Value,
                     OperationKeySynthesized: key.Synthesized,
-                    HttpMethod: method.Method.ToUpperInvariant(),
+                    HttpMethod: httpMethod,
                     PathTemplate: path,
                     PathParameterNames: pathParameterNames,
                     ExpectedStatus: status,
@@ -105,157 +106,19 @@ public static class TestPlanBuilder
                     QueryParameterNames: QueryParameters(operation),
                     HasRequestBody: FixtureComposer.HasJsonBodyToCompose(operation))));
 
-                // Declared-error cases come only from what the spec itself declares (decision 5)
-                // — reached only once the success case above is confirmed generated, so a
-                // declared-error case can never outlive an operation this method already skipped
-                // (the `continue`s above it) and the two can never disagree about the operation.
-                if (FindDeclaredResponse(operation, NotFoundStatus) is { } notFoundResponse)
+                // Declared-error and auth cases only exist below this point — a call-site fact,
+                // not only a comment (Task 10 item 5): both helpers run once the success case
+                // above is already confirmed generated, so neither can outlive an operation this
+                // method already skipped (the `continue`s above it), and the two can never
+                // disagree about the operation.
+                if (TryPlanDeclaredNotFound(operation, key, httpMethod, path, tag, pathParameterNames, proposedNames, notes) is { } notFoundCase)
                 {
-                    var requiredQueryParameters = RequiredQueryParameterNames(operation);
-
-                    if (pathParameterNames.Count == 0)
-                    {
-                        // Nowhere to put an unmatchable value — telling a lookup query parameter
-                        // from a filter is itself a guess. The operation's success case above
-                        // still generated and runs, so this is a *note*, not a skip (§12): adding
-                        // it to `skipped` would make GenerateCommand report a live, passing
-                        // operation as skipped, and put it in coverage-report.json's `skipped`
-                        // array instead of the artefact `--check` would actually expect it in.
-                        notes.Add(new CoverageNote(key.Value,
-                            $"declares {NotFoundStatus} but has {NoPathParameterNoteReason}"));
-                    }
-                    else if (requiredQueryParameters.Count > 0)
-                    {
-                        // Decision 5's postscript: whether a missing *required* query parameter
-                        // is answered with 400 or 404 depends on binding and route configuration
-                        // — a measurement to take, not an assumption to ship. Sending only the
-                        // unmatchable path id and omitting a required query parameter risks
-                        // asserting 404 against what a compliant, correctly-routed API actually
-                        // answers with 400 — the same hazard the no-path-parameter branch above
-                        // exists to avoid, so it gets the same treatment: a note, not a guess
-                        // shipped as a test.
-                        notes.Add(new CoverageNote(key.Value,
-                            $"declares {NotFoundStatus} but has required query parameter(s) " +
-                            $"({string.Join(", ", requiredQueryParameters)}) that an unmatchable-id-only request would omit"));
-                    }
-                    else if (operation.RequestBody?.Required == true)
-                    {
-                        // The strictly stronger case of the required-query-parameter branch
-                        // above: against an ASP.NET Core [ApiController] with a non-nullable
-                        // [FromBody] parameter, a bodyless request (decision 6: send no body) is
-                        // rejected by model binding with 400 ("A non-empty request body is
-                        // required.") before the action's NotFound() path ever runs — confirmed
-                        // by building plans from the shipped samples: PUT /api/products/{id} and
-                        // POST /api/stock/{sku}/adjustments both declare a required body and both
-                        // controllers bind it with a non-nullable [FromBody] parameter under
-                        // [ApiController]. Sending only the unmatchable path id and omitting a
-                        // required body would assert 404 against a guaranteed 400 on every run,
-                        // so this gets the same note-not-guess treatment as the branches above.
-                        notes.Add(new CoverageNote(key.Value,
-                            $"declares {NotFoundStatus} but has a required request body that an unmatchable-id-only, bodyless request would omit"));
-                    }
-                    else
-                    {
-                        var notFoundMethodName = CSharpIdentifier.ToPascalCase(key.Value) + "_NotFound";
-                        proposedNames[CaseIdentity(key.Value, CaseRole.DeclaredError, NotFoundStatus)] = notFoundMethodName;
-
-                        draft.Add((tag, new TestCasePlan(
-                            MethodName: notFoundMethodName,
-                            DisplayName: $"Given {tag}, when {key.Value}, then {NotFoundStatus}",
-                            OperationKey: key.Value,
-                            OperationKeySynthesized: key.Synthesized,
-                            HttpMethod: method.Method.ToUpperInvariant(),
-                            PathTemplate: path,
-                            PathParameterNames: pathParameterNames,
-                            ExpectedStatus: NotFoundStatus,
-                            SchemaKey: ResolveSchemaKey(notFoundResponse, NotFoundStatus, key.Value),
-                            Category: ContractCategory,
-                            Role: CaseRole.DeclaredError,
-                            // Decision 6: an unmatchable generated id and no body, never a
-                            // fixture value — so an unfilled fixture can never block a test that
-                            // needs no data, and a broken generator can never delete or mutate
-                            // real state through this case.
-                            NeedsFixture: false,
-                            // Review finding on Task 4: which flavour of unmatchable value is
-                            // safe depends on the parameter's declared type — an integer path
-                            // parameter needs a well-typed-but-unmatchable integer, not a GUID
-                            // string a route-constraint-free binder rejects with 400 before the
-                            // 404 path ever runs. TemplateRenderer is the only consumer.
-                            PathParameterKinds: ResolvePathParameterKinds(operation, pathParameterNames))));
-                    }
+                    draft.Add((tag, notFoundCase));
                 }
 
-                // Auth cases (Task 5, decision 3): generated once each for every operation that
-                // declares `security` — independent of whether the operation's own `responses`
-                // enumerate 401 or 403 at all, and independent of whether it has a path parameter.
-                // Unlike the declared-error 404 case above, an auth case has nowhere it *must*
-                // point an unmatchable value: sending no token, or the wrong scope, needs no
-                // target resource, so the no-path-parameter restriction that guards 404 does not
-                // apply here. Operation-level `security` only — an empty array here explicitly
-                // overrides a document-level default to "no auth", and v1-c does not attempt to
-                // resolve document-level inheritance.
-                if (operation.Security is { Count: > 0 })
+                foreach (var authCase in PlanAuthCases(operation, document, key, httpMethod, path, tag, pathParameterNames, proposedNames, notes))
                 {
-                    var authPathParameterKinds = ResolvePathParameterKinds(operation, pathParameterNames);
-
-                    var unauthorizedMethodName = CSharpIdentifier.ToPascalCase(key.Value) + "_Unauthorized";
-                    proposedNames[CaseIdentity(key.Value, CaseRole.Auth, UnauthorizedStatus)] = unauthorizedMethodName;
-
-                    draft.Add((tag, new TestCasePlan(
-                        MethodName: unauthorizedMethodName,
-                        DisplayName: $"Given {tag}, when {key.Value}, then {UnauthorizedStatus}",
-                        OperationKey: key.Value,
-                        OperationKeySynthesized: key.Synthesized,
-                        HttpMethod: method.Method.ToUpperInvariant(),
-                        PathTemplate: path,
-                        PathParameterNames: pathParameterNames,
-                        ExpectedStatus: UnauthorizedStatus,
-                        // Status-only, deliberately: decision 3 never asks a spec's declared 401
-                        // response schema for anything, and an operation need not declare one at
-                        // all for this case to exist.
-                        SchemaKey: null,
-                        Category: ContractCategory,
-                        Role: CaseRole.Auth,
-                        NeedsFixture: false, // Decision 6.
-                        PathParameterKinds: authPathParameterKinds,
-                        Slot: IdentitySlot.None)));
-
-                    var forbiddenMethodName = CSharpIdentifier.ToPascalCase(key.Value) + "_Forbidden";
-                    proposedNames[CaseIdentity(key.Value, CaseRole.Auth, ForbiddenStatus)] = forbiddenMethodName;
-
-                    draft.Add((tag, new TestCasePlan(
-                        MethodName: forbiddenMethodName,
-                        DisplayName: $"Given {tag}, when {key.Value}, then {ForbiddenStatus}",
-                        OperationKey: key.Value,
-                        OperationKeySynthesized: key.Synthesized,
-                        HttpMethod: method.Method.ToUpperInvariant(),
-                        PathTemplate: path,
-                        PathParameterNames: pathParameterNames,
-                        ExpectedStatus: ForbiddenStatus,
-                        SchemaKey: null,
-                        Category: ContractCategory,
-                        Role: CaseRole.Auth,
-                        NeedsFixture: false, // Decision 6.
-                        PathParameterKinds: authPathParameterKinds,
-                        Slot: IdentitySlot.Secondary)));
-                }
-                else if (operation.Security is null && document.Security is { Count: > 0 })
-                {
-                    // Review finding on Task 5: an operation that omits `security` entirely
-                    // inherits the document-level block per the OpenAPI spec — valid, and
-                    // routine when a whole API shares one scheme. `operation.Security is {
-                    // Count: > 0 }` above only ever sees the operation's own declaration, so an
-                    // operation secured purely by inheritance got no auth cases and, unlike the
-                    // three note-not-guess branches guarding the 404 case above, no CoverageNote
-                    // either — an invisible gap in coverage-report.json. Resolving the
-                    // inheritance is deferred (same "measurement, not an assumption" reasoning as
-                    // decision 5's postscript); this branch only makes the omission visible.
-                    // `operation.Security is null` — not `{ Count: 0 }` — is deliberate: an
-                    // explicit empty array is the spec's own way of overriding the document
-                    // default to "no auth" for this operation, which is not a gap to report.
-                    notes.Add(new CoverageNote(key.Value,
-                        "document declares `security` but this operation does not; v1-c does not " +
-                        "resolve document-level inheritance, so no auth cases were generated for it"));
+                    draft.Add((tag, authCase));
                 }
             }
         }
@@ -279,6 +142,174 @@ public static class TestPlanBuilder
             skipped.OrderBy(s => s.OperationKey, StringComparer.Ordinal).ToList(),
             notes.OrderBy(n => n.OperationKey, StringComparer.Ordinal).ToList());
     }
+
+    /// <summary>
+    /// Decision 5: a declared-error 404 case, or <c>null</c> plus a <see cref="CoverageNote"/>
+    /// explaining why one was withheld. Extracted from <see cref="Build"/> (Task 10 item 5) —
+    /// four of the seven branches this plan's declared-error/auth logic needed were withholds
+    /// distinguished only by their guard condition, and pulling them into one method with an
+    /// early return per guard replaces "physical statement order plus a comment" with a value
+    /// the caller cannot get without this method already having cleared every guard.
+    /// </summary>
+    private static TestCasePlan? TryPlanDeclaredNotFound(
+        OpenApiOperation operation, OperationKey key, string httpMethod, string path, string tag,
+        IReadOnlyList<string> pathParameterNames, Dictionary<string, string> proposedNames, List<CoverageNote> notes)
+    {
+        if (FindDeclaredResponse(operation, NotFoundStatus) is not { } notFoundResponse)
+        {
+            return null;
+        }
+
+        var requiredQueryParameters = RequiredQueryParameterNames(operation);
+
+        if (pathParameterNames.Count == 0)
+        {
+            // Nowhere to put an unmatchable value — telling a lookup query parameter from a
+            // filter is itself a guess. The operation's success case still generated and runs,
+            // so this is a *note*, not a skip (§12): adding it to `skipped` would make
+            // GenerateCommand report a live, passing operation as skipped, and put it in
+            // coverage-report.json's `skipped` array instead of the artefact `--check` would
+            // actually expect it in.
+            notes.Add(new CoverageNote(key.Value, $"declares {NotFoundStatus} but has {NoPathParameterNoteReason}"));
+            return null;
+        }
+
+        if (requiredQueryParameters.Count > 0)
+        {
+            // Decision 5's postscript: whether a missing *required* query parameter is answered
+            // with 400 or 404 depends on binding and route configuration — a measurement to
+            // take, not an assumption to ship. Sending only the unmatchable path id and omitting
+            // a required query parameter risks asserting 404 against what a compliant,
+            // correctly-routed API actually answers with 400 — the same hazard the
+            // no-path-parameter branch above exists to avoid, so it gets the same treatment: a
+            // note, not a guess shipped as a test.
+            notes.Add(new CoverageNote(key.Value,
+                $"declares {NotFoundStatus} but has required query parameter(s) " +
+                $"({string.Join(", ", requiredQueryParameters)}) that an unmatchable-id-only request would omit"));
+            return null;
+        }
+
+        if (operation.RequestBody?.Required == true)
+        {
+            // The strictly stronger case of the required-query-parameter branch above: against
+            // an ASP.NET Core [ApiController] with a non-nullable [FromBody] parameter, a
+            // bodyless request (decision 6: send no body) is rejected by model binding with 400
+            // ("A non-empty request body is required.") before the action's NotFound() path ever
+            // runs — confirmed by building plans from the shipped samples: PUT
+            // /api/products/{id} and POST /api/stock/{sku}/adjustments both declare a required
+            // body and both controllers bind it with a non-nullable [FromBody] parameter under
+            // [ApiController]. Sending only the unmatchable path id and omitting a required body
+            // would assert 404 against a guaranteed 400 on every run, so this gets the same
+            // note-not-guess treatment as the branches above.
+            notes.Add(new CoverageNote(key.Value,
+                $"declares {NotFoundStatus} but has a required request body that an unmatchable-id-only, bodyless request would omit"));
+            return null;
+        }
+
+        var methodName = CSharpIdentifier.ToPascalCase(key.Value) + "_NotFound";
+        proposedNames[CaseIdentity(key.Value, CaseRole.DeclaredError, NotFoundStatus)] = methodName;
+
+        return FixtureFreeCase(key, httpMethod, path, tag, pathParameterNames,
+            methodName, NotFoundStatus, ResolveSchemaKey(notFoundResponse, NotFoundStatus, key.Value),
+            CaseRole.DeclaredError,
+            // Review finding on Task 4: which flavour of unmatchable value is safe depends on
+            // the parameter's declared type — an integer path parameter needs a
+            // well-typed-but-unmatchable integer, not a GUID string a route-constraint-free
+            // binder rejects with 400 before the 404 path ever runs. TemplateRenderer is the
+            // only consumer.
+            ResolvePathParameterKinds(operation, pathParameterNames));
+    }
+
+    /// <summary>
+    /// Decision 3: the no-token 401 case and the wrong-scope 403 case, both generated together
+    /// once an operation declares `security` — or, when it omits `security` but the document
+    /// declares it at the top level, neither case plus a <see cref="CoverageNote"/> naming the
+    /// unresolved inheritance. Extracted from <see cref="Build"/> for the same reason
+    /// <see cref="TryPlanDeclaredNotFound"/> is (Task 10 item 5).
+    /// <para>
+    /// Unlike the declared-error 404 case, an auth case has nowhere it *must* point an
+    /// unmatchable value: sending no token, or the wrong scope, needs no target resource, so the
+    /// no-path-parameter restriction that guards 404 does not apply here.
+    /// </para>
+    /// </summary>
+    private static IReadOnlyList<TestCasePlan> PlanAuthCases(
+        OpenApiOperation operation, OpenApiDocument document, OperationKey key, string httpMethod, string path, string tag,
+        IReadOnlyList<string> pathParameterNames, Dictionary<string, string> proposedNames, List<CoverageNote> notes)
+    {
+        // Operation-level `security` only — an empty array here explicitly overrides a
+        // document-level default to "no auth", and v1-c does not attempt to resolve
+        // document-level inheritance.
+        if (operation.Security is { Count: > 0 })
+        {
+            var kinds = ResolvePathParameterKinds(operation, pathParameterNames);
+
+            var unauthorizedMethodName = CSharpIdentifier.ToPascalCase(key.Value) + "_Unauthorized";
+            proposedNames[CaseIdentity(key.Value, CaseRole.Auth, UnauthorizedStatus)] = unauthorizedMethodName;
+
+            var forbiddenMethodName = CSharpIdentifier.ToPascalCase(key.Value) + "_Forbidden";
+            proposedNames[CaseIdentity(key.Value, CaseRole.Auth, ForbiddenStatus)] = forbiddenMethodName;
+
+            return
+            [
+                // Status-only, deliberately: decision 3 never asks a spec's declared 401
+                // response schema for anything, and an operation need not declare one at all
+                // for this case to exist.
+                FixtureFreeCase(key, httpMethod, path, tag, pathParameterNames,
+                    unauthorizedMethodName, UnauthorizedStatus, schemaKey: null, CaseRole.Auth, kinds, IdentitySlot.None),
+                FixtureFreeCase(key, httpMethod, path, tag, pathParameterNames,
+                    forbiddenMethodName, ForbiddenStatus, schemaKey: null, CaseRole.Auth, kinds, IdentitySlot.Secondary)
+            ];
+        }
+
+        // Review finding on Task 5: an operation that omits `security` entirely inherits the
+        // document-level block per the OpenAPI spec — valid, and routine when a whole API shares
+        // one scheme. The branch above only ever sees the operation's own declaration, so an
+        // operation secured purely by inheritance got no auth cases and, unlike the three
+        // note-not-guess branches guarding the 404 case, no CoverageNote either — an invisible
+        // gap in coverage-report.json. Resolving the inheritance is deferred (same "measurement,
+        // not an assumption" reasoning as decision 5's postscript); this branch only makes the
+        // omission visible. `operation.Security is null` — not `{ Count: 0 }` — is deliberate:
+        // an explicit empty array is the spec's own way of overriding the document default to
+        // "no auth" for this operation, which is not a gap to report (Task 10 item 8(b) pins
+        // that Microsoft.OpenApi actually materializes `"security": []` as a non-null empty
+        // list, which is what makes this distinction meaningful rather than dead code).
+        if (operation.Security is null && document.Security is { Count: > 0 })
+        {
+            notes.Add(new CoverageNote(key.Value,
+                "document declares `security` but this operation does not; v1-c does not " +
+                "resolve document-level inheritance, so no auth cases were generated for it"));
+        }
+
+        return [];
+    }
+
+    /// <summary>
+    /// The shared constructor for every declared-error and auth case (Task 10 item 5) — the
+    /// eleven-argument prefix <see cref="TryPlanDeclaredNotFound"/> and <see cref="PlanAuthCases"/>
+    /// otherwise each repeat verbatim. <see cref="TestCasePlan.Category"/> is always
+    /// <see cref="ContractCategory"/> and <see cref="TestCasePlan.NeedsFixture"/> is always
+    /// <c>false</c> here — decision 6: every fixture-free case (declared-error and auth alike)
+    /// uses an unmatchable id and sends no body, so an unfilled fixture can never block one of
+    /// these cases and a broken generator can never delete or mutate real state through them.
+    /// </summary>
+    private static TestCasePlan FixtureFreeCase(
+        OperationKey key, string httpMethod, string path, string tag, IReadOnlyList<string> pathParameterNames,
+        string methodName, int expectedStatus, string? schemaKey, CaseRole role,
+        IReadOnlyList<PathParameterKind> pathParameterKinds, IdentitySlot slot = IdentitySlot.Default) => new(
+            MethodName: methodName,
+            DisplayName: $"Given {tag}, when {key.Value}, then {expectedStatus}",
+            OperationKey: key.Value,
+            OperationKeySynthesized: key.Synthesized,
+            HttpMethod: httpMethod,
+            PathTemplate: path,
+            PathParameterNames: pathParameterNames,
+            ExpectedStatus: expectedStatus,
+            SchemaKey: schemaKey,
+            Category: ContractCategory,
+            Role: role,
+            NeedsFixture: false,
+            PathParameterKinds: pathParameterKinds,
+            Slot: slot);
 
     /// <summary>
     /// The dedupe dictionary's key (decision 4): operation key alone collapses a success case and

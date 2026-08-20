@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Text.RegularExpressions;
 using InTest.Cli.Commands;
 using Shouldly;
@@ -165,42 +164,11 @@ public class InitCommandTests
             customMessage: "the scaffold must show the registration, but only as a comment");
     }
 
-    [TestMethod]
-    public async Task ScaffoldStillBuildsWithNoTokenProviderRegistered()
-    {
-        // Task 6's own point: asserting the comment exists (above) would not have caught a live
-        // registration slipping in — only actually building the fresh scaffold, with nothing
-        // uncommented, does. StaticTokenProvider needs a token Catalog and Inventory have no
-        // source for, so a live registration here breaks Task 8 Step 5 the moment it is added;
-        // this test is what would fail if that ever happened.
-        InitCommand.Run(_root, "Orders.ApiTests", "orders.json").ShouldBe(0);
-
-        var runtimeProject = Path.GetFullPath(Path.Combine(
-            AppContext.BaseDirectory, "..", "..", "..", "..", "..", "src", "InTest.Runtime", "InTest.Runtime.csproj"));
-        var csprojPath = Path.Combine(_root, "Orders.ApiTests.csproj");
-        File.WriteAllText(csprojPath, File.ReadAllText(csprojPath).Replace(
-            """<PackageReference Include="InTest.Runtime" Version="0.1.0" />""",
-            $"""<ProjectReference Include="{runtimeProject}" />""",
-            StringComparison.Ordinal));
-
-        // The csproj copies Generated/spec-schemas.json and Generated/spec-paths.json to the
-        // output directory — this test never runs `generate`, so they must exist for the build
-        // to have anything to copy from.
-        Directory.CreateDirectory(Path.Combine(_root, "Generated"));
-        File.WriteAllText(Path.Combine(_root, "Generated", "spec-schemas.json"), "{}");
-        File.WriteAllText(Path.Combine(_root, "Generated", "spec-paths.json"), "{}");
-
-        using var process = Process.Start(new ProcessStartInfo("dotnet", $"build \"{_root}\" --nologo -v q")
-        {
-            RedirectStandardOutput = true,
-            RedirectStandardError = true
-        })!;
-
-        var stdout = await process.StandardOutput.ReadToEndAsync();
-        var stderr = await process.StandardError.ReadToEndAsync();
-        await process.WaitForExitAsync();
-
-        process.ExitCode.ShouldBe(0,
-            $"a fresh scaffold with no ITestTokenProvider registered must still build:{Environment.NewLine}{stdout}{stderr}");
-    }
+    // ScaffoldStillBuildsWithNoTokenProviderRegistered moved to InTest.Golden.Tests, next to
+    // CompileVerificationTests (Task 10 item 7): it is the only out-of-process build that lived
+    // in this assembly, and under a solution-level `dotnet test` this assembly's ~6s run fully
+    // overlaps InTest.Golden.Tests' ~1m40s one, so two independent MSBuild invocations could
+    // build scaffolded projects that both ProjectReference the same InTest.Runtime.csproj
+    // simultaneously — a known source of intermittent obj/ file-lock failures. The assertion
+    // itself is unchanged; see ScaffoldCompileVerificationTests there.
 }

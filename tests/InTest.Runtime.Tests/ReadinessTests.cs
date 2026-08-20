@@ -20,19 +20,14 @@ public class ReadinessTests
         }
     }
 
-    private static ReadinessOptions Options(int consecutive = 2) => new()
-    {
-        Enabled = true, Path = "health/ready", ExpectStatus = 200,
-        ConsecutiveSuccesses = consecutive, TimeoutSeconds = 5, IntervalSeconds = 0
-    };
-
     [TestMethod]
     public async Task RequiresConsecutiveSuccessesSoAnOldInstanceCannotSatisfyIt()
     {
         var handler = new ScriptedHandler(HttpStatusCode.OK, HttpStatusCode.ServiceUnavailable, HttpStatusCode.OK, HttpStatusCode.OK);
         using var client = new HttpClient(handler) { BaseAddress = new Uri("https://h/api/") };
+        using var cts = TestSupport.TimeoutToken();
 
-        await Readiness.WaitAsync(client, Options(), TestContextCancellation());
+        await Readiness.WaitAsync(client, TestSupport.Options(consecutiveSuccesses: 2), cts.Token);
 
         handler.Calls.ShouldBe(4);
     }
@@ -42,9 +37,10 @@ public class ReadinessTests
     {
         var handler = new ScriptedHandler(HttpStatusCode.ServiceUnavailable);
         using var client = new HttpClient(handler) { BaseAddress = new Uri("https://h/api/") };
+        using var cts = TestSupport.TimeoutToken();
 
         var ex = await Should.ThrowAsync<ReadinessTimeoutException>(
-            () => Readiness.WaitAsync(client, Options(), TestContextCancellation()));
+            () => Readiness.WaitAsync(client, TestSupport.Options(consecutiveSuccesses: 2), cts.Token));
 
         ex.Message.ShouldContain("did not become ready");
         ex.Message.ShouldContain("503");
@@ -55,11 +51,12 @@ public class ReadinessTests
     {
         var handler = new ScriptedHandler(HttpStatusCode.ServiceUnavailable);
         using var client = new HttpClient(handler) { BaseAddress = new Uri("https://h/api/") };
+        using var cts = TestSupport.TimeoutToken();
 
-        var options = Options();
+        var options = TestSupport.Options(consecutiveSuccesses: 2);
         options.Enabled = false;
 
-        await Readiness.WaitAsync(client, options, TestContextCancellation());
+        await Readiness.WaitAsync(client, options, cts.Token);
         handler.Calls.ShouldBe(0);
     }
 
@@ -70,12 +67,13 @@ public class ReadinessTests
         // full timeout for one turns a three-second diagnosis into a two-minute one.
         var handler = new ScriptedHandler(HttpStatusCode.NotFound);
         using var client = new HttpClient(handler) { BaseAddress = new Uri("https://h/api/") };
+        using var cts = TestSupport.TimeoutToken();
 
-        var options = Options();
+        var options = TestSupport.Options(consecutiveSuccesses: 2);
         options.TimeoutSeconds = 120;
 
         var ex = await Should.ThrowAsync<ReadinessTimeoutException>(
-            () => Readiness.WaitAsync(client, options, TestContextCancellation()));
+            () => Readiness.WaitAsync(client, options, cts.Token));
 
         handler.Calls.ShouldBe(1, "it must not keep polling a terminal status");
         ex.Message.ShouldContain("will not change by waiting");
@@ -91,14 +89,13 @@ public class ReadinessTests
         // prefix, so the scaffold ships "/health/ready". Both forms must remain available.
         var handler = new ScriptedHandler(HttpStatusCode.OK, HttpStatusCode.OK);
         using var client = new HttpClient(handler) { BaseAddress = new Uri("https://h/api/") };
+        using var cts = TestSupport.TimeoutToken();
 
-        var options = Options();
+        var options = TestSupport.Options(consecutiveSuccesses: 2);
         options.Path = path;
 
-        await Readiness.WaitAsync(client, options, TestContextCancellation());
+        await Readiness.WaitAsync(client, options, cts.Token);
 
         handler.LastRequestUri.ShouldBe(expected);
     }
-
-    private static CancellationToken TestContextCancellation() => new CancellationTokenSource(TimeSpan.FromSeconds(30)).Token;
 }

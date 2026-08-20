@@ -64,7 +64,12 @@ public class ApiTestBaseAuthTests
 
         var ex = Should.Throw<AssertInconclusiveException>(ApiTestBase.RequireMultipleIdentities);
 
-        ex.Message.ShouldContain("identit");   // names the capability, not just "skipped"
+        // Task 10 item 4: this must name the count a *registered* provider advertised — the
+        // phrase that distinguishes this case from NoRegisteredProviderAlsoSkips... below, which
+        // has no provider at all. Asserting only "identit"/"403" (as both tests did before this
+        // task) passes equally on either message and would not have caught the wording bug that
+        // motivated the branch.
+        ex.Message.ShouldContain("advertises 1 identity");
         ex.Message.ShouldContain("403");
     }
 
@@ -77,7 +82,10 @@ public class ApiTestBaseAuthTests
 
         var ex = Should.Throw<AssertInconclusiveException>(ApiTestBase.RequireMultipleIdentities);
 
-        ex.Message.ShouldContain("identit");
+        // Task 10 item 4: must say no provider is registered, not "advertises 0 identities" —
+        // that older wording reads as if a provider *is* registered and simply advertises none,
+        // sending a reader hunting for a bug in code they never wrote.
+        ex.Message.ShouldContain("no ITestTokenProvider is registered");
         ex.Message.ShouldContain("403");
     }
 
@@ -87,6 +95,36 @@ public class ApiTestBaseAuthTests
         TestHost.TokenProvider = new FakeTokenProvider("default", "wrong-scope");
 
         Should.NotThrow(ApiTestBase.RequireMultipleIdentities);
+    }
+
+    /// <summary>Returns a null <c>Identities</c> despite the interface's non-nullable
+    /// annotation — nothing at compile time stops a misbehaving <see cref="ITestTokenProvider"/>
+    /// implementation from doing this, and <see cref="ApiTestBase.ResolveDefaultIdentity"/>
+    /// already guards against exactly this shape.</summary>
+    private sealed class NullIdentitiesProvider : ITestTokenProvider
+    {
+        public IReadOnlyList<string> Identities => null!;
+
+        public Task<string> GetTokenAsync(string audience, string? identity = null, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException("not exercised by this test");
+    }
+
+    [TestMethod]
+    public void AProviderWithANullIdentitiesListSkipsTheForbiddenTestRatherThanThrowing()
+    {
+        // Task 10 item 3: RequireMultipleIdentities' neighbour, ResolveDefaultIdentity, guards
+        // both "no provider" and "provider whose Identities is itself null" — deliberately,
+        // since ITestTokenProvider.Identities is non-nullable only by annotation, not by
+        // anything the runtime enforces. `TestHost.TokenProvider?.Identities.Count` chains `?.`
+        // through the first access only, so a provider with a null Identities list threw
+        // NullReferenceException here instead of the same Inconclusive skip every other
+        // zero/one-identity state produces.
+        TestHost.TokenProvider = new NullIdentitiesProvider();
+
+        var ex = Should.Throw<AssertInconclusiveException>(ApiTestBase.RequireMultipleIdentities);
+
+        ex.Message.ShouldContain("identit");
+        ex.Message.ShouldContain("403");
     }
 
     // --- ResolveIdentitySlot (decision 7's resolution, pulled out the same way ResolveDefaultIdentity was) ---

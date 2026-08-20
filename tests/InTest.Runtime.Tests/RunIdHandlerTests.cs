@@ -1,4 +1,3 @@
-using System.Net;
 using Shouldly;
 
 namespace InTest.Runtime.Tests;
@@ -6,23 +5,13 @@ namespace InTest.Runtime.Tests;
 [TestClass]
 public class RunIdHandlerTests
 {
-    private sealed class CapturingHandler : HttpMessageHandler
-    {
-        public string? SeenHeader;
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
-        {
-            SeenHeader = request.Headers.TryGetValues("X-Test-Run-Id", out var v) ? string.Join(",", v) : null;
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
-        }
-    }
-
     private static async Task<string?> SendAsync(string runId)
     {
-        var inner = new CapturingHandler();
+        var inner = new TestSupport.CapturingHandler();
         var handler = new RunIdHandler(() => runId) { InnerHandler = inner };
         using var client = new HttpClient(handler);
         await client.GetAsync("https://example.invalid/");
-        return inner.SeenHeader;
+        return inner.SeenRunIdHeader;
     }
 
     [TestInitialize]

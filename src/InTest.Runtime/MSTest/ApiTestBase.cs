@@ -37,7 +37,15 @@ public abstract class ApiTestBase
         // a generated auth case overrides it before sending its request. Resolved here, once per
         // test, from whatever ITestTokenProvider the generated project registered — never a
         // literal identity name, since the CLI that generated this suite could not have known one.
-        InTestAmbient.Identity.Value = ResolveDefaultIdentity(_scope.ServiceProvider.GetService<ITestTokenProvider>());
+        //
+        // Reads TestHost.TokenProvider rather than resolving a fresh instance from _scope
+        // (Task 10 item 1): RequireMultipleIdentities and UseIdentity already read that same
+        // static, and under the scaffold's documented AddSingleton registration the two are the
+        // same object — but under any other lifetime they would not be, so a provider whose
+        // Identities is computed per instance could gate the 403 case on one object while this
+        // Default identity came from another. Reading the static here removes that lifetime
+        // question entirely, since it is already resolved from the same container.
+        InTestAmbient.Identity.Value = ResolveDefaultIdentity(TestHost.TokenProvider);
 
         Client = _scope.ServiceProvider.GetRequiredService<IHttpClientFactory>().CreateClient(InTestClients.Api);
     }
@@ -95,15 +103,30 @@ public abstract class ApiTestBase
     /// </summary>
     protected internal static void RequireMultipleIdentities()
     {
-        var count = TestHost.TokenProvider?.Identities.Count ?? 0;
+        var provider = TestHost.TokenProvider;
+
+        // `?.Identities?.Count` — not `?.Identities.Count` (Task 10 item 3): the first `?.`
+        // guards only "no provider registered"; a registered provider whose Identities is
+        // itself null (the property is non-nullable only by annotation, not by anything the
+        // runtime enforces) would still throw NullReferenceException on an unguarded
+        // `.Count`. ResolveDefaultIdentity's own `provider?.Identities is { Count: > 0 }`
+        // already guards both cases — this must match its neighbour.
+        var count = provider?.Identities?.Count ?? 0;
         if (count >= 2)
         {
             return;
         }
 
-        Assert.Inconclusive(
-            $"Skipped: the registered ITestTokenProvider advertises {count} identit{(count == 1 ? "y" : "ies")}; " +
-            "a wrong-scope 403 test needs at least 2.");
+        // Task 10 item 4: branched on whether a provider is registered at all, not just its
+        // count. "The registered ITestTokenProvider advertises 0 identities" sends a reader
+        // hunting for a bug in code they never wrote when the true state — the day-one
+        // scaffold, and every spec declaring no `security` — is that there is no registered
+        // provider at all. Decision 3's whole argument for Assert.Inconclusive over a quieter
+        // skip is that the reason stays visible *and correct*.
+        Assert.Inconclusive(provider is null
+            ? "Skipped: no ITestTokenProvider is registered; a wrong-scope 403 test needs at least 2 identities."
+            : $"Skipped: the registered ITestTokenProvider advertises {count} identit{(count == 1 ? "y" : "ies")}; " +
+              "a wrong-scope 403 test needs at least 2.");
     }
 
     /// <summary>

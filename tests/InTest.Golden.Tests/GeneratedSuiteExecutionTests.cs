@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Xml.Linq;
 using InTest.Cli.Commands;
 using Shouldly;
@@ -314,10 +313,10 @@ public class GeneratedSuiteExecutionTests
 
         (await GenerateCommand.RunAsync(_root, CancellationToken.None)).ShouldBe(0);
 
-        var build = await RunAsync("dotnet", $"build \"{_root}\" --nologo -v q");
+        var build = await ProcessRunner.RunAsync("dotnet", $"build \"{_root}\" --nologo -v q");
         build.ExitCode.ShouldBe(0, $"generated project failed to build:{Environment.NewLine}{build.Output}");
 
-        var test = await RunAsync("dotnet", $"test \"{_root}\" --no-build --nologo");
+        var test = await ProcessRunner.RunAsync("dotnet", $"test \"{_root}\" --no-build --nologo");
 
         // The assertion that matters: the suite ran and passed. A FileNotFoundException for
         // appsettings.json, an unresolvable schema bundle, or a broken base URL all fail here
@@ -356,11 +355,11 @@ public class GeneratedSuiteExecutionTests
 
         AttachThrowingHandlerToApiClient();
 
-        var build = await RunAsync("dotnet", $"build \"{_root}\" --nologo -v q");
+        var build = await ProcessRunner.RunAsync("dotnet", $"build \"{_root}\" --nologo -v q");
         build.ExitCode.ShouldBe(0, $"generated project failed to build:{Environment.NewLine}{build.Output}");
 
         var resultsDir = Path.Combine(_root, "TestResults");
-        var test = await RunAsync("dotnet",
+        var test = await ProcessRunner.RunAsync("dotnet",
             $"test \"{_root}\" --no-build --nologo --logger \"trx;LogFileName=results.trx\" --results-directory \"{resultsDir}\"");
 
         // The misdiagnosis this task exists to close: readiness must never be what failed here.
@@ -399,7 +398,7 @@ public class GeneratedSuiteExecutionTests
         (await FixturesRepairCommand.RunAsync(_root, CancellationToken.None)).ShouldBe(0);
         (await GenerateCommand.RunAsync(_root, CancellationToken.None)).ShouldBe(0);
 
-        (await RunAsync("dotnet", $"build \"{_root}\" --nologo -v q")).ExitCode.ShouldBe(0);
+        (await ProcessRunner.RunAsync("dotnet", $"build \"{_root}\" --nologo -v q")).ExitCode.ShouldBe(0);
 
         var output = Path.Combine(_root, "bin", "Debug", "net10.0");
         foreach (var required in new[] { "appsettings.json", "spec-schemas.json", "spec-paths.json" })
@@ -454,11 +453,11 @@ public class GeneratedSuiteExecutionTests
         File.ReadAllText(fixturePath).ShouldNotContain("TODO:id",
             customMessage: "the sentinel replacement must actually take effect on disk");
 
-        var build = await RunAsync("dotnet", $"build \"{_root}\" --nologo -v q");
+        var build = await ProcessRunner.RunAsync("dotnet", $"build \"{_root}\" --nologo -v q");
         build.ExitCode.ShouldBe(0, $"generated project failed to build:{Environment.NewLine}{build.Output}");
 
         var resultsDir = Path.Combine(_root, "TestResults");
-        var test = await RunAsync("dotnet",
+        var test = await ProcessRunner.RunAsync("dotnet",
             $"test \"{_root}\" --no-build --nologo --logger \"trx;LogFileName=results.trx\" --results-directory \"{resultsDir}\"");
 
         var trxPath = Directory.GetFiles(resultsDir, "results.trx", SearchOption.AllDirectories)
@@ -542,11 +541,11 @@ public class GeneratedSuiteExecutionTests
         File.WriteAllText(Path.Combine(_root, "SeedIdFixture.cs"), GoldenFixtureSources.SeedIdFixture);
         RegisterFixture("SeedIdFixture");
 
-        var build = await RunAsync("dotnet", $"build \"{_root}\" --nologo -v q");
+        var build = await ProcessRunner.RunAsync("dotnet", $"build \"{_root}\" --nologo -v q");
         build.ExitCode.ShouldBe(0, $"generated project failed to build:{Environment.NewLine}{build.Output}");
 
         var resultsDir = Path.Combine(_root, "TestResults");
-        var test = await RunAsync("dotnet",
+        var test = await ProcessRunner.RunAsync("dotnet",
             $"test \"{_root}\" --no-build --nologo --logger \"trx;LogFileName=results.trx\" --results-directory \"{resultsDir}\"");
 
         var trxPath = Directory.GetFiles(resultsDir, "results.trx", SearchOption.AllDirectories)
@@ -604,10 +603,10 @@ public class GeneratedSuiteExecutionTests
         File.WriteAllText(Path.Combine(_root, "SkippedFixture.cs"), GoldenFixtureSources.SkippedFixture);
         RegisterFixture("SkippedFixture");
 
-        var build = await RunAsync("dotnet", $"build \"{_root}\" --nologo -v q");
+        var build = await ProcessRunner.RunAsync("dotnet", $"build \"{_root}\" --nologo -v q");
         build.ExitCode.ShouldBe(0, $"generated project failed to build:{Environment.NewLine}{build.Output}");
 
-        var test = await RunAsync("dotnet", $"test \"{_root}\" --no-build --nologo");
+        var test = await ProcessRunner.RunAsync("dotnet", $"test \"{_root}\" --no-build --nologo");
 
         // If SkippedFixture ran instead of being skipped, it throws and AssemblyInitialize fails
         // every test — the real signal. The suite must still pass.
@@ -657,13 +656,13 @@ public class GeneratedSuiteExecutionTests
         File.ReadAllText(fixturePath).ShouldContain("\"TODO:id\"",
             customMessage: "left unresolved on purpose — this test needs a genuine, standing validation problem");
 
-        var build = await RunAsync("dotnet", $"build \"{_root}\" --nologo -v q");
+        var build = await ProcessRunner.RunAsync("dotnet", $"build \"{_root}\" --nologo -v q");
         build.ExitCode.ShouldBe(0, $"generated project failed to build:{Environment.NewLine}{build.Output}");
 
         // "GetStatus_Contract" (no "By") does not match "GetStatusById_Contract" as a substring,
         // so this filter runs only the fixture-free operation and never touches the one with the
         // still-unresolved sentinel.
-        var test = await RunAsync("dotnet",
+        var test = await ProcessRunner.RunAsync("dotnet",
             $"test \"{_root}\" --no-build --nologo --filter \"FullyQualifiedName~GetStatus_Contract\"");
 
         test.ExitCode.ShouldBe(0,
@@ -705,11 +704,11 @@ public class GeneratedSuiteExecutionTests
         generated.ShouldContain("Guid.NewGuid().ToString()",
             customMessage: "decision 6: a declared-error case must send a generated, unmatchable id, never a fixture value");
 
-        var build = await RunAsync("dotnet", $"build \"{_root}\" --nologo -v q");
+        var build = await ProcessRunner.RunAsync("dotnet", $"build \"{_root}\" --nologo -v q");
         build.ExitCode.ShouldBe(0, $"generated project failed to build:{Environment.NewLine}{build.Output}");
 
         var resultsDir = Path.Combine(_root, "TestResults");
-        var test = await RunAsync("dotnet",
+        var test = await ProcessRunner.RunAsync("dotnet",
             $"test \"{_root}\" --no-build --nologo --filter \"FullyQualifiedName~GetWidgetById_NotFound\" " +
             $"--logger \"trx;LogFileName=results.trx\" --results-directory \"{resultsDir}\"");
 
@@ -786,11 +785,11 @@ public class GeneratedSuiteExecutionTests
         generated.ShouldContain("RequireMultipleIdentities();",
             customMessage: "decision 3: the 403 case must carry the runtime guard");
 
-        var build = await RunAsync("dotnet", $"build \"{_root}\" --nologo -v q");
+        var build = await ProcessRunner.RunAsync("dotnet", $"build \"{_root}\" --nologo -v q");
         build.ExitCode.ShouldBe(0, $"generated project failed to build:{Environment.NewLine}{build.Output}");
 
         var resultsDir = Path.Combine(_root, "TestResults");
-        var test = await RunAsync("dotnet",
+        var test = await ProcessRunner.RunAsync("dotnet",
             $"test \"{_root}\" --no-build --nologo --logger \"trx;LogFileName=results.trx\" --results-directory \"{resultsDir}\"");
 
         var trxPath = Directory.GetFiles(resultsDir, "results.trx", SearchOption.AllDirectories)
@@ -944,7 +943,7 @@ public class GeneratedSuiteExecutionTests
         File.WriteAllText(Path.Combine(_root, "RepeatableSeedFixture.cs"), GoldenFixtureSources.RepeatableSeedFixture);
         RegisterFixture("RepeatableSeedFixture");
 
-        var build = await RunAsync("dotnet", $"build \"{_root}\" --nologo -v q");
+        var build = await ProcessRunner.RunAsync("dotnet", $"build \"{_root}\" --nologo -v q");
         build.ExitCode.ShouldBe(0, $"generated project failed to build:{Environment.NewLine}{build.Output}");
     }
 
@@ -957,7 +956,7 @@ public class GeneratedSuiteExecutionTests
     private async Task RunAndAssertBothOperationsPassAsync(string label)
     {
         var resultsDir = Path.Combine(_root, "TestResults", label);
-        var test = await RunAsync("dotnet",
+        var test = await ProcessRunner.RunAsync("dotnet",
             $"test \"{_root}\" --no-build --nologo --logger \"trx;LogFileName=results.trx\" --results-directory \"{resultsDir}\"");
 
         var trxPath = Directory.GetFiles(resultsDir, "results.trx", SearchOption.AllDirectories)
@@ -1087,18 +1086,6 @@ public class GeneratedSuiteExecutionTests
             StringComparison.Ordinal));
     }
 
-    private static async Task<(int ExitCode, string Output)> RunAsync(string file, string arguments)
-    {
-        using var process = Process.Start(new ProcessStartInfo(file, arguments)
-        {
-            RedirectStandardOutput = true,
-            RedirectStandardError = true
-        })!;
-
-        var stdout = await process.StandardOutput.ReadToEndAsync();
-        var stderr = await process.StandardError.ReadToEndAsync();
-        await process.WaitForExitAsync();
-
-        return (process.ExitCode, stdout + stderr);
-    }
+    // RunAsync moved to ProcessRunner (Task 10 item 6) — shared with CompileVerificationTests
+    // and ScaffoldCompileVerificationTests, which duplicated this exact block.
 }

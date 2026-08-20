@@ -809,6 +809,52 @@ public class TestPlanBuilderTests
             n.Reason.Contains("security", StringComparison.OrdinalIgnoreCase));
     }
 
+    // The test above with a single line changed (Task 10 item 8(b)): the operation now declares
+    // `"security": []` explicitly, instead of omitting the key. Only the absent-key arm — the
+    // test above — was covered; this is the `{ Count: 0 }` arm operation.Security is null
+    // deliberately excludes, per the decision comment on TestPlanBuilder's auth branch. Both
+    // arms depend on Microsoft.OpenApi materializing an empty `"security": []` array as a
+    // non-null, zero-count list rather than normalizing it to null — if it normalized to null
+    // instead, this operation would be indistinguishable from the absent-key case above and
+    // would wrongly get a note, which is exactly what this test would catch.
+    private const string SpecWithAnExplicitEmptySecurityOverride = """
+    {
+      "openapi": "3.0.3",
+      "info": { "title": "Orders", "version": "1.0" },
+      "security": [{ "bearerAuth": [] }],
+      "paths": {
+        "/orders/{id}": {
+          "get": {
+            "operationId": "getOrderById",
+            "tags": ["Orders"],
+            "security": [],
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+            "responses": { "200": { "description": "ok", "content": { "application/json": {
+              "schema": { "$ref": "#/components/schemas/Order" } } } } }
+          }
+        }
+      },
+      "components": {
+        "schemas": { "Order": { "type": "object" } },
+        "securitySchemes": { "bearerAuth": { "type": "http", "scheme": "bearer" } }
+      }
+    }
+    """;
+
+    [TestMethod]
+    public async Task AnOperationExplicitlyOverridingSecurityToEmptyGetsNoNoteAndNoAuthCases()
+    {
+        // Decision comment on the auth branch: an explicit empty array is the spec's own way of
+        // overriding the document default to "no auth" for this operation, which is not a gap to
+        // report — unlike the absent-key case above, which silently inherited without being able
+        // to say so.
+        var plan = await BuildAsync(SpecWithAnExplicitEmptySecurityOverride);
+        var cases = plan.Classes.SelectMany(c => c.Cases).Where(c => c.OperationKey == "getOrderById").ToList();
+
+        cases.ShouldNotContain(c => c.Role == CaseRole.Auth);
+        plan.Notes.ShouldNotContain(n => n.OperationKey == "getOrderById");
+    }
+
     private const string SpecDeclaringSecurityWithARequiredBody = """
     {
       "openapi": "3.0.3",

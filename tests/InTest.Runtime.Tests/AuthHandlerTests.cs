@@ -1,4 +1,3 @@
-using System.Net;
 using Shouldly;
 
 namespace InTest.Runtime.Tests;
@@ -11,17 +10,6 @@ namespace InTest.Runtime.Tests;
 [TestClass]
 public class AuthHandlerTests
 {
-    private sealed class CapturingHandler : HttpMessageHandler
-    {
-        public HttpRequestMessage? SeenRequest;
-
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
-        {
-            SeenRequest = request;
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
-        }
-    }
-
     /// <summary>Records exactly which identity it was asked for, so a test can assert on the
     /// ambient value AuthHandler actually forwarded rather than merely on the resulting header.</summary>
     private sealed class RecordingProvider(string token, IReadOnlyList<string>? identities = null) : ITestTokenProvider
@@ -68,7 +56,7 @@ public class AuthHandlerTests
     private static async Task<HttpRequestMessage> SendThroughHandler(
         ITestTokenProvider? provider, string audience = "api://orders", CancellationToken cancellationToken = default)
     {
-        var inner = new CapturingHandler();
+        var inner = new TestSupport.CapturingHandler();
         var handler = new AuthHandler(provider, audience) { InnerHandler = inner };
         using var client = new HttpClient(handler);
         await client.GetAsync("https://example.invalid/", cancellationToken);

@@ -100,6 +100,12 @@ public static class TestHost
         // resets this field by hand between tests for the same reason.
         RetainedFixtureContext = null;
 
+        // Same reasoning, same precedent (Task 10 item 2): a bare field default cannot promise
+        // null on a second InitializeAsync call within one process any more than
+        // RetainedFixtureContext's could — a run that threw before reaching the real assignment
+        // below must not leave whatever the previous call registered for the next one to see.
+        TokenProvider = null;
+
         Profile = ResolveProfile(context);
         Configuration = BuildConfiguration(Profile);
         RunIdValue = RunId.Create(Configuration["InTest:RunId:Prefix"]);
