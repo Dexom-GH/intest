@@ -1062,10 +1062,14 @@ public class GeneratedSuiteExecutionTests
 
     /// <summary>
     /// Writes <see cref="GoldenAuthHandlerSources.AlwaysThrowsHandler"/> into the project and
-    /// wires it onto <c>InTestClients.Api</c> in <c>TestStartup.cs</c>'s <c>Register</c> hook —
-    /// the same hook, same client, the scaffold's own doc comment names for a real bearer
-    /// handler ("A secured API needs a DelegatingHandler appended to InTestClients.Api"). Never
-    /// touches <c>InTestClients.Readiness</c>: that omission is the entire point of Task 1.
+    /// wires it onto <c>InTestClients.Api</c> in <c>TestStartup.cs</c>'s <c>Register</c> hook.
+    /// This is a deliberate simulation of the pre-<c>AuthHandler</c> adopter pattern the
+    /// scaffold's own <c>Register</c> doc comment now explicitly forbids ("do not also append a
+    /// DelegatingHandler of your own, or two handlers will set Authorization and the last one
+    /// registered silently wins") — used anyway because F10's regression guard needs *some*
+    /// handler on that client that fails, and this is the shape an adopter's own handler took
+    /// before <c>AuthHandler</c> existed to attach one automatically. Never touches
+    /// <c>InTestClients.Readiness</c>: that omission is the entire point of Task 1.
     /// </summary>
     private void AttachThrowingHandlerToApiClient()
     {

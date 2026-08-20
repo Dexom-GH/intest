@@ -47,12 +47,12 @@ public sealed class AuthHandler(ITestTokenProvider? tokenProvider, string audien
             token = await tokenProvider.GetTokenAsync(_audience, identity, cancellationToken).ConfigureAwait(false);
         }
         // A cancellation of the token this call was given (an MSTest timeout, or
-        // HttpClient.Timeout — both cancel through TestContext.CancellationToken, which
-        // mstest-class.scriban:34 threads into every generated request) is not the provider
-        // failing; it is the run being cancelled. Mirrors FixtureRunner.cs:107-124's identical
-        // distinction one layer up: a cancelled run must not be blamed on the code that happened
-        // to be running when it fired. Left uncaught here, it propagates as a raw
-        // OperationCanceledException instead of being wrapped below.
+        // HttpClient.Timeout — both cancel through TestContext.CancellationToken, which the
+        // Client.SendAsync call in mstest-class.scriban threads into every generated request) is
+        // not the provider failing; it is the run being cancelled. Mirrors
+        // FixtureRunner.cs:107-124's identical distinction one layer up: a cancelled run must not
+        // be blamed on the code that happened to be running when it fired. Left uncaught here, it
+        // propagates as a raw OperationCanceledException instead of being wrapped below.
         catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
             // A bare HttpRequestException three layers down names neither the provider nor the

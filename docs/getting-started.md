@@ -8,9 +8,12 @@ integration test suite running as a post-deployment gate.
 >
 > `init`, `generate`, and `fixtures repair` (Phase 5) all work: together they produce a
 > compiling MSTest project, complete with the fixture files every operation needs. All three
-> are verified end to end against live APIs, request bodies included — the three sample suites
-> pass **22 of 22** against running servers, with 44 fixture sentinels filled by hand
-> ([`v0-acceptance.md`](v0-acceptance.md), which also records what that run found). Not yet built: `survey`
+> are verified end to end against live APIs, request bodies included — Catalog and Inventory pass
+> in full, twice each, against an unreset store. Orders — the one sample with declared `security`
+> — now generates 24 tests and passes **20 of 24** live: the 4 wrong-scope 403 cases cannot pass
+> against this sample's read-only identity, which genuinely holds every scope its own read
+> operations need (**F11**, still open; see [`v0-acceptance.md`](v0-acceptance.md), which also
+> records what that run found). Not yet built: `survey`
 > (Phase 0), `generate --check` and `intest upgrade` (Phase 8), variation tests, and
 > YAML input. Nothing is published to NuGet, so build from source for now.
 >

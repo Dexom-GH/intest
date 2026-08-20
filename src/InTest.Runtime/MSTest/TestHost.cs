@@ -39,14 +39,25 @@ public static class TestHost
 
     /// <summary>
     /// The <see cref="ITestTokenProvider"/> the generated project's <c>ConfigureServices</c>
-    /// registered, resolved once from <see cref="Root"/> right after it is built — the same
-    /// instance <see cref="AuthHandler"/> resolves fresh per request via
-    /// <c>sp.GetService&lt;ITestTokenProvider&gt;()</c>, exposed here so
-    /// <c>ApiTestBase.RequireMultipleIdentities</c> and <c>ApiTestBase.UseIdentity</c> (v1-c Task
-    /// 5) have something to consult without needing a live scope of their own — unlike
+    /// registered, resolved once from <see cref="Root"/> right after it is built and exposed here
+    /// so <c>ApiTestBase.RequireMultipleIdentities</c> and <c>ApiTestBase.UseIdentity</c> (v1-c
+    /// Task 5) have something to consult without needing a live scope of their own — unlike
     /// <see cref="AuthHandler"/>, neither runs inside one. Null for every spec that declares no
     /// <c>security</c>, exactly as <c>ApiTestBase.ResolveDefaultIdentity(null)</c> already treats
     /// as ordinary rather than an error.
+    /// <para>
+    /// This is the *same instance* <see cref="AuthHandler"/> uses, but not because
+    /// <see cref="AuthHandler"/> resolves anything: it takes the provider through its primary
+    /// constructor, supplied once by the factory lambda this class registers
+    /// (<c>services.AddTransient(sp =&gt; new AuthHandler(sp.GetService&lt;ITestTokenProvider&gt;(),
+    /// audience))</c>), and <c>IHttpClientFactory</c> builds a named client's handler chain once
+    /// and caches it for the handler lifetime (two minutes by default) — from a scope the factory
+    /// creates for itself, not the caller's scope, and not per request. "Same instance as this
+    /// field" therefore holds only because the provider itself is registered
+    /// <c>AddSingleton</c> (the scaffold and getting-started.md's Auth section both show it that
+    /// way); a scoped or transient registration would still let <see cref="AuthHandler"/>
+    /// construct correctly, just from a different instance than this field holds.
+    /// </para>
     /// <para>
     /// Internal, settable, hand-rolled the same way <see cref="RetainedFixtureContext"/> is: only
     /// <see cref="InitializeAsync"/> writes it in production, and

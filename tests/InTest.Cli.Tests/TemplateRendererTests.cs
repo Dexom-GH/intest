@@ -43,6 +43,23 @@ public class TemplateRendererTests
             Role: CaseRole.DeclaredError,
             NeedsFixture: false)]);
 
+    private static TestClassPlan PlanDeclaredErrorWithQueryParameters(params string[] queryParameterNames) => new(
+        "OrdersTests", "Orders",
+        [new TestCasePlan(
+            MethodName: "DeleteOrder_NotFound",
+            DisplayName: "Given Orders, when deleteOrder, then 404",
+            OperationKey: "deleteOrder",
+            OperationKeySynthesized: false,
+            HttpMethod: "GET",
+            PathTemplate: "/orders/{id}",
+            PathParameterNames: ["id"],
+            ExpectedStatus: 404,
+            SchemaKey: null,
+            Category: "Contract",
+            Role: CaseRole.DeclaredError,
+            NeedsFixture: false,
+            QueryParameterNames: queryParameterNames)]);
+
     private static TestClassPlan PlanDeclaredErrorWithIntegerPathParameter() => new(
         "OrdersTests", "Orders",
         [new TestCasePlan(
@@ -240,6 +257,29 @@ public class TemplateRendererTests
 
         rendered.ShouldContain("Guid.NewGuid().ToString()");
         rendered.ShouldNotContain("FixtureParameter(");
+    }
+
+    [TestMethod]
+    public void ADeclaredErrorCaseWithQueryParametersOnTheOperationSendsNoQueryString()
+    {
+        // Review finding on Task 8/9: PathArguments and has_body are both gated on
+        // `plan.Role == CaseRole.Success` (decision 6), but QueryExpression was not — the
+        // reviewer proved this by mutation, adding QueryParameterNames to the declared-error and
+        // auth branches in TestPlanBuilder and getting all 394 tests green with generated auth
+        // and 404 tests calling FixtureQueryParameters(...). A declared-error case shares its
+        // operation key with the success case beside it (same reasoning as
+        // ADeclaredErrorCaseCallsNoFixtureLookup above): looking up query parameters here would
+        // let that sibling's unfilled or unresolved fixture block a case that needs no data at
+        // all, and — for a mutating operation — carry real, possibly filtering, data into a
+        // request that decision 6 requires to touch nothing real.
+        //
+        // Built with QueryParameterNames populated so this cannot pass vacuously: a hand-built
+        // non-success plan whose QueryParameterNames defaults to null renders the same
+        // string.Empty whether or not the role gate exists at all.
+        var rendered = Render(PlanDeclaredErrorWithQueryParameters("page", "sort"));
+
+        rendered.ShouldNotContain("FixtureQueryParameters(");
+        rendered.ShouldNotContain("BuildQuery");
     }
 
     [TestMethod]

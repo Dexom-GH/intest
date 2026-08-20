@@ -143,9 +143,25 @@ public sealed class TemplateRenderer
     /// template, since an optional parameter with no example or default is never sent at all and
     /// the template has no way to know at generation time which ones a hand-filled fixture will
     /// end up carrying.
+    ///
+    /// Gated on Role == Success for the same reason as <see cref="PathArguments"/> and
+    /// <c>emits_fixture_lookup</c> above (decision 6): of the three fixture paths — path
+    /// arguments, body, query string — this was the one a mutation review found ungated. Adding
+    /// QueryParameterNames to the declared-error and both auth branches in TestPlanBuilder and
+    /// running the whole suite, Golden included, produced generated 404 and auth tests calling
+    /// FixtureQueryParameters(...) with every test still green: a fixture-free case could be
+    /// blocked by a sibling's unfilled fixture, and — for a mutating operation — a broken auth
+    /// case could carry real, possibly filtering, data into a request decision 6 requires to touch
+    /// nothing real. Tested positively for Success, not "!= DeclaredError", so any role this code
+    /// has not been told about yet fails toward the fixture-free arm by default.
     /// </summary>
     private static string QueryExpression(TestCasePlan plan)
     {
+        if (plan.Role != CaseRole.Success)
+        {
+            return string.Empty;
+        }
+
         var names = plan.QueryParameterNames ?? [];
         if (names.Count == 0)
         {

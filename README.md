@@ -11,10 +11,14 @@ or in a pull request, never as part of the deployment pipeline.
 >
 > `intest init` and `intest generate` work: they produce a compiling MSTest project whose
 > contract tests pass against a live API. That has been verified against three sample APIs, one
-> per OpenAPI producer — see [`docs/v0-acceptance.md`](docs/v0-acceptance.md). `intest fixtures
-> repair` now exists too: it creates and maintains the fixture files under `fixtures/` that
-> supply request bodies and path/query parameters, so operations with a request body no longer
-> generate a test that cannot send one — see "What day one actually looks like" below.
+> per OpenAPI producer — see [`docs/v0-acceptance.md`](docs/v0-acceptance.md). Catalog and
+> Inventory pass in full, twice each, against an unreset store. Orders — the one sample with
+> declared `security` — generates 24 tests and passes **20 of 24** live: the 4 wrong-scope 403
+> cases are structurally unable to pass against this sample's read-only identity, which has every
+> scope its own read operations need (**F11**, still open). `intest fixtures repair` now exists
+> too: it creates and maintains the fixture files under `fixtures/` that supply request bodies and
+> path/query parameters, so operations with a request body no longer generate a test that cannot
+> send one — see "What day one actually looks like" below.
 >
 > **Not yet built:** variation tests, `intest survey`, `generate --check`, and YAML
 > input. Packages are unpublished and the IDs are not reserved, so you cannot install this yet —

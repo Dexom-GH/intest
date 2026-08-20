@@ -51,7 +51,7 @@ public class AuthHandlerTests
     /// Cancels the very <see cref="CancellationTokenSource"/> driving the request while
     /// <c>GetTokenAsync</c> is "awaiting" it, then throws through that same token — modelling
     /// HttpClient.Timeout or TestContext.CancellationToken firing mid-request, the path every
-    /// generated test sends through (mstest-class.scriban:34).
+    /// generated test sends through (the Client.SendAsync call in mstest-class.scriban).
     /// </summary>
     private sealed class CancelingProvider(CancellationTokenSource cancellationTokenSource) : ITestTokenProvider
     {

@@ -1517,13 +1517,18 @@ spec does not support, not a fact decision 7 hides.
 **Not fixed here** — Task 8 is an acceptance run, not an implementation task, and this is a
 generation-logic question, not a runtime one. Recorded as the concrete gap for whichever phase
 next revisits `TestPlanBuilder`'s auth-case generation or `ITestTokenProvider`'s documented
-contract: either state explicitly (getting-started's Auth section, and `ITestTokenProvider.
-Identities`'s own doc comment) that the Secondary identity must lack every scope any secured
+contract: either state explicitly that the Secondary identity must lack every scope any secured
 operation could require — not merely "some other identity" — or teach the generator to weigh each
-operation's declared scope against some notion of "write-like". The latter is not something
-decision 7 rules out; decision 7 only blocks the generator from knowing what scopes the Secondary
-identity actually holds. The obstacle to the scope-name approach is that the spec gives no
-principled way to tell a "write" scope from a "read" one — it would be a guess, not a rule.
+operation's declared scope against some notion of "write-like". If it's the former, state it in
+all three places that currently under-state it, not just the first two anyone reaches for:
+getting-started's Auth section, `ITestTokenProvider.Identities`'s own doc comment, **and** §9's
+auth table in `docs/superpowers/specs/2026-08-16-intest-api-test-generator-design.md`
+(~line 1049), whose "Needs: A second identity" row carries the identical gap — miss it and a later
+fix leaves the spec disagreeing with the docs it was supposed to agree with. The generator-side
+option is not something decision 7 rules out; decision 7 only blocks the generator from knowing
+what scopes the Secondary identity actually holds. The obstacle to the scope-name approach is that
+the spec gives no principled way to tell a "write" scope from a "read" one — it would be a guess,
+not a rule.
 
 ### F12 — a mis-scoped, bodyless POST 415s, not the 400 Task 8 Step 3 predicts
 
