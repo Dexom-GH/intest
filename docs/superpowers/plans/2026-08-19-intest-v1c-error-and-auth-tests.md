@@ -688,10 +688,14 @@ denied does not succeed either:
 | Case | Mis-scoped result | Not |
 |---|---|---|
 | `DELETE /api/orders/{id}` | `expected 403, got 404` | `204` — the id matches no row |
-| `POST /api/orders` | `expected 403, got 400` | `201` — no body is sent |
+| `POST /api/orders` | `expected 403, got 415` | `201` — no body is sent |
+
+**415, not 400** — measured in the v1-c acceptance run (F12). A bodyless `POST` to an
+`[ApiController]` action carries no `Content-Type`, so content negotiation rejects it as an
+unsupported media type *before* model binding ever runs and could answer 400.
 
 **That is the proof**: the authorization check is no longer denying, so the request now reaches
-routing and model binding, which are what answer 404 and 400. Expect those two statuses by name in
+routing and content negotiation, which are what answer 404 and 415. Expect those two statuses by name in
 the log — "the test failed" alone would not distinguish this from a broken sample.
 
 Note the trade decision 6 makes, so the acceptance log states it rather than implying more than
