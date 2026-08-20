@@ -23,10 +23,10 @@ public class TestIdentityTests
     [TestMethod]
     public void DeclaredScopesRoundTripThroughTheDescriptor()
     {
-        var identity = new TestIdentity("reader", ["orders:read", "orders:list"]);
+        var identity = new TestIdentity("reader", ["orders.read", "orders.list"]);
 
         identity.Name.ShouldBe("reader");
-        identity.Scopes.ShouldBe(["orders:read", "orders:list"]);
+        identity.Scopes.ShouldBe(["orders.read", "orders.list"]);
     }
 
     [TestMethod]

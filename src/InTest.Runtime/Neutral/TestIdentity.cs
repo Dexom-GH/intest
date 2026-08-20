@@ -19,5 +19,15 @@ namespace InTest.Runtime;
 /// is itself a declaration — this identity holds no scopes — and is a different state from
 /// <c>null</c>, not an equivalent one: collapsing the two would make every undeclared identity
 /// look like a deliberate declaration. Non-empty is the scopes it holds.
+/// <para>
+/// This record's synthesized equality compares <see cref="Scopes"/> by reference, not
+/// element-wise: <see cref="IReadOnlyCollection{T}"/> has no structural equality of its own, so
+/// the generated <c>Equals</c> falls back to <see cref="EqualityComparer{T}.Default"/>, which for
+/// a reference type means the same collection instance. Two identities built from equal-looking
+/// but distinct scope lists are therefore not <c>==</c>/<c>Equals</c>-equal — <see
+/// cref="TestIdentity"/> is not a value-equality key on <see cref="Scopes"/>. The collection is
+/// also not defensively copied, so a caller holding the original reference can mutate it after
+/// construction.
+/// </para>
 /// </param>
 public sealed record TestIdentity(string Name, IReadOnlyCollection<string>? Scopes = null);

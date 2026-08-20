@@ -33,6 +33,9 @@ public class StaticTokenProviderTests
     public async Task RejectsAnIdentityItCannotServe()
     {
         var provider = new StaticTokenProvider("tok-123");
-        await Should.ThrowAsync<ArgumentException>(() => provider.GetTokenAsync("api://orders", "wrong-scope"));
+        var ex = await Should.ThrowAsync<ArgumentException>(() => provider.GetTokenAsync("api://orders", "wrong-scope"));
+
+        ex.Message.ShouldContain("'default'");
+        ex.Message.ShouldNotContain("TestIdentity");
     }
 }
