@@ -6,7 +6,10 @@ namespace InTest.Runtime.Tests;
 /// v1-c Task 5: the runtime guard that replaces <c>MemberCondition</c> (decision 3 — measured to
 /// be evaluated before <c>[AssemblyInitialize]</c>, so it cannot see anything the DI container
 /// built), and <see cref="ApiTestBase.UseIdentity"/>, the override point a generated auth case
-/// calls before building its request (decision 7).
+/// calls before building its request (decision 7). Also <see cref="ApiTestBase.ResolveIdentitySlot"/>,
+/// the slot-to-identity resolution <c>UseIdentity</c> defers to, and Task 2's
+/// <see cref="ApiTestBase.RequireSecondaryIdentityLacks"/>, the guard that skips a wrong-scope
+/// 403 the secondary identity is actually authorized for.
 /// <para>
 /// <see cref="TestHost.TokenProvider"/> is process-wide static state, the same shape
 /// <c>TestHostTests</c> already hand-rolls for <c>TestHost.RetainedFixtureContext</c>: reset
@@ -257,6 +260,41 @@ public class ApiTestBaseAuthTests
             new TestIdentity("readonly", ["orders.read"]));
 
         Should.NotThrow(() => ApiTestBase.RequireSecondaryIdentityLacks("orders.read", "orders.write"));
+    }
+
+    [TestMethod]
+    public void SecondaryHoldingAStrictSupersetSkipsWithoutClaimingTheExtraScopeIsRequired()
+    {
+        // The guard skips on superset, not equality — the ordinary shape of a read-only identity
+        // that holds several read scopes. A message that joins only the held scopes under "which
+        // this operation requires" states something false the moment the identity holds more
+        // than the operation needs, and gives the reader no clue which scope to remove.
+        TestHost.TokenProvider = new FakeTokenProvider(
+            new TestIdentity("default"),
+            new TestIdentity("readonly", ["orders.read", "products.read"]));
+
+        var ex = Should.Throw<AssertInconclusiveException>(() =>
+            ApiTestBase.RequireSecondaryIdentityLacks("orders.read"));
+
+        ex.Message.ShouldContain("readonly");
+        ex.Message.ShouldContain("orders.read");
+        ex.Message.ShouldContain("products.read");
+        // The identity holds products.read too, but the operation never asked for it — the
+        // message must not claim otherwise.
+        ex.Message.ShouldNotContain("products.read, which this operation requires");
+    }
+
+    [TestMethod]
+    public void ScopeComparisonIsOrdinalAndCaseSensitive()
+    {
+        // RFC 6749 scope tokens are case-sensitive, so EqualityComparer<string>.Default (what
+        // scopes.Contains binds to) is the correct comparer. Pins the behaviour so a future
+        // switch to OrdinalIgnoreCase would be caught rather than passing every existing test.
+        TestHost.TokenProvider = new FakeTokenProvider(
+            new TestIdentity("default"),
+            new TestIdentity("readonly", ["ORDERS.READ"]));
+
+        Should.NotThrow(() => ApiTestBase.RequireSecondaryIdentityLacks("orders.read"));
     }
 
     [TestMethod]

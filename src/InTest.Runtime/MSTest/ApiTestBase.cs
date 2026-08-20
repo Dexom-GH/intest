@@ -144,25 +144,27 @@ public abstract class ApiTestBase
     /// </para>
     /// <para>
     /// Guarded the same way <see cref="RequireMultipleIdentities"/> is, not the way
-    /// <see cref="ResolveIdentitySlot"/> is (they are deliberately opposite): this member is a
-    /// gate — nothing has run before it in the generated method body — while
-    /// <see cref="ResolveIdentitySlot"/>'s blind <c>Identities[1]</c> runs only after
-    /// <see cref="RequireMultipleIdentities"/> has already passed. This gate reaches further than
-    /// that one does — all the way to <c>Identities[1]</c> and its <see cref="TestIdentity.Scopes"/>
-    /// — so every one of "no provider", "<c>Identities</c> itself null", "fewer than two
-    /// identities", and "the second element itself is null" must fall through to running the test,
-    /// never to skipping and never to throwing. v1-c shipped a live
-    /// <see cref="NullReferenceException"/> on exactly this shape (a provider guarded, but not its
-    /// <c>Identities</c>) in <see cref="RequireMultipleIdentities"/> itself; this guard exists
-    /// precisely so that mistake is not repeated one index further in. A <c>null</c>
-    /// <see cref="TestIdentity.Scopes"/> also falls through here — not declared / unknown means
-    /// run and allow the test to fail, never skip.
+    /// <see cref="ResolveIdentitySlot"/> is (they are deliberately opposite) — but not because
+    /// nothing runs before this one. Task 4 emits <see cref="RequireMultipleIdentities"/> first
+    /// and this member second, in the same generated method body, so in generated code its own
+    /// provider/<c>Identities</c>/count checks are strictly redundant. It guards anyway for two
+    /// reasons: its wrong answer is silent — <see cref="ResolveIdentitySlot"/> failing throws,
+    /// loud and immediate, while this one failing the guard *skips a test*, which looks like
+    /// success — and it is <c>protected internal</c> on a shipped base class, so an adopter's
+    /// hand-written 403 test can call it directly, with nothing having run before it. This gate
+    /// reaches further than <see cref="ResolveIdentitySlot"/> does — all the way to
+    /// <c>Identities[1]</c> and its <see cref="TestIdentity.Scopes"/> — so every one of "no
+    /// provider", "<c>Identities</c> itself null", "fewer than two identities", and "the second
+    /// element itself is null" must fall through to running the test, never to skipping and
+    /// never to throwing. v1-c shipped a live <see cref="NullReferenceException"/> on exactly
+    /// this shape (a provider guarded, but not its <c>Identities</c>) in
+    /// <see cref="RequireMultipleIdentities"/> itself; this guard exists precisely so that
+    /// mistake is not repeated one index further in. A <c>null</c> <see cref="TestIdentity.Scopes"/>
+    /// also falls through here — not declared / unknown means run and allow the test to fail,
+    /// never skip.
     /// </para>
     /// <para>
-    /// <c>protected internal</c> for the same two reasons as <see cref="RequireMultipleIdentities"/>:
-    /// <c>protected</c> so the generated suite, in another assembly, can call it like its
-    /// <c>protected static</c> neighbours; <c>internal</c> so <c>InTest.Runtime.Tests</c> can call
-    /// it directly via the <c>InternalsVisibleTo</c> already in <c>InTest.Runtime.csproj</c>.
+    /// <c>protected internal</c> for the same two reasons as <see cref="RequireMultipleIdentities"/>.
     /// </para>
     /// </summary>
     protected internal static void RequireSecondaryIdentityLacks(params string[] requiredScopes)
@@ -173,19 +175,27 @@ public abstract class ApiTestBase
             return;
         }
 
-        // requiredScopes.All(...) is vacuously true over an empty requiredScopes, so a
-        // zero-argument call must be excluded here rather than falling through to it: a
+        if (secondary.Scopes is not { } scopes) return;      // undeclared: unknown means run
+        if (requiredScopes is not { Length: > 0 }) return;   // no requirement to compare against
+        // requiredScopes.All(...) is vacuously true over an empty requiredScopes, which is why
+        // the line above must be its own check rather than falling through to this one: a
         // scope-free operation can still 403 on other grounds (tenant, role, resource
         // ownership), and skipping would assert something this code has no basis for.
-        if (secondary.Scopes is not { } scopes || requiredScopes.Length == 0 || !requiredScopes.All(scopes.Contains))
-        {
-            return;
-        }
+        if (!requiredScopes.All(scopes.Contains)) return;    // lacks at least one: the 403 is real
 
-        Assert.Inconclusive(
-            $"Skipped: the secondary identity '{secondary.Name}' holds {string.Join(", ", scopes)}, " +
-            "which this operation requires, so it cannot produce a 403. Declare different scopes on " +
-            "that identity, or leave Scopes null to run this test anyway.");
+        // scopes.Contains (above) binds Enumerable.Contains, so comparison is
+        // EqualityComparer<string>.Default — ordinal, case-sensitive. That is correct: RFC 6749
+        // scope tokens are case-sensitive, so "ORDERS.READ" must not satisfy a requirement for
+        // "orders.read".
+        var extra = scopes.Except(requiredScopes).Any();
+        Assert.Inconclusive(extra
+            ? $"Skipped: the secondary identity '{secondary.Name}' holds {string.Join(", ", scopes)} — " +
+              $"including {string.Join(", ", requiredScopes)}, which this operation requires — so it " +
+              "cannot produce a 403. Declare different scopes on that identity, or leave Scopes null " +
+              "to run this test anyway."
+            : $"Skipped: the secondary identity '{secondary.Name}' holds {string.Join(", ", scopes)}, " +
+              "which this operation requires, so it cannot produce a 403. Declare different scopes on " +
+              "that identity, or leave Scopes null to run this test anyway.");
     }
 
     /// <summary>
