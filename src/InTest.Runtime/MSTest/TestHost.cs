@@ -139,10 +139,12 @@ public static class TestHost
         ConfigureServices?.Invoke(services, Configuration);
         Root = services.BuildServiceProvider();
 
-        // Resolved once here, from the same container the factory lambda above (line ~135)
-        // resolves from when IHttpClientFactory builds the Api client's handler chain — not a
-        // second, independent registration, and not AuthHandler resolving anything itself (it
-        // takes the provider through its primary constructor; see TokenProvider's doc above).
+        // Resolved once here, from the same container the
+        // services.AddTransient(sp => new AuthHandler(sp.GetService<ITestTokenProvider>(), audience))
+        // registration above resolves from when IHttpClientFactory builds the Api client's
+        // handler chain — not a second, independent registration, and not AuthHandler resolving
+        // anything itself (it takes the provider through its primary constructor; see
+        // TokenProvider's doc above).
         // This field and the instance AuthHandler was built with are the same object only
         // because the provider is registered AddSingleton; a scoped or transient registration
         // would still let AuthHandler construct correctly, just from a different instance than
