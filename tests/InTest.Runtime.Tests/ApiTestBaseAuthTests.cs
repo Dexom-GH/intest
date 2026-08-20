@@ -285,6 +285,34 @@ public class ApiTestBaseAuthTests
     }
 
     [TestMethod]
+    public void ZeroRequiredScopesRunsEvenWhenSecondaryHoldsScopes()
+    {
+        // A zero-argument call means the operation declares no scopes at all — it can still 403
+        // on other grounds (tenant, role, resource ownership), so this must never skip.
+        // `requiredScopes.All(scopes.Contains)` is vacuously true over an empty requiredScopes,
+        // which read as "the secondary already holds everything required" and skipped; that is
+        // the bug this test exists to catch.
+        TestHost.TokenProvider = new FakeTokenProvider(
+            new TestIdentity("default"),
+            new TestIdentity("readonly", ["orders.read"]));
+
+        Should.NotThrow(() => ApiTestBase.RequireSecondaryIdentityLacks());
+    }
+
+    [TestMethod]
+    public void ZeroRequiredScopesRunsEvenWhenSecondaryScopesIsEmpty()
+    {
+        // Same bug, [] variant: an empty requiredScopes is still vacuously "All" over an empty
+        // Scopes, and Scopes being non-null (even though empty) meant the guard's `is not { }
+        // scopes` half didn't save it either — this must run regardless.
+        TestHost.TokenProvider = new FakeTokenProvider(
+            new TestIdentity("default"),
+            new TestIdentity("readonly", []));
+
+        Should.NotThrow(() => ApiTestBase.RequireSecondaryIdentityLacks());
+    }
+
+    [TestMethod]
     public void NoRegisteredProviderRunsRatherThanSkippingASecondTime()
     {
         // RequireMultipleIdentities already owns this skip; never skip twice for one reason.

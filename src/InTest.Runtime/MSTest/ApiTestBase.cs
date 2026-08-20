@@ -173,7 +173,11 @@ public abstract class ApiTestBase
             return;
         }
 
-        if (secondary.Scopes is not { } scopes || !requiredScopes.All(scopes.Contains))
+        // requiredScopes.All(...) is vacuously true over an empty requiredScopes, so a
+        // zero-argument call must be excluded here rather than falling through to it: a
+        // scope-free operation can still 403 on other grounds (tenant, role, resource
+        // ownership), and skipping would assert something this code has no basis for.
+        if (secondary.Scopes is not { } scopes || requiredScopes.Length == 0 || !requiredScopes.All(scopes.Contains))
         {
             return;
         }
