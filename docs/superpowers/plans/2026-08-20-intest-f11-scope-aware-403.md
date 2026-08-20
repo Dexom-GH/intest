@@ -167,8 +167,9 @@ A null-scope identity cannot be obtained by omission. Because the audience arriv
 
 **Files:**
 - Create: `src/InTest.Runtime/Neutral/TestIdentity.cs`
-- Modify: `ITestTokenProvider.cs`, `StaticTokenProvider.cs`, `AuthHandler.cs`, `ApiTestBase.cs`
-- Test: `tests/InTest.Runtime.Tests/` — 7 test doubles reshape with it
+- Modify: `ITestTokenProvider.cs`, `StaticTokenProvider.cs`, `ApiTestBase.cs` (**both** `ResolveIdentitySlot` and `ResolveDefaultIdentity`)
+- **Not** `AuthHandler.cs` — it never reads `Identities`, only the `InTestIdentities.None` sentinel and `GetTokenAsync`. Finding nothing to change there is correct, not an oversight.
+- Test: `tests/InTest.Runtime.Tests/` — 6 one-line test doubles, plus `tests/InTest.Golden.Tests/GoldenTokenProviderSources.cs`, which is emitted **source text**, not a type in the test assembly
 
 - [ ] **Step 1: Write the failing tests**
 
