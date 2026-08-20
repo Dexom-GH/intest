@@ -238,6 +238,7 @@ public class ApiTestBaseAuthTests
         ex.Message.ShouldContain("readonly");
         ex.Message.ShouldContain("orders.read");
         ex.Message.ShouldContain("403");
+        ex.Message.ShouldNotContain("including");
     }
 
     [TestMethod]
