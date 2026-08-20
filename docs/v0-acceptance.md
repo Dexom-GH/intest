@@ -1522,9 +1522,9 @@ operation could require — not merely "some other identity" — or teach the ge
 operation's declared scope against some notion of "write-like". If it's the former, state it in
 all three places that currently under-state it, not just the first two anyone reaches for:
 getting-started's Auth section, `ITestTokenProvider.Identities`'s own doc comment, **and** §9's
-auth table in `docs/superpowers/specs/2026-08-16-intest-api-test-generator-design.md`
-(~line 1049), whose "Needs: A second identity" row carries the identical gap — miss it and a later
-fix leaves the spec disagreeing with the docs it was supposed to agree with. The generator-side
+auth table in `docs/superpowers/specs/2026-08-16-intest-api-test-generator-design.md`, whose
+"Needs: A second identity" row carries the identical gap — miss it and a later fix leaves the spec
+disagreeing with the docs it was supposed to agree with. The generator-side
 option is not something decision 7 rules out; decision 7 only blocks the generator from knowing
 what scopes the Secondary identity actually holds. The obstacle to the scope-name approach is that
 the spec gives no principled way to tell a "write" scope from a "read" one — it would be a guess,

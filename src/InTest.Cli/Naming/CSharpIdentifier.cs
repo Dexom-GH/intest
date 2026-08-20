@@ -53,7 +53,6 @@ public static class CSharpIdentifier
     /// composite case identity (<see cref="Planning.TestPlanBuilder.CaseIdentity"/>: operation
     /// key plus role plus expected status), not an operation key alone — never by position, so
     /// adding an operation, or a second case to an existing one, cannot rename an unrelated case.
-    /// See <see cref="InTest.Cli.Planning.TestPlanBuilder"/>'s private <c>CaseIdentity</c> method.
     /// </summary>
     public static IReadOnlyDictionary<string, string> Dedupe(IReadOnlyDictionary<string, string> proposed)
     {

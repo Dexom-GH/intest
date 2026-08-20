@@ -139,11 +139,16 @@ public static class TestHost
         ConfigureServices?.Invoke(services, Configuration);
         Root = services.BuildServiceProvider();
 
-        // Resolved once here, from the same container AuthHandler's own per-request resolution
-        // reads from — not a second, independent registration. GetService, not GetRequiredService:
-        // most specs declare no security and register no provider at all (question (b) from
-        // Task 2), which RequireMultipleIdentities' own zero-identity handling already treats as
-        // ordinary.
+        // Resolved once here, from the same container the factory lambda above (line ~135)
+        // resolves from when IHttpClientFactory builds the Api client's handler chain — not a
+        // second, independent registration, and not AuthHandler resolving anything itself (it
+        // takes the provider through its primary constructor; see TokenProvider's doc above).
+        // This field and the instance AuthHandler was built with are the same object only
+        // because the provider is registered AddSingleton; a scoped or transient registration
+        // would still let AuthHandler construct correctly, just from a different instance than
+        // this field holds. GetService, not GetRequiredService: most specs declare no security
+        // and register no provider at all (question (b) from Task 2), which
+        // RequireMultipleIdentities' own zero-identity handling already treats as ordinary.
         TokenProvider = Root.GetService<ITestTokenProvider>();
 
         Schemas = SchemaBundle.FromFile(Path.Combine(AppContext.BaseDirectory, "spec-schemas.json"));
