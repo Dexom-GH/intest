@@ -258,17 +258,26 @@ This guard reaches **further** — `Identities[1]` — so it must guard: provide
 | `RequireMultipleIdentities` | Guards provider, `Identities`, and count | It **is** the gate — nothing ran before it |
 | `ResolveIdentitySlot` | `provider!.Identities[1]`, blind | It runs **after** the gate, in the same generated method body; its doc comment says exactly that |
 
-`RequireSecondaryIdentityLacks` is a gate, so it takes the first style. Do not "fix" `ResolveIdentitySlot`'s blind index to match — that indexing is correct and documented, and making it defensive would hide a template-ordering bug rather than prevent one.
+`RequireSecondaryIdentityLacks` takes the first style — **but not because nothing runs before it.** Task 4 emits it *after* `RequireMultipleIdentities`, in the same method body, so in generated code its provider/`Identities`/count checks are strictly redundant. It guards anyway for two reasons the comment must state, because "it is the gate" is false of it and a reader who checks that claim against the template will conclude the guards are pointless:
+
+- **Its wrong answer is silent.** `ResolveIdentitySlot` failing throws — loud, immediate. This one failing *skips a test*, which looks like success. Redundant guards are cheap; a silently-skipped auth test is the failure this whole plan exists to prevent.
+- **It is directly callable outside the generated ordering.** `protected internal` on a shipped base class means an adopter's hand-written 403 test reaches it with no `RequireMultipleIdentities` before it.
+
+Do not "fix" `ResolveIdentitySlot`'s blind index to match — that indexing is correct and documented, and making it defensive would hide a template-ordering bug rather than prevent one.
 
 - [ ] **Step 3: State the message contract**
 
-The skip must name the identity, the scopes it holds, and what that means — a skip nobody can explain is indistinguishable from a bug:
+The skip must name the identity, the scopes it holds, **and the scopes the operation required** — a skip nobody can explain is indistinguishable from a bug, and one that explains wrongly is worse than the failure it replaced.
+
+**Name both sets, not one.** The guard skips on *superset*, not equality, so a message that joins only the held scopes under the predicate "which this operation requires" states something false the moment the identity holds more than the operation needs — the ordinary shape of a read-only identity with several read scopes. `samples/Identity.Server`'s `orders-readonly` escapes it only by holding exactly one scope.
 
 ```
-Skipped: the secondary identity 'readonly' holds orders.read, which this operation requires,
-so it cannot produce a 403. Declare different scopes on that identity, or leave Scopes null to
-run this test anyway.
+Skipped: the secondary identity 'readonly' holds orders.read, products.read — including
+orders.read, which this operation requires — so it cannot produce a 403. Declare different
+scopes on that identity, or leave Scopes null to run this test anyway.
 ```
+
+**A test must cover the strict-superset case**, asserting the message does not claim the operation requires the extra scopes. Without it, joining the wrong collection passes every test.
 
 - [ ] **Step 4–6: Run, implement, re-run, commit**
 
