@@ -89,13 +89,21 @@ public sealed record TestIdentity(string Name, IReadOnlyCollection<string>? Scop
 
 The reshape is **free now and not later**, and the interface's own doc comment already says so about its previous change: *"made while nothing outside this repository implements the interface yet — the last point at which it was free. From the first published version onward, this ordering is a semver promise (§3)."* Nothing is published; no project outside this repository has been scaffolded.
 
-Measured cost: **8 implementers**, all in-repo — `StaticTokenProvider` plus 7 test doubles across `ApiTestBaseAuthTests`, `ApiTestBaseTests`, `AuthHandlerTests` and `GoldenTokenProviderSources`. Seven are one-line constructors.
+Measured cost: **8 implementers**, all in-repo — `StaticTokenProvider` plus 7 doubles across `ApiTestBaseAuthTests`, `ApiTestBaseTests`, `AuthHandlerTests` and `GoldenTokenProviderSources`.
+
+Six are one-line constructors. **`GoldenTokenProviderSources.TwoIdentityTokenProvider` is not** — it is a `const string` of C# **source text** written into a scaffolded project, so reshaping it is a string edit that has to stay compilable inside a *generated* project, and it reads `Identities[0]` inside that text. Budget for it as the one that can fail at a different layer than the rest.
+
+**`AuthHandler` needs no change.** It never reads `Identities` — it checks the `InTestIdentities.None` sentinel and calls `GetTokenAsync`, both untouched by this reshape. Named here because it is the obvious place to look and finding nothing there should not read as an oversight.
 
 The alternative cost is a **major version bump** the moment any further per-identity attribute is wanted, and one is already written down: §9's auth table records wrong-tenant 403 as a future case using the same `Identities[1]` mechanism. Under the rejected shape that is a third parallel lookup; under this one it is an added property.
 
 > **Greenfield argues for the bigger change here, not the smaller one.** The instinct it usually triggers — no consumers, so don't over-engineer — points the wrong way when the thing being designed *is* the public extension point. Earlier in this project greenfield was correctly used to delete work; here it is a reason to spend the freedom once, while it is free.
 
 `GetTokenAsync(string audience, string? identity = null, …)` is **unchanged** and still selects by name — `TestIdentity.Name` is what callers pass. The descriptor enriches how an identity is *described*, not how one is *selected*.
+
+**Names must be unique, and that invariant is stated rather than assumed.** This shape permits a smaller version of the defect it replaces: two entries sharing a `Name` with different `Scopes` is undefined, because the guard reads positionally (`Identities[1]`) while `GetTokenAsync` selects by name, so the two would disagree about which scopes apply. The argument that won this reshape — *a shape that permits a meaningless state is the defect, independent of whether anyone hits it* — applies to it too.
+
+v1-c chose not to validate `Identities` at all, and this plan does not add validation either; the guard's job is to skip a test, not to police a provider. So say it on `TestIdentity`'s own doc comment: names are expected unique, and behaviour is undefined otherwise. **Knowingly unaddressed and written down beats silently permitted** — that is the whole standard [descriptor] is arguing from.
 
 ### [unknown-runs] — `Scopes is null` means unknown, and unknown runs the test
 
@@ -140,8 +148,7 @@ A null-scope identity cannot be obtained by omission. Because the audience arriv
 | **Modified — `src/InTest.Runtime/`** | |
 | `Neutral/ITestTokenProvider.cs` | `Identities` becomes `IReadOnlyList<TestIdentity>` |
 | `Neutral/StaticTokenProvider.cs` | One identity, scopes `null` |
-| `MSTest/ApiTestBase.cs` | `RequireSecondaryIdentityLacks(params string[])`; `ResolveIdentitySlot` reads `.Name` |
-| `Neutral/AuthHandler.cs` | Wherever it reads `Identities` as strings |
+| `MSTest/ApiTestBase.cs` | `RequireSecondaryIdentityLacks(params string[])`; **both** `ResolveIdentitySlot` and `ResolveDefaultIdentity` read `.Name` |
 | **Modified — `src/InTest.Cli/`** | |
 | `Planning/TestCasePlan.cs` | Carry `RequiredScopes` — empty for every non-auth case |
 | `Planning/TestPlanBuilder.cs` | Populate it in `PlanAuthCases` from `operation.Security` |
@@ -241,7 +248,16 @@ public void PartialScopeOverlapStillRunsTheTest()
 
 v1-c shipped a live `NullReferenceException` on exactly this shape: `RequireMultipleIdentities` guarded the provider but not `Identities`, and it was caught only in the cleanup pass. `ApiTestBase.cs` now carries a comment about `?.Identities?.Count` because of it.
 
-This guard reaches **further** — `Identities[1]` — so it must guard: provider null, `Identities` null, `Count < 2`, and the element itself. Every one of those falls through to **run the test**, never to skip and never to throw. Match the neighbouring `ResolveIdentitySlot` and `RequireMultipleIdentities` exactly rather than inventing a third null-handling style in the same file.
+This guard reaches **further** — `Identities[1]` — so it must guard: provider null, `Identities` null, `Count < 2`, and the element itself. Every one of those falls through to **run the test**, never to skip and never to throw.
+
+**Guard like `RequireMultipleIdentities`. Leave `ResolveIdentitySlot` alone.** The two neighbours are deliberately opposite and an implementer cannot match both:
+
+| Member | Style | Why |
+|---|---|---|
+| `RequireMultipleIdentities` | Guards provider, `Identities`, and count | It **is** the gate — nothing ran before it |
+| `ResolveIdentitySlot` | `provider!.Identities[1]`, blind | It runs **after** the gate, in the same generated method body; its doc comment says exactly that |
+
+`RequireSecondaryIdentityLacks` is a gate, so it takes the first style. Do not "fix" `ResolveIdentitySlot`'s blind index to match — that indexing is correct and documented, and making it defensive would hide a template-ordering bug rather than prevent one.
 
 - [ ] **Step 3: State the message contract**
 
@@ -402,9 +418,20 @@ Also update §9's **precondition section**: its F11 row and the blockquote marki
 
 The worked `OrdersTokenProvider` moves to `TestIdentity`, with one sentence on why: a read-only second identity is the common case, and without declared scopes its read operations' 403 tests cannot pass. `InitCommand.cs`'s commented-out provider example changes with it.
 
-- [ ] **Step 5: Close F11 in `docs/v0-acceptance.md`**
+- [ ] **Step 5: Close F11 in `docs/v0-acceptance.md` — without rewriting what the v1-c run produced**
 
-With Task 7's run evidence, not merely marked done. Update the v1-c actions table row 3, and every one of F11's **six** mentions that says Open.
+There are **8** F11 mentions and exactly **one** carries a status: the v1-c actions table, row 3. The other seven are historical narrative of the v1-c run — the phase table, four lines inside the v1-c acceptance section, the finding heading, and F12's cross-reference to F11's reasoning.
+
+**Do not "update every mention that says Open."** Seven of them record what a run actually produced on 2026-08-19, and a suite that failed 4 of 24 that day still failed them. Rewriting that turns an evidence log into a changelog.
+
+Follow the precedent F7 set when v1-b closed it, and F8/F9/F10 after it:
+
+| Mention | Action |
+|---|---|
+| v1-c actions table, row 3 | Flip to **Closed**, with Task 7's evidence |
+| The `### F11 —` heading | Append `· **closed in F11 phase**` |
+| Immediately under that heading | A `>` blockquote: closed, where the evidence lives, and that the failure recorded below is **preserved as the original evidence** |
+| The other six | **Leave exactly as they are** |
 
 - [ ] **Step 6: Commit**
 
