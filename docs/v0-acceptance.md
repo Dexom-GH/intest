@@ -1505,18 +1505,25 @@ This is not specific to this sample. A "full access vs. read-only" identity pair
 `Config.cs` chose — is one of the most common real-world role splits, and it produces exactly this
 outcome: every write-scoped operation's wrong-scope 403 is provable, every read-scoped operation's
 is not, for the structural reason that a read-only identity is never "wrong scope" for a read.
-`TestPlanBuilder` has no way to know this at generation time — it never sees real identity
-capabilities, by design (decision 7) — so it cannot restrict the case to write-scoped operations
-only; it would need to stop assuming the Secondary identity is universally wrong instead.
+`TestPlanBuilder` already reads each operation's declared scope (`TestPlanBuilder.cs:197`) — that
+is spec data, not identity data. What decision 7 actually rules out is different: the CLI runs
+long before any provider exists, so it can never know which scopes the Secondary identity itself
+holds. Restricting the case to "write-scoped" operations isn't blocked by that — the spec's own
+scope strings are sitting right there to read. The real obstacle is that nothing in the spec marks
+a scope as read-like or write-like; `orders.read` and `orders.write` read that way only because
+this sample named them that way. Classifying a scope as "write" from its name is a heuristic the
+spec does not support, not a fact decision 7 hides.
 
 **Not fixed here** — Task 8 is an acceptance run, not an implementation task, and this is a
 generation-logic question, not a runtime one. Recorded as the concrete gap for whichever phase
 next revisits `TestPlanBuilder`'s auth-case generation or `ITestTokenProvider`'s documented
 contract: either state explicitly (getting-started's Auth section, and `ITestTokenProvider.
 Identities`'s own doc comment) that the Secondary identity must lack every scope any secured
-operation could require — not merely "some other identity" — or teach the generator to reason
-about per-operation scope, which decision 7 currently rules out on principle (the CLI never sees
-real identity capabilities).
+operation could require — not merely "some other identity" — or teach the generator to weigh each
+operation's declared scope against some notion of "write-like". The latter is not something
+decision 7 rules out; decision 7 only blocks the generator from knowing what scopes the Secondary
+identity actually holds. The obstacle to the scope-name approach is that the spec gives no
+principled way to tell a "write" scope from a "read" one — it would be a guess, not a rule.
 
 ### F12 — a mis-scoped, bodyless POST 415s, not the 400 Task 8 Step 3 predicts
 
