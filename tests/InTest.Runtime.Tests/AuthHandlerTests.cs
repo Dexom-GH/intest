@@ -12,12 +12,12 @@ public class AuthHandlerTests
 {
     /// <summary>Records exactly which identity it was asked for, so a test can assert on the
     /// ambient value AuthHandler actually forwarded rather than merely on the resulting header.</summary>
-    private sealed class RecordingProvider(string token, IReadOnlyList<string>? identities = null) : ITestTokenProvider
+    private sealed class RecordingProvider(string token, IReadOnlyList<TestIdentity>? identities = null) : ITestTokenProvider
     {
         public string? LastAudience;
         public string? LastIdentity;
 
-        public IReadOnlyList<string> Identities { get; } = identities ?? ["default", "secondary"];
+        public IReadOnlyList<TestIdentity> Identities { get; } = identities ?? [new TestIdentity("default"), new TestIdentity("secondary")];
 
         public Task<string> GetTokenAsync(string audience, string? identity = null, CancellationToken cancellationToken = default)
         {
@@ -29,7 +29,7 @@ public class AuthHandlerTests
 
     private sealed class ThrowingProvider : ITestTokenProvider
     {
-        public IReadOnlyList<string> Identities { get; } = ["default"];
+        public IReadOnlyList<TestIdentity> Identities { get; } = [new TestIdentity("default")];
 
         public Task<string> GetTokenAsync(string audience, string? identity = null, CancellationToken cancellationToken = default) =>
             throw new InvalidOperationException("identity server unreachable");
@@ -43,7 +43,7 @@ public class AuthHandlerTests
     /// </summary>
     private sealed class CancelingProvider(CancellationTokenSource cancellationTokenSource) : ITestTokenProvider
     {
-        public IReadOnlyList<string> Identities { get; } = ["default"];
+        public IReadOnlyList<TestIdentity> Identities { get; } = [new TestIdentity("default")];
 
         public Task<string> GetTokenAsync(string audience, string? identity = null, CancellationToken cancellationToken = default)
         {

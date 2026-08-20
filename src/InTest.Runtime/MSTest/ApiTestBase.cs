@@ -74,7 +74,7 @@ public abstract class ApiTestBase
     /// </para>
     /// </summary>
     internal static string ResolveDefaultIdentity(ITestTokenProvider? provider) =>
-        provider?.Identities is { Count: > 0 } identities ? identities[0] : InTestIdentities.None;
+        provider?.Identities is { Count: > 0 } identities ? identities[0].Name : InTestIdentities.None;
 
     /// <summary>
     /// Generated 403 (wrong-scope) cases call this first, before anything else in the method
@@ -165,7 +165,7 @@ public abstract class ApiTestBase
     internal static string ResolveIdentitySlot(IdentitySlot slot, ITestTokenProvider? provider) => slot switch
     {
         IdentitySlot.None => InTestIdentities.None,
-        IdentitySlot.Secondary => provider!.Identities[1],
+        IdentitySlot.Secondary => provider!.Identities[1].Name,
         _ => ResolveDefaultIdentity(provider)
     };
 

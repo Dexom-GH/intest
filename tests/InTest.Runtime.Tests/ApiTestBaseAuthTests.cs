@@ -17,9 +17,9 @@ namespace InTest.Runtime.Tests;
 [TestClass]
 public class ApiTestBaseAuthTests
 {
-    private sealed class FakeTokenProvider(params string[] identities) : ITestTokenProvider
+    private sealed class FakeTokenProvider(params string[] identityNames) : ITestTokenProvider
     {
-        public IReadOnlyList<string> Identities { get; } = identities;
+        public IReadOnlyList<TestIdentity> Identities { get; } = identityNames.Select(n => new TestIdentity(n)).ToArray();
 
         public Task<string> GetTokenAsync(string audience, string? identity = null, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException("not exercised by these tests");
@@ -103,7 +103,7 @@ public class ApiTestBaseAuthTests
     /// already guards against exactly this shape.</summary>
     private sealed class NullIdentitiesProvider : ITestTokenProvider
     {
-        public IReadOnlyList<string> Identities => null!;
+        public IReadOnlyList<TestIdentity> Identities => null!;
 
         public Task<string> GetTokenAsync(string audience, string? identity = null, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException("not exercised by this test");

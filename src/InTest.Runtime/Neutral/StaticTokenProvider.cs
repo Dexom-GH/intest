@@ -5,14 +5,16 @@ public sealed class StaticTokenProvider(string token, string identityName = "def
 {
     private readonly string _token = token ?? throw new ArgumentNullException(nameof(token));
 
-    public IReadOnlyList<string> Identities { get; } = [identityName];
+    public IReadOnlyList<TestIdentity> Identities { get; } = [new TestIdentity(identityName)];
 
     public Task<string> GetTokenAsync(string audience, string? identity = null, CancellationToken cancellationToken = default)
     {
-        if (identity is not null && !Identities.Contains(identity))
+        if (identity is not null && !Identities.Any(i => i.Name == identity))
         {
             throw new ArgumentException(
-            $"StaticTokenProvider serves only '{string.Join(", ", Identities)}'; '{identity}' was requested. " +
+            // Named by identity, not by rendering a TestIdentity record — the message is for a
+            // human reading a test failure, not a dump of the descriptor.
+            $"StaticTokenProvider serves only '{string.Join(", ", Identities.Select(i => i.Name))}'; '{identity}' was requested. " +
             "Implement ITestTokenProvider with more than one identity to enable the 403 auth tests.",
             nameof(identity));
         }

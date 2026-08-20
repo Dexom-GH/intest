@@ -19,6 +19,17 @@ public class StaticTokenProviderTests
     }
 
     [TestMethod]
+    public void AdvertisesTheDefaultIdentityWithNoScopesDeclared()
+    {
+        var identity = new StaticTokenProvider("tok-123").Identities[0];
+
+        identity.Name.ShouldBe("default");
+        // StaticTokenProvider never learns what scopes its one identity holds — null, not [],
+        // reports that honestly (TestIdentity.Scopes' null-vs-empty distinction).
+        identity.Scopes.ShouldBeNull();
+    }
+
+    [TestMethod]
     public async Task RejectsAnIdentityItCannotServe()
     {
         var provider = new StaticTokenProvider("tok-123");

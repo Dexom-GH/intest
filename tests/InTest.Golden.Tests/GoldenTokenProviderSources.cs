@@ -26,10 +26,10 @@ internal static class GoldenTokenProviderSources
 
     public sealed class TwoIdentityTokenProvider : ITestTokenProvider
     {
-        public IReadOnlyList<string> Identities { get; } = ["default", "secondary"];
+        public IReadOnlyList<TestIdentity> Identities { get; } = [new TestIdentity("default"), new TestIdentity("secondary")];
 
         public Task<string> GetTokenAsync(string audience, string? identity = null, CancellationToken cancellationToken = default) =>
-            Task.FromResult($"token-for-{identity ?? Identities[0]}");
+            Task.FromResult($"token-for-{identity ?? Identities[0].Name}");
     }
     """;
 }
