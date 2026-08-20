@@ -253,11 +253,13 @@ public static class TestPlanBuilder
             [
                 // Status-only, deliberately: decision 3 never asks a spec's declared 401
                 // response schema for anything, and an operation need not declare one at all
-                // for this case to exist.
+                // for this case to exist. No scopes either — the 401 case sends no token at all,
+                // so a scope requirement is never meaningful there (FixtureFreeCase's default).
                 FixtureFreeCase(key, httpMethod, path, tag, pathParameterNames,
                     unauthorizedMethodName, UnauthorizedStatus, schemaKey: null, CaseRole.Auth, kinds, IdentitySlot.None),
                 FixtureFreeCase(key, httpMethod, path, tag, pathParameterNames,
-                    forbiddenMethodName, ForbiddenStatus, schemaKey: null, CaseRole.Auth, kinds, IdentitySlot.Secondary)
+                    forbiddenMethodName, ForbiddenStatus, schemaKey: null, CaseRole.Auth, kinds, IdentitySlot.Secondary,
+                    RequiredScopes(operation))
             ];
         }
 
@@ -284,6 +286,30 @@ public static class TestPlanBuilder
     }
 
     /// <summary>
+    /// The distinct union of OAuth scopes an operation's `security` declares, across every
+    /// requirement in the list and every scheme within each requirement — feeds
+    /// <see cref="TestCasePlan.RequiredScopes"/> on the 403 case only (see that member's comment
+    /// for why the plan carries this rather than a later phase re-deriving it). Measured against
+    /// the installed Microsoft.OpenApi 3.10.0: <c>OpenApiOperation.Security</c> is an
+    /// <c>IList&lt;OpenApiSecurityRequirement&gt;</c>, and <c>OpenApiSecurityRequirement</c> is
+    /// itself a <c>Dictionary&lt;OpenApiSecuritySchemeReference, List&lt;string&gt;&gt;</c> — the
+    /// scopes are the dictionary's *values*, not its keys, and a requirement can name more than
+    /// one scheme (each contributing its own scope list) just as the security array can hold more
+    /// than one requirement. This flattens every scope list from every requirement and every
+    /// scheme, distinct, with no attempt to preserve OpenAPI's AND/OR semantics between them —
+    /// decision 3 needs only "what scopes did the spec name at all", not which combination
+    /// satisfies which requirement.
+    /// </summary>
+    private static IReadOnlyList<string> RequiredScopes(OpenApiOperation operation) =>
+        operation.Security is not { Count: > 0 } securityRequirements
+            ? []
+            : securityRequirements
+                .SelectMany(requirement => requirement.Values)
+                .SelectMany(scopes => scopes)
+                .Distinct(StringComparer.Ordinal)
+                .ToList();
+
+    /// <summary>
     /// The shared constructor for every declared-error and auth case (Task 10 item 5) — the
     /// eleven-argument prefix <see cref="TryPlanDeclaredNotFound"/> and <see cref="PlanAuthCases"/>
     /// otherwise each repeat verbatim. <see cref="TestCasePlan.Category"/> is always
@@ -295,7 +321,8 @@ public static class TestPlanBuilder
     private static TestCasePlan FixtureFreeCase(
         OperationKey key, string httpMethod, string path, string tag, IReadOnlyList<string> pathParameterNames,
         string methodName, int expectedStatus, string? schemaKey, CaseRole role,
-        IReadOnlyList<PathParameterKind> pathParameterKinds, IdentitySlot slot = IdentitySlot.Default) => new(
+        IReadOnlyList<PathParameterKind> pathParameterKinds, IdentitySlot slot = IdentitySlot.Default,
+        IReadOnlyList<string>? requiredScopes = null) => new(
             MethodName: methodName,
             DisplayName: $"Given {tag}, when {key.Value}, then {expectedStatus}",
             OperationKey: key.Value,
@@ -309,7 +336,8 @@ public static class TestPlanBuilder
             Role: role,
             NeedsFixture: false,
             PathParameterKinds: pathParameterKinds,
-            Slot: slot);
+            Slot: slot,
+            RequiredScopes: requiredScopes ?? []);
 
     /// <summary>
     /// The dedupe dictionary's key (decision 4): operation key alone collapses a success case and

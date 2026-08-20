@@ -114,4 +114,28 @@ public sealed record TestCasePlan(
     // no-override slot, so every call site that predates Task 5 — none of which had a slot to
     // state, including every Success and DeclaredError case — renders exactly as it always did:
     // TemplateRenderer emits nothing for Default.
-    IdentitySlot Slot = IdentitySlot.Default);
+    IdentitySlot Slot = IdentitySlot.Default,
+    // The distinct union of OAuth scopes the operation's `security` declares, across every
+    // requirement and every scheme within it — carried, not recomputed, for the same reason
+    // Role above is: a later task's template/render phase needs to pass these scopes to a
+    // runtime guard for the wrong-scope 403 case, and it must not have to re-parse
+    // OpenApiOperation.Security itself to get them. This plan is the single source of truth for
+    // what the spec declared; a render-time re-derivation is a second copy of that logic that
+    // could drift from this one, the same class of defect Role's comment already warns about for
+    // NeedsFixture. Defaults to an empty array, never null, so every call site that predates
+    // this member — every Success and DeclaredError case, and the 401 case, none of which have a
+    // scope requirement to state — reads as "nothing required" rather than an absent value a
+    // consumer would have to null-check. TestPlanBuilder.PlanAuthCases is the only site that
+    // assigns a non-default value, and it always assigns the result of a Distinct() projection
+    // (never a nullable expression), so this invariant holds end to end, not just at the default.
+    IReadOnlyList<string>? RequiredScopes = null)
+{
+    // Collection-typed record parameters cannot default to a non-constant expression
+    // (Array.Empty<string>() is not a compile-time constant) directly in the parameter list, so
+    // the primary constructor parameter above stays nullable and this explicitly-declared
+    // property — which overrides the compiler-generated one for the same-named positional
+    // parameter — normalizes it to an empty array instead. Every call site that never states
+    // RequiredScopes, and every call site that passes null outright, reads back a non-null empty
+    // collection, never a null reference.
+    public IReadOnlyList<string> RequiredScopes { get; init; } = RequiredScopes ?? Array.Empty<string>();
+}

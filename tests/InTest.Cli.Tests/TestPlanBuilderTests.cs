@@ -902,4 +902,190 @@ public class TestPlanBuilderTests
         authCases.Count.ShouldBe(2);
         authCases.ShouldAllBe(c => !c.HasRequestBody);
     }
+
+    // --- RequiredScopes (carrying declared OAuth scopes into the plan for a later runtime guard). ---
+
+    private const string SpecDeclaringSecurityWithAScope = """
+    {
+      "openapi": "3.0.3",
+      "info": { "title": "Orders", "version": "1.0" },
+      "paths": {
+        "/orders/{id}": {
+          "delete": {
+            "operationId": "deleteOrder",
+            "tags": ["Orders"],
+            "security": [{ "oauth2Auth": ["orders.write"] }],
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+            "responses": { "204": { "description": "no content" } }
+          }
+        }
+      },
+      "components": {
+        "schemas": {},
+        "securitySchemes": {
+          "oauth2Auth": {
+            "type": "oauth2",
+            "flows": { "clientCredentials": {
+              "tokenUrl": "https://example.com/token",
+              "scopes": { "orders.write": "Write orders" } } }
+          }
+        }
+      }
+    }
+    """;
+
+    [TestMethod]
+    public async Task TheForbiddenCaseCarriesTheOperationsDeclaredScope()
+    {
+        var plan = await BuildAsync(SpecDeclaringSecurityWithAScope);
+        var forbidden = plan.Classes.SelectMany(c => c.Cases)
+            .Single(c => c.OperationKey == "deleteOrder" && c.ExpectedStatus == 403);
+
+        forbidden.RequiredScopes.ShouldBe(["orders.write"]);
+    }
+
+    // Two separate security *requirements* (distinct entries in the `security` array), each
+    // naming a scope on its own scheme — not two keys inside one requirement object. An
+    // implementation that reads only operation.Security[0] and ignores the rest would see just
+    // "orders.write" here and this assertion would fail on the missing "orders.read".
+    private const string SpecDeclaringSecurityAcrossTwoRequirements = """
+    {
+      "openapi": "3.0.3",
+      "info": { "title": "Orders", "version": "1.0" },
+      "paths": {
+        "/orders/{id}": {
+          "delete": {
+            "operationId": "deleteOrder",
+            "tags": ["Orders"],
+            "security": [
+              { "oauth2Write": ["orders.write"] },
+              { "oauth2Read": ["orders.read"] }
+            ],
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+            "responses": { "204": { "description": "no content" } }
+          }
+        }
+      },
+      "components": {
+        "schemas": {},
+        "securitySchemes": {
+          "oauth2Write": {
+            "type": "oauth2",
+            "flows": { "clientCredentials": {
+              "tokenUrl": "https://example.com/token",
+              "scopes": { "orders.write": "Write orders" } } }
+          },
+          "oauth2Read": {
+            "type": "oauth2",
+            "flows": { "clientCredentials": {
+              "tokenUrl": "https://example.com/token",
+              "scopes": { "orders.read": "Read orders" } } }
+          }
+        }
+      }
+    }
+    """;
+
+    [TestMethod]
+    public async Task TheForbiddenCaseUnionsScopesAcrossEverySecurityRequirement()
+    {
+        var plan = await BuildAsync(SpecDeclaringSecurityAcrossTwoRequirements);
+        var forbidden = plan.Classes.SelectMany(c => c.Cases)
+            .Single(c => c.OperationKey == "deleteOrder" && c.ExpectedStatus == 403);
+
+        forbidden.RequiredScopes.Count.ShouldBe(2);
+        forbidden.RequiredScopes.ShouldContain("orders.write");
+        forbidden.RequiredScopes.ShouldContain("orders.read");
+    }
+
+    // Same shape as the union spec above, but both requirements name the *same* scope on
+    // different schemes — the union must not carry the duplicate through.
+    private const string SpecDeclaringSecurityWithADuplicateScopeAcrossSchemes = """
+    {
+      "openapi": "3.0.3",
+      "info": { "title": "Orders", "version": "1.0" },
+      "paths": {
+        "/orders/{id}": {
+          "delete": {
+            "operationId": "deleteOrder",
+            "tags": ["Orders"],
+            "security": [
+              { "oauth2A": ["orders.write"] },
+              { "oauth2B": ["orders.write"] }
+            ],
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+            "responses": { "204": { "description": "no content" } }
+          }
+        }
+      },
+      "components": {
+        "schemas": {},
+        "securitySchemes": {
+          "oauth2A": {
+            "type": "oauth2",
+            "flows": { "clientCredentials": {
+              "tokenUrl": "https://example.com/token",
+              "scopes": { "orders.write": "Write orders" } } }
+          },
+          "oauth2B": {
+            "type": "oauth2",
+            "flows": { "clientCredentials": {
+              "tokenUrl": "https://example.com/token",
+              "scopes": { "orders.write": "Write orders" } } }
+          }
+        }
+      }
+    }
+    """;
+
+    [TestMethod]
+    public async Task TheForbiddenCasesUnionedScopesAreDistinct()
+    {
+        var plan = await BuildAsync(SpecDeclaringSecurityWithADuplicateScopeAcrossSchemes);
+        var forbidden = plan.Classes.SelectMany(c => c.Cases)
+            .Single(c => c.OperationKey == "deleteOrder" && c.ExpectedStatus == 403);
+
+        forbidden.RequiredScopes.ShouldBe(["orders.write"]);
+    }
+
+    [TestMethod]
+    public async Task ASecuredButScopeFreeOperationStillGetsAForbiddenCaseWithNoRequiredScopes()
+    {
+        // SpecDeclaringSecurity declares `bearerAuth: []` — secured, but names no scope. This
+        // must still emit the auth cases (unchanged from the existing coverage above); it must
+        // not silently withhold them just because there is nothing to require.
+        var plan = await BuildAsync(SpecDeclaringSecurity);
+        var forbidden = plan.Classes.SelectMany(c => c.Cases)
+            .Single(c => c.OperationKey == "deleteOrder" && c.ExpectedStatus == 403);
+
+        forbidden.RequiredScopes.ShouldNotBeNull();
+        forbidden.RequiredScopes.ShouldBeEmpty();
+    }
+
+    [TestMethod]
+    public async Task TheUnauthorizedCaseNeverCarriesRequiredScopes()
+    {
+        // The 401 case sends no token at all, so a scope requirement is never meaningful there —
+        // even though the operation itself declares a scope for the 403 case to carry.
+        var plan = await BuildAsync(SpecDeclaringSecurityWithAScope);
+        var unauthorized = plan.Classes.SelectMany(c => c.Cases)
+            .Single(c => c.OperationKey == "deleteOrder" && c.ExpectedStatus == 401);
+
+        unauthorized.RequiredScopes.ShouldNotBeNull();
+        unauthorized.RequiredScopes.ShouldBeEmpty();
+    }
+
+    [TestMethod]
+    public async Task EveryNonAuthCaseCarriesNoRequiredScopes()
+    {
+        // Success and declared-error cases are never auth cases and must never carry a scope
+        // requirement — RequiredScopes must be an empty collection, never a null reference, for
+        // every one of them.
+        var plan = await BuildAsync(SpecDeclaringSecurityWithAScope);
+        var nonAuthCases = plan.Classes.SelectMany(c => c.Cases).Where(c => c.Role != CaseRole.Auth).ToList();
+
+        nonAuthCases.ShouldNotBeEmpty();
+        nonAuthCases.ShouldAllBe(c => c.RequiredScopes != null);
+        nonAuthCases.ShouldAllBe(c => c.RequiredScopes.Count == 0);
+    }
 }
