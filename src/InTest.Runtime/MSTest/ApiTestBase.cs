@@ -130,6 +130,61 @@ public abstract class ApiTestBase
     }
 
     /// <summary>
+    /// Generated wrong-scope 403 cases call this — after <see cref="RequireMultipleIdentities"/>,
+    /// before building their request — because a second identity existing is not enough to make a
+    /// 403 provable: if the secondary identity's own declared <see cref="TestIdentity.Scopes"/>
+    /// already cover everything <paramref name="requiredScopes"/> lists, it is authorized for the
+    /// operation and a 403 assertion would fail against a correct API. A read-only identity is
+    /// never "wrong scope" for a read it actually holds.
+    /// <para>
+    /// Containment is over the whole set: the secondary identity must hold <em>every</em> scope in
+    /// <paramref name="requiredScopes"/> before the test is skipped. Holding only some of several
+    /// required scopes does not authorize the operation, so the 403 is still real and the test
+    /// still runs — <c>All</c>, not <c>Any</c>.
+    /// </para>
+    /// <para>
+    /// Guarded the same way <see cref="RequireMultipleIdentities"/> is, not the way
+    /// <see cref="ResolveIdentitySlot"/> is (they are deliberately opposite): this member is a
+    /// gate — nothing has run before it in the generated method body — while
+    /// <see cref="ResolveIdentitySlot"/>'s blind <c>Identities[1]</c> runs only after
+    /// <see cref="RequireMultipleIdentities"/> has already passed. This gate reaches further than
+    /// that one does — all the way to <c>Identities[1]</c> and its <see cref="TestIdentity.Scopes"/>
+    /// — so every one of "no provider", "<c>Identities</c> itself null", "fewer than two
+    /// identities", and "the second element itself is null" must fall through to running the test,
+    /// never to skipping and never to throwing. v1-c shipped a live
+    /// <see cref="NullReferenceException"/> on exactly this shape (a provider guarded, but not its
+    /// <c>Identities</c>) in <see cref="RequireMultipleIdentities"/> itself; this guard exists
+    /// precisely so that mistake is not repeated one index further in. A <c>null</c>
+    /// <see cref="TestIdentity.Scopes"/> also falls through here — not declared / unknown means
+    /// run and allow the test to fail, never skip.
+    /// </para>
+    /// <para>
+    /// <c>protected internal</c> for the same two reasons as <see cref="RequireMultipleIdentities"/>:
+    /// <c>protected</c> so the generated suite, in another assembly, can call it like its
+    /// <c>protected static</c> neighbours; <c>internal</c> so <c>InTest.Runtime.Tests</c> can call
+    /// it directly via the <c>InternalsVisibleTo</c> already in <c>InTest.Runtime.csproj</c>.
+    /// </para>
+    /// </summary>
+    protected internal static void RequireSecondaryIdentityLacks(params string[] requiredScopes)
+    {
+        var provider = TestHost.TokenProvider;
+        if (provider?.Identities is not { Count: >= 2 } identities || identities[1] is not { } secondary)
+        {
+            return;
+        }
+
+        if (secondary.Scopes is not { } scopes || !requiredScopes.All(scopes.Contains))
+        {
+            return;
+        }
+
+        Assert.Inconclusive(
+            $"Skipped: the secondary identity '{secondary.Name}' holds {string.Join(", ", scopes)}, " +
+            "which this operation requires, so it cannot produce a 403. Declare different scopes on " +
+            "that identity, or leave Scopes null to run this test anyway.");
+    }
+
+    /// <summary>
     /// Overrides the ambient identity for the remainder of the calling scope — the auth cases'
     /// override point (decision 7). A generated 401 or 403 case calls this after
     /// <see cref="RequireMultipleIdentities"/> (403 only) and before building its request, since

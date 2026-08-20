@@ -17,9 +17,16 @@ namespace InTest.Runtime.Tests;
 [TestClass]
 public class ApiTestBaseAuthTests
 {
-    private sealed class FakeTokenProvider(params string[] identityNames) : ITestTokenProvider
+    private sealed class FakeTokenProvider : ITestTokenProvider
     {
-        public IReadOnlyList<TestIdentity> Identities { get; } = identityNames.Select(n => new TestIdentity(n)).ToArray();
+        public IReadOnlyList<TestIdentity> Identities { get; }
+
+        public FakeTokenProvider(params string[] identityNames) =>
+            Identities = identityNames.Select(n => new TestIdentity(n)).ToArray();
+
+        // Widened for Task 2 (RequireSecondaryIdentityLacks): those tests need identities that
+        // carry TestIdentity.Scopes, not just names.
+        public FakeTokenProvider(params TestIdentity[] identities) => Identities = identities;
 
         public Task<string> GetTokenAsync(string audience, string? identity = null, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException("not exercised by these tests");
@@ -198,5 +205,132 @@ public class ApiTestBaseAuthTests
         }
 
         InTestAmbient.Identity.Value.ShouldBe("default");
+    }
+
+    // --- RequireSecondaryIdentityLacks (Task 2: the runtime guard for a wrong-scope 403) ---
+
+    [TestMethod]
+    public void SecondaryWithNullScopesAlwaysRuns()
+    {
+        // null = not declared / unknown (Task 1). Unknown-means-run is deliberate: treating it
+        // as a skip would switch auth testing off by default for anyone who never declares
+        // scopes on their secondary identity.
+        TestHost.TokenProvider = new FakeTokenProvider(
+            new TestIdentity("default"),
+            new TestIdentity("secondary"));
+
+        Should.NotThrow(() => ApiTestBase.RequireSecondaryIdentityLacks("orders.read"));
+    }
+
+    [TestMethod]
+    public void SecondaryHoldingTheRequiredScopeSkipsAndNamesTheIdentityAndScope()
+    {
+        TestHost.TokenProvider = new FakeTokenProvider(
+            new TestIdentity("default"),
+            new TestIdentity("readonly", ["orders.read"]));
+
+        var ex = Should.Throw<AssertInconclusiveException>(() =>
+            ApiTestBase.RequireSecondaryIdentityLacks("orders.read"));
+
+        ex.Message.ShouldContain("readonly");
+        ex.Message.ShouldContain("orders.read");
+        ex.Message.ShouldContain("403");
+    }
+
+    [TestMethod]
+    public void SecondaryLackingTheRequiredScopeRuns()
+    {
+        TestHost.TokenProvider = new FakeTokenProvider(
+            new TestIdentity("default"),
+            new TestIdentity("readonly", ["orders.read"]));
+
+        Should.NotThrow(() => ApiTestBase.RequireSecondaryIdentityLacks("orders.write"));
+    }
+
+    [TestMethod]
+    public void PartialScopeOverlapStillRunsTheTest()
+    {
+        // Holding one of two required scopes does not authorize the operation, so a 403 is still
+        // provable. Must fail against an `Any` implementation — the easy wrong version of this.
+        TestHost.TokenProvider = new FakeTokenProvider(
+            new TestIdentity("default"),
+            new TestIdentity("readonly", ["orders.read"]));
+
+        Should.NotThrow(() => ApiTestBase.RequireSecondaryIdentityLacks("orders.read", "orders.write"));
+    }
+
+    [TestMethod]
+    public void SecondaryHoldingEveryRequiredScopeSkips()
+    {
+        // Containment is over the whole set: holding both required scopes really does authorize
+        // the operation, so the 403 genuinely cannot happen.
+        TestHost.TokenProvider = new FakeTokenProvider(
+            new TestIdentity("default"),
+            new TestIdentity("readonly", ["orders.read", "orders.write"]));
+
+        Should.Throw<AssertInconclusiveException>(() =>
+            ApiTestBase.RequireSecondaryIdentityLacks("orders.read", "orders.write"));
+    }
+
+    [TestMethod]
+    public void SecondaryWithAnEmptyScopesDeclarationRuns()
+    {
+        // [] is a real declaration — "holds no scopes" — not the same as null, but it still can
+        // never be a superset of a non-empty requirement, so the test runs either way.
+        TestHost.TokenProvider = new FakeTokenProvider(
+            new TestIdentity("default"),
+            new TestIdentity("readonly", []));
+
+        Should.NotThrow(() => ApiTestBase.RequireSecondaryIdentityLacks("orders.write"));
+    }
+
+    [TestMethod]
+    public void NoRegisteredProviderRunsRatherThanSkippingASecondTime()
+    {
+        // RequireMultipleIdentities already owns this skip; never skip twice for one reason.
+        TestHost.TokenProvider = null;
+
+        Should.NotThrow(() => ApiTestBase.RequireSecondaryIdentityLacks("orders.read"));
+    }
+
+    [TestMethod]
+    public void OnlyOneRegisteredIdentityRuns()
+    {
+        // Same reason: RequireMultipleIdentities owns the "fewer than two identities" skip.
+        TestHost.TokenProvider = new FakeTokenProvider("only-one");
+
+        Should.NotThrow(() => ApiTestBase.RequireSecondaryIdentityLacks("orders.read"));
+    }
+
+    [TestMethod]
+    public void ANullIdentitiesListRunsRatherThanThrowing()
+    {
+        // Task 2 step 2: this guard reaches further than RequireMultipleIdentities
+        // (Identities[1], not just Identities.Count), so it must guard the same
+        // provider-registered-but-Identities-itself-null shape that guard already does — v1-c's
+        // live NullReferenceException on exactly this shape is why.
+        TestHost.TokenProvider = new NullIdentitiesProvider();
+
+        Should.NotThrow(() => ApiTestBase.RequireSecondaryIdentityLacks("orders.read"));
+    }
+
+    /// <summary>A provider whose second identity is itself null despite the non-nullable element
+    /// type — nothing at compile time stops a misbehaving <see cref="ITestTokenProvider"/> from
+    /// doing this, the same reasoning <see cref="NullIdentitiesProvider"/> already covers one
+    /// level up.</summary>
+    private sealed class NullSecondaryIdentityProvider : ITestTokenProvider
+    {
+        public IReadOnlyList<TestIdentity> Identities { get; } = [new TestIdentity("default"), null!];
+
+        public Task<string> GetTokenAsync(string audience, string? identity = null, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException("not exercised by this test");
+    }
+
+    [TestMethod]
+    public void ANullSecondaryIdentityElementRunsRatherThanThrowing()
+    {
+        TestHost.TokenProvider = new NullSecondaryIdentityProvider();
+
+        Should.NotThrow(() => ApiTestBase.RequireSecondaryIdentityLacks("orders.read"));
     }
 }
