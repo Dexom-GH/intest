@@ -36,4 +36,27 @@ root.Subcommands.Add(generate);
 root.Subcommands.Add(init);
 root.Subcommands.Add(fixtures);
 
-return await root.Parse(args).InvokeAsync();
+// §5's exit-code convention, applied at the one layer no command owns. `System.CommandLine`
+// returns 1 when it cannot parse the command line, and 1 is reserved for real work outstanding
+// that a human must do — fixture drift, validation failures, `--check` differences. A command
+// line that could not be parsed is none of those: nothing ran. That left `intest init --name ""`
+// exiting 2 and `intest init` — the same mistake one keystroke apart — exiting 1, so CI could not
+// tell a mistyped invocation from fixture drift, which is the single confusion the 1/2 split
+// exists to prevent. The literal is deliberate: §5 owns these numbers and three commands already
+// each declare their own copy, so a fourth would deepen a duplication rather than resolve it.
+//
+// This sits above every command, so it holds for commands not yet written. It is not a widening:
+// bare `intest` and bare `intest fixtures` are parse failures of the same kind and exit 2 too.
+// Exempting them would mean adding a branch that asserts some parse failures mean outstanding
+// work, which §5 denies.
+//
+// Invoke first, then read. `InvokeAsync` is what prints `System.CommandLine`'s own diagnostics,
+// and those are not the defect — the code is, so the text is left exactly as the library wrote
+// it. Reading `Errors` afterwards is safe rather than merely convenient: a terminating action
+// that declares `ClearsParseErrors` — `--help`, `--version` — suppresses the errors at *parse*
+// time, so they never enter `Errors` to begin with instead of being cleared out of it mid-call.
+// Measured against 2.0.11, not inferred from the property name.
+var parseResult = root.Parse(args);
+var exitCode = await parseResult.InvokeAsync();
+
+return parseResult.Errors.Count > 0 ? 2 : exitCode;

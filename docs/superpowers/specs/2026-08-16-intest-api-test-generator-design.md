@@ -483,7 +483,7 @@ and this change); the per-command condition lists are the part worth restructuri
 |---|---|
 | `0` | The requested state was reached, **including when no work was needed** — a PR script running `fixtures repair` unconditionally must not fail on a clean tree |
 | `1` | Real work is outstanding that a human must do: fixture drift, validation failures, `--check` differences |
-| `2` | **Tool error** — unparseable spec, `spec.source` missing, malformed `intest.json`, unhandled exception. Nothing was written |
+| `2` | **Tool error** — the tool did not do the work it was asked to do, and nothing was written: the command line could not be parsed, the spec is unparseable, `spec.source` is missing, `intest.json` is malformed, an exception went unhandled |
 | `3` | The command declined because proceeding would destroy or duplicate existing state |
 | `4` | Tool/config version mismatch, so CI can distinguish it from a genuine diff |
 
@@ -491,6 +491,29 @@ and this change); the per-command condition lists are the part worth restructuri
 separate from `1` deliberately: folding a crash or an unreadable spec into `1` would make CI
 unable to tell "the fixtures drifted, fix them" from "the tool blew up" — two failures with
 entirely different responses, and only one of them is the developer's to act on.
+
+**Parse failures.** A command line `System.CommandLine` cannot parse exits `2` like any other
+tool error. This was not a missing rule so much as a rule that never *reached* far enough: the
+row above says `2` is returned by **any** command, and a parse failure happens above all of
+them, in the one layer no command owns — no command's code runs, so nothing was there to
+override the library's own exit `1`. The cost was the exact confusion the `1`/`2` split exists
+to prevent. `intest init --name ""` exited 2 through `Commands.CommandArguments`, while the same
+command with `--name` omitted entirely — the same mistake one keystroke apart — exited 1, the
+code this table reserves for work a human must go and do. A pipeline could not tell a mistyped
+invocation from fixture drift.
+
+Note the form of the rule, which matters more here than its content. It is stated as *the
+command line could not be parsed*, not as the two cases that prompted it, and that is why a
+third was covered before anyone raised it: bare `intest` names no command at all, which is a
+parse failure of the same kind and exits `2` on the same line of code. Exempting it would have
+meant *adding* a branch asserting that some parse failures mean outstanding work — a claim the
+`1` row denies. This table has gone stale three times (`54fc741`, the `ConfigLoader` work, and
+`dc8370d`) from enumerating conditions where it could have stated them; the enumeration above is
+now illustration, and the sentence before the colon is the rule.
+
+`--help` and `--version` still exit `0`. Both are terminating actions that suppress the parse
+errors prompting them, so those errors never arise and the rule never fires — measured against
+the pinned `System.CommandLine`, not inferred from the API's names.
 
 ### Invariants
 
