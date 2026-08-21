@@ -494,9 +494,16 @@ public class TemplateRendererTests
     [TestMethod]
     public void AWrongScopeCaseWithMultipleRequiredScopesPassesEachAsItsOwnArgumentInOrder()
     {
-        var rendered = Render(PlanAuth(403, IdentitySlot.Secondary, requiredScopes: ["orders.read", "orders.write"]));
+        // Reversed from StringComparer.Ordinal order ("orders.read" < "orders.write") on purpose:
+        // TemplateRenderer's own comment on required_scopes_args states the contract as "joins and
+        // quotes — it does not resort", relying on TestCasePlan.RequiredScopes already being
+        // ordered (Task 3). An ["orders.read", "orders.write"] input here would stay green even if
+        // an .OrderBy(...) were accidentally introduced into required_scopes_args, and the golden
+        // corpus's single-scope operations can't catch that either — only a reversed input
+        // separates "renders in the order given" from "sorts".
+        var rendered = Render(PlanAuth(403, IdentitySlot.Secondary, requiredScopes: ["orders.write", "orders.read"]));
 
-        rendered.ShouldContain("RequireSecondaryIdentityLacks(\"orders.read\", \"orders.write\");");
+        rendered.ShouldContain("RequireSecondaryIdentityLacks(\"orders.write\", \"orders.read\");");
     }
 
     [TestMethod]

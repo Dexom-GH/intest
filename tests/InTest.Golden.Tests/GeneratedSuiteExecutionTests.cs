@@ -956,6 +956,14 @@ public class GeneratedSuiteExecutionTests
         }
 
         test.ExitCode.ShouldBe(0, test.Output);
+
+        // outcome="NotExecuted" is also satisfied by a guard that runs after the request has
+        // already gone out — a case that sends real traffic and then reports as skipped. For a
+        // wrong-scope 403 on a mutating operation that is exactly the hazard the plan's
+        // unmatchable-id rule exists to prevent. The .trx cannot distinguish the two; the stub
+        // can.
+        _stub.ReceivedPaths.Count(p => p == "/api/secure-scoped").ShouldBe(2,
+            "Contract and Unauthorized reach the stub; the skipped Forbidden case must never build a request.");
     }
 
     /// <summary>

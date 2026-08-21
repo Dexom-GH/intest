@@ -121,15 +121,8 @@ internal sealed class GoldenApiStub : IDisposable
                     // Task 5 Step 2's live wire proof — the one path in this stub that actually
                     // inspects Authorization, everything else here trusts the request unconditionally.
                     "/api/secure" => HandleSecureResource(context.Request),
-                    // Task 4 / F11's live wire proof. Unlike "/api/secure" above, this path never
-                    // needs to distinguish default from secondary: the whole point of
-                    // AForbiddenCaseTheSecondaryIdentityIsAuthorizedForSkipsRatherThanFails is that
-                    // the secondary identity genuinely holds the scope this operation requires, so
-                    // a real API would let it through too — any authenticated caller gets 200, and
-                    // only a missing Authorization header gets 401. That is what makes the
-                    // generated 403 case unwinnable on the wire (it would see 200, not 403) unless
-                    // RequireSecondaryIdentityLacks skips it first, which is exactly what this test
-                    // exists to prove — see HandleScopedSecureResource's own doc.
+                    // Task 4 / F11's live wire proof — see HandleScopedSecureResource's own doc for
+                    // why this path authorizes any bearer token rather than discriminating identities.
                     "/api/secure-scoped" => HandleScopedSecureResource(context.Request),
                     // Belt-and-braces, not the primary catch: RequireFixture already throws before a
                     // request carrying an unresolved sentinel is ever built (confirmed by sabotaging
