@@ -393,7 +393,9 @@ A new key, separate from `authTestsGatedOnSecondIdentity` ([counted]), named for
 
 **The test that matters is the one that separates the two keys**, and it needs a spec with both a scoped and a scope-free secured operation — the same shape Task 4 Step 2 preserves in the golden corpus. Given both, the keys must differ. A fixture with only scoped operations lets one key be a copy of the other and still pass.
 
-The note text must say the count is not a skip count: which cases skip is a runtime fact, and a key implying otherwise would make `generate --check` report drift on an unchanged spec.
+**The report itself must say the count is not a skip count — in the emitted JSON, not in a source comment.** JSON carries no comments, so a `//` explanation in `CoverageReport.cs` reaches nobody who opens the artefact, and a reader seeing `7` here against 3 actual skips in a run has nothing to reconcile them with. The key name alone is not enough; the pre-existing `authTestsGatedOnSecondIdentity` already uses that convention, so restating the requirement for this key is asking for more than a careful name.
+
+`notes.withheld` is the precedent — it emits `{operation, reason}` objects with real explanatory text. Whatever shape you choose must be **deterministic**: no runtime data, nothing that could vary between two runs against the same spec, or `generate --check` reports drift on an unchanged spec — which is the very failure this explanation exists to describe.
 
 - [ ] **Step 2–4: Run, implement, re-run, commit**
 
