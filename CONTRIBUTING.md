@@ -33,6 +33,26 @@ The spec has conventions worth keeping:
   feature exists. This has been violated twice and corrected twice — please do not reintroduce
   it.
 
+## Writing plans
+
+New implementation plans (`docs/superpowers/plans/`) name their decisions with short slugs —
+`[containment]`, `[descriptor]` — rather than numbering them. Numbered decisions drifted three
+times during v1-c, twice inside a single document: inserting a decision silently invalidates
+every reference after it, and one commit was already spent re-fixing the same failure across
+documents. F11's plan named its decisions instead — `[containment]`, `[descriptor]`,
+`[unknown-runs]`, `[counted]`, `[sample-unchanged]` — and had zero reference drift across 29
+commits and several rounds of insertions. A slug is a word that insertion and reordering cannot
+break; a number is not.
+
+**Do not retrofit this onto plans that are already done.** `2026-08-17-intest-v1a-fixtures.md`,
+`2026-08-18-intest-v1b-fixture-lifecycle.md` and `2026-08-19-intest-v1c-error-and-auth-tests.md`
+still number their decisions, and that is correct as-is — leave them numbered. The drift risk
+only exists while a plan is still being edited; a finished plan is never renumbered again, so the
+risk it closed against is already zero, and renaming its decisions now would be pure churn
+against a document whose entire value is being an accurate record of what was decided when. This
+is the same reasoning that kept F11's closure from rewriting the v1-c run record. Treat this rule
+as governing plans not yet written, never as a mandate to clean up the ones already closed.
+
 ## Dependency policy
 
 New dependencies are held to a hard line, because adopters inherit whatever we take on.
