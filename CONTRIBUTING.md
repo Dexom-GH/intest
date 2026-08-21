@@ -99,6 +99,29 @@ one of three cases and looked complete from where it stood. The fix moved valida
 `ConfigLoader.Load`, which both `GenerateCommand` and `FixturesRepairCommand` now call against the
 whole document before either command writes anything.
 
+## Ask the thing that decides
+
+**Ask the thing that decides.** When you need to know how something behaves, ask the component
+that actually decides it — not the specification, not the documentation, and not your reading of
+either. This holds even when you reach for a framework predicate instead of hand-rolling one: a
+reassuring name is not evidence, and it should be checked against the same real behavior you would
+demand of your own code.
+
+`MSBuildPropertyValue.TryEscape`'s XML-representability check was first hand-rolled from the XML
+1.0 `Char` production and missed the two noncharacters U+FFFE and U+FFFF — invisible to a check
+that only asked "is this a control character." It was replaced with `XmlConvert.IsXmlChar`, which
+was then itself verified against `XDocument.Parse` rather than trusted on its name. The ordering
+comment above the surrogate check in the same method is there for the same reason: `IsXmlChar`
+alone would misdiagnose a valid surrogate pair as unrepresentable, so surrogates are checked first.
+
+**A test is bounded by what its assertions can discriminate.** "I mutated this and it failed" is
+not "this decision is pinned" — the mutation only reaches what the assertion can tell apart. Ask
+what the test would still pass under.
+
+`InitCommand`'s choice of JSON encoder for `intest.json` is such a case: both candidate encoders
+emit valid, equivalent JSON for the same input, so any test that round-trips and compares is blind
+to which one ran. It was pinned only once a test asserted on the raw file text instead.
+
 ## Dependency policy
 
 New dependencies are held to a hard line, because adopters inherit whatever we take on.
