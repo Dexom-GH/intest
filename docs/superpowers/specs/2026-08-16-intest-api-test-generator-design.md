@@ -2495,7 +2495,7 @@ Range 179.8–184.8s, ±1.4%. Run 5 is at the earlier commit `4814071`; it sits 
 
 Idle was established by measurement, not assumption: CPU-time deltas sampled across every `dotnet`/`MSBuild`/`VBCSCompiler`/`testhost` process over a 5-second window totalled 0.15 CPU-seconds (an earlier check: 0.02), on 22 logical processors.
 
-*Measured on .NET SDK 10.0.400*, not the 10.0.303 named above.
+*Measured on .NET SDK 10.0.400.*
 
 A wall-clock total is not comparable to another without both a per-class breakdown **and repetition**. A per-class breakdown alone is not sufficient — one was available and a wrong conclusion was still drawn from a single run. Repetition is the part that would have caught it: four runs, not one, is what turns "±1.4%, no regression" from an assumption into a measurement.
 
