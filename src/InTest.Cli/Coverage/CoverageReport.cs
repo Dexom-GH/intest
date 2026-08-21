@@ -89,6 +89,29 @@ public static class CoverageReport
                 // to run at all: only the wrong-scope 403 case (IdentitySlot.Secondary) does: the
                 // no-token 401 case always runs regardless of how many identities a provider has.
                 ["authTestsGatedOnSecondIdentity"] = authCases.Count(c => c.Slot == IdentitySlot.Secondary),
+                // A different question from the key above: not whether a second identity exists,
+                // but whether it is *usable for this operation*. authTestsGatedOnSecondIdentity
+                // counts every wrong-scope 403 case, scoped or not — a secured operation with no
+                // declared scopes still produces one of those, gated on a second identity existing
+                // at all. This key narrows that to the 403 cases that also carry a RequiredScopes
+                // requirement: the ones whose provability depends on the second identity actually
+                // lacking those scopes, not merely being a different identity. The two keys are
+                // equal on a spec whose secured operations are all scoped and diverge only when a
+                // secured operation declares no scopes — which is why they are reported
+                // separately rather than folded into one number (§12's bodiless-204 mistake:
+                // a note that means one thing and counts another).
+                //
+                // Like authTestsGatedOnSecondIdentity, this is not a skip count. Which cases
+                // actually get skipped is a runtime fact decided by whatever ITestTokenProvider a
+                // project registers against RequireMultipleIdentities (decision 3) — the CLI
+                // generates this report long before any provider exists (decision 7) and cannot
+                // know that number. What it can say honestly, deterministically, and without
+                // depending on a provider that does not exist yet, is how many generated 403 cases
+                // carry a scope requirement at all. Reporting an actual-skip count here instead
+                // would make `generate --check` report drift on an unchanged spec the moment a
+                // provider's runtime behaviour changed which of those cases skip.
+                ["authTestsRequiringAnUnauthorizedSecondIdentity"] =
+                    authCases.Count(c => c.Slot == IdentitySlot.Secondary && c.RequiredScopes.Count > 0),
                 // Matched against TestPlanBuilder.NoPathParameterNoteReason — the constant the
                 // builder's no-path-parameter branch builds its note text from — rather than a
                 // second hand-copied literal here. A reword of that constant changes both sides

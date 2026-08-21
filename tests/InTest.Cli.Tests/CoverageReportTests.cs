@@ -170,6 +170,44 @@ public class CoverageReportTests
     }
 
     [TestMethod]
+    public void SeparatesScopedFromScopeFreeSecuredOperationsInTheSecondIdentityKeys()
+    {
+        // Task 5's crux: authTestsGatedOnSecondIdentity counts 403 cases gated on a second
+        // identity *existing at all*; authTestsRequiringAnUnauthorizedSecondIdentity counts the
+        // narrower set whose provability also depends on that identity lacking the operation's
+        // declared scopes. The two keys differ only on a scope-free secured operation, so this
+        // plan deliberately carries both shapes — operation "a" is scoped (RequiredScopes:
+        // ["orders.read"]), operation "b" is secured but declares no scopes (RequiredScopes left
+        // at its empty-never-null default). A fixture with only scoped operations would let one
+        // key be a copy of the other and still pass; this one cannot.
+        var plan = new TestPlan(
+            "Orders",
+            [new TestClassPlan("DefaultTests", "Default",
+                [new TestCasePlan("A_Contract", "d", "a", true, "GET", "/a/{id}", ["id"], 200, "Order", "Contract"),
+                 new TestCasePlan("A_Unauthorized", "d", "a", true, "GET", "/a/{id}", ["id"], 401, null, "Contract",
+                     Role: CaseRole.Auth, NeedsFixture: false, Slot: IdentitySlot.None),
+                 new TestCasePlan("A_Forbidden", "d", "a", true, "GET", "/a/{id}", ["id"], 403, null, "Contract",
+                     Role: CaseRole.Auth, NeedsFixture: false, Slot: IdentitySlot.Secondary,
+                     RequiredScopes: ["orders.read"]),
+                 new TestCasePlan("B_Contract", "d", "b", true, "GET", "/b/{id}", ["id"], 200, "Order", "Contract"),
+                 new TestCasePlan("B_Unauthorized", "d", "b", true, "GET", "/b/{id}", ["id"], 401, null, "Contract",
+                     Role: CaseRole.Auth, NeedsFixture: false, Slot: IdentitySlot.None),
+                 new TestCasePlan("B_Forbidden", "d", "b", true, "GET", "/b/{id}", ["id"], 403, null, "Contract",
+                     Role: CaseRole.Auth, NeedsFixture: false, Slot: IdentitySlot.Secondary)])],
+            [],
+            []);
+
+        using var doc = JsonDocument.Parse(CoverageReport.ToJson(plan));
+
+        doc.RootElement.GetProperty("notes").GetProperty("authTestsGatedOnSecondIdentity").GetInt32().ShouldBe(2,
+            "both 403 cases are gated on a second identity existing at all, scoped or not");
+        doc.RootElement.GetProperty("notes").GetProperty("authTestsRequiringAnUnauthorizedSecondIdentity").GetInt32().ShouldBe(1,
+            "only operation \"a\"'s 403 case carries a scope requirement whose satisfaction by the " +
+            "second identity would make it unprovable; operation \"b\" is secured but scope-free, " +
+            "so its 403 case has no such requirement to fail on");
+    }
+
+    [TestMethod]
     public void CountsOperationsDeclaring404WithNoPathParameterToTarget()
     {
         var plan = new TestPlan(
