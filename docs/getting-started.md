@@ -10,10 +10,13 @@ integration test suite running as a post-deployment gate.
 > compiling MSTest project, complete with the fixture files every operation needs. All three
 > are verified end to end against live APIs, request bodies included — Catalog and Inventory pass
 > in full, twice each, against an unreset store. Orders — the one sample with declared `security`
-> — now generates 24 tests and passes **20 of 24** live: the 4 wrong-scope 403 cases cannot pass
-> against this sample's read-only identity, which genuinely holds every scope its own read
-> operations need (**F11**, still open; see [`v0-acceptance.md`](v0-acceptance.md), which also
-> records what that run found). Not yet built: `survey`
+> — now generates 24 tests: **0 failed, 4 skipped, 20 passed**. The 4 skips are the wrong-scope
+> 403 cases whose secondary identity already holds the scope the operation requires — the
+> runtime guard (`RequireSecondaryIdentityLacks`, see the Auth section below) skips each with a
+> stated reason instead of running it against a request that identity is genuinely authorized for
+> (**F11, closed**; see [`v0-acceptance.md`](v0-acceptance.md), which records the run this closed
+> on). The 3 write-scope 403s — the cases the sample's identity pair can actually prove — ran and
+> passed. Not yet built: `survey`
 > (Phase 0), `generate --check` and `intest upgrade` (Phase 8), variation tests, and
 > YAML input. Nothing is published to NuGet, so build from source for now.
 >

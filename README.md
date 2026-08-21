@@ -13,12 +13,15 @@ or in a pull request, never as part of the deployment pipeline.
 > contract tests pass against a live API. That has been verified against three sample APIs, one
 > per OpenAPI producer — see [`docs/v0-acceptance.md`](docs/v0-acceptance.md). Catalog and
 > Inventory pass in full, twice each, against an unreset store. Orders — the one sample with
-> declared `security` — generates 24 tests and passes **20 of 24** live: the 4 wrong-scope 403
-> cases are structurally unable to pass against this sample's read-only identity, which has every
-> scope its own read operations need (**F11**, still open). `intest fixtures repair` now exists
-> too: it creates and maintains the fixture files under `fixtures/` that supply request bodies and
-> path/query parameters, so operations with a request body no longer generate a test that cannot
-> send one — see "What day one actually looks like" below.
+> declared `security` — generates 24 tests: **0 failed, 4 skipped, 20 passed**. The 4 skips are
+> the wrong-scope 403 cases whose secondary identity already holds the scope the operation
+> requires — a runtime guard (`RequireSecondaryIdentityLacks`) skips each with a stated reason
+> instead of letting it run against a request that identity is genuinely authorized for
+> (**F11, closed**). The 3 write-scope 403s — the cases the sample's identity pair can actually
+> prove — ran and passed. `intest fixtures repair` now exists too: it creates and maintains the
+> fixture files under `fixtures/` that supply request bodies and path/query parameters, so
+> operations with a request body no longer generate a test that cannot send one — see "What day
+> one actually looks like" below.
 >
 > **Not yet built:** variation tests, `intest survey`, `generate --check`, and YAML
 > input. Packages are unpublished and the IDs are not reserved, so you cannot install this yet —

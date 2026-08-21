@@ -1,4 +1,4 @@
-# Acceptance runs — v0, v1-a, v1-b and v1-c
+# Acceptance runs — v0, v1-a, v1-b, v1-c and the F11 phase
 
 A living record. Each phase ends by regenerating against `samples/` and appending its results
 here, so the defect numbering (`F1`, `F2`, …) runs continuously across phases and the "carried
@@ -10,6 +10,7 @@ forward" list at the end is always the current one.
 | v1-a | 2026-08-17 | `466e118` | All three run live: **22 of 22**; **44 sentinels** filled by hand |
 | v1-b | 2026-08-19 (UTC) | `f07ce4c` + this commit | Catalog **9 of 9 twice, sequentially** (not concurrently — §11), a negative control reproducing F7 on the same suite/database with the fixture unregistered, and a drain-isolation run proving cleanup, not a test, deletes the seeded row. **F7 closed** |
 | v1-c | 2026-08-19 (UTC) | `f09f2d5` + this commit | Orders live against a real Duende identity server: 401s real, write-scope 403s real (**F8 closed for real**), a dead identity server fails by name, not as a readiness timeout (**F10 closed for real**). Two new findings the live run — not the unit suite — exposed: 4 of 7 wrong-scope 403 tests cannot pass against the sample's only identity pair, because read operations need no scope the read-only identity lacks (**F11**); a mis-scoped write request 415s, not the 400 Task 8 Step 3 predicted (**F12**). Catalog **13 of 13 twice**, Inventory **9 of 9 twice**, neither gains an auth test — v1-b's guarantee survives |
+| F11 | 2026-08-21 | `0cf649a` | Orders live against a real Duende identity server, correctly scoped: **20 passed, 0 failed, 4 skipped**, all 4 skips bottoming out in `RequireSecondaryIdentityLacks` with a stated reason, the 3 write-scope 403s running and passing (**F11 closed**). Independently reproduced from scratch by a second agent with its own suite, provider, fixtures and ports — both runs agree exactly. A negative control (declared `Scopes` set to `null`) reproduces the original F11 failure on demand: 4 failed, not skipped. Catalog **13 of 13 twice**, Inventory **9 of 9 twice**, neither gains an auth test |
 
 ---
 
@@ -1471,7 +1472,23 @@ template.** Neither sample gained a spurious auth test, and Catalog's own repeat
 
 ## Defects found
 
-### F11 — the wrong-scope 403 test is generated per operation, not per required scope — 4 of 7 cannot pass against the sample's own identity pair
+### F11 — the wrong-scope 403 test is generated per operation, not per required scope — 4 of 7 cannot pass against the sample's own identity pair · **closed in the F11 phase**
+
+> **Closed.** See "F11 phase acceptance run — scope-aware 403s, reproduced independently" below.
+> `RequireSecondaryIdentityLacks` (commit `0cf649a` and its predecessors on `f11-scope-aware-403`)
+> now weighs each secured operation's declared scope against what the Secondary identity's
+> `ITestTokenProvider.Identities` actually declares holding, and skips a `_Forbidden` case —
+> with a stated reason naming the identity and the scope — only when that identity provably
+> cannot receive a 403 for it. Proven live against `samples/Orders.Api` and a real Duende
+> identity server, then independently reproduced from scratch by a second agent with its own
+> scaffolded suite, its own token provider, its own fixtures and its own ports: both runs agree
+> exactly, 20 passed / 0 failed / 4 skipped, and the 3 write-scope 403s — the cases the sample's
+> identity pair can actually prove — ran and passed. A negative control (the Secondary identity's
+> declared `Scopes` set to `null`, everything else held fixed) reproduces this exact finding on
+> demand: 4 of those same cases fail, not skip, with the read-authorized identity's real 200s and
+> 404s standing in for the 403 the test expected. The finding recorded immediately below is
+> preserved as the original v1-c evidence this finding was opened on; it is what the fix is
+> measured against, not a live description of current behaviour.
 
 `TestPlanBuilder` emits a `_Forbidden` case for every operation that declares `security`
 (`TestPlanBuilder.cs:197-239`), unconditionally, independent of which scope that operation's own
@@ -1565,8 +1582,154 @@ prediction is not repeated there — this plan's line 691 is its only occurrence
 |---|---|---|---|
 | 1 | F8 — actually consume `ITestTokenProvider` from the generated template, proven live against `samples/Orders.Api` and a real Duende identity server, not only the golden-suite stub | v1-c | **Closed** — Steps 1–2 above |
 | 2 | F10 — give the readiness probe its own client, proven by stopping the real `Identity.Server` and reading the failure, not only by the golden-suite stub | v1-c | **Closed** — Step 4 above |
-| 3 | F11 — the wrong-scope 403 case assumes the Secondary identity lacks every scope any secured operation needs | **planned 2026-08-20**: `docs/superpowers/plans/2026-08-20-intest-f11-scope-aware-403.md` | Open — decided in favour of a runtime scope guard, not a documented requirement. Measured: a `client_credentials` request omitting `scope` returns the client's *entire* allowed set, so a null-scope Secondary identity cannot be obtained by omission; because the audience arrives via a scope, a genuinely scopeless token 401s at authentication rather than 403s at authorization. Documenting the requirement would therefore oblige adopters to add an unused scope to their API's own resource definition — changing production auth config to satisfy a test tool |
+| 3 | F11 — the wrong-scope 403 case assumes the Secondary identity lacks every scope any secured operation needs | `docs/superpowers/plans/2026-08-20-intest-f11-scope-aware-403.md` | **Closed** — a runtime scope guard (`RequireSecondaryIdentityLacks`), not a documented requirement. Proven live against `samples/Orders.Api` and a real Duende identity server, then independently reproduced from scratch by a second agent with its own suite, provider, fixtures and ports: both runs agree exactly — 20 passed, 0 failed, 4 skipped with a stated reason, and the 3 write-scope 403s ran and passed. See "F11 phase acceptance run" below |
 | 4 | F12 — correct Task 8 Step 3's prediction table for a mis-scoped, bodyless POST from 400 to 415, at its source: `docs/superpowers/plans/2026-08-19-intest-v1c-error-and-auth-tests.md` (decision 6 itself makes no POST prediction and needs no correction) | done 2026-08-20 | **Closed** — table now reads 415, with the content-negotiation reason stated so it is not re-predicted as 400 |
 | 5 | Inventory now has the same twice-run proof Catalog has had since v1-b (`InventorySeedFixture`, Step 5 above) — not previously true, closed incidentally by this task rather than a dedicated one | v1-c | **Closed** — Step 5 above |
 | 6 | README.md line 80 claimed "every declared-error test (404s, 400s)" — decision 5 excludes 400 declared-error tests outright (no deterministic fixture-free trigger). Dropped the "400s" claim | found while writing this acceptance log (Task 8, commit `8df32f1`); not requested by any Task 8 step, fixed here as a one-line factual correction rather than deferred | **Closed** |
 
+
+---
+
+# F11 phase acceptance run — scope-aware 403s, reproduced independently
+
+**Date:** 2026-08-20–21 (UTC) · **Commit:** `0cf649a`
+**Task:** F11 plan Task 6 Step 1 — the verdict step for
+`docs/superpowers/plans/2026-08-20-intest-f11-scope-aware-403.md`. Tasks 1–5
+(`RequireSecondaryIdentityLacks`, the containment check against
+`ITestTokenProvider.Identities`'s declared `Scopes`, the ordering fix ahead of
+`RequireMultipleIdentities`, and the golden-suite pin added in `0cf649a`) were all green in
+isolation before this run started. This is the only step that proves the guard works against a
+real identity server rather than the golden-suite stub, and the only one performed twice,
+independently, to rule out a single scaffold's own error.
+
+Unit suite before the run: **434 passing, 0 failing** — 2 Architecture + 212 Cli + 205 Runtime +
+15 Golden. Unchanged after — this run generates and executes suites outside the repository, per
+the same discipline v1-c's Task 8 followed, and touches only documentation inside it.
+
+## What was run
+
+The same shape as v1-c's Task 8: `samples/Orders.Api` and `samples/Identity.Server` live, a
+two-identity `ITestTokenProvider` (`orders-client`, full access; `orders-readonly`, `orders.read`
+only), a generated Orders suite executed with `dotnet test`. Run once, then **independently
+reproduced from scratch by a second agent** — its own scaffolded suite, its own token provider,
+its own fixtures, its own ports. Both agree exactly.
+
+## Results
+
+**Orders suite, both identities correctly scoped:**
+
+```
+Test Run Successful.
+Total tests: 24
+     Passed: 20
+    Skipped: 4
+```
+
+All 4 skips carry this message verbatim:
+
+> `Assert.Inconclusive. Skipped: the secondary identity 'orders-readonly' holds orders.read,
+> which this operation requires, so it cannot produce a 403. Declare different scopes on that
+> identity, or leave Scopes null to run this test anyway.`
+
+All 4 stack traces bottom out in `RequireSecondaryIdentityLacks` — **not**
+`RequireMultipleIdentities`, the guard that gates a different decision (identity count, not scope
+containment). The `.trx` shows `outcome="NotExecuted"` for exactly those 4.
+
+**The three write-scope 403s ran and passed** — `PostApiCustomers_Forbidden`,
+`PostApiOrders_Forbidden`, `DeleteApiOrdersId_Forbidden`, all `outcome="Passed"`,
+`<Counters executed="20">`. This is the number that makes the run meaningful: a fix that skipped
+all 7 wrong-scope cases would also show 0 failures.
+
+| # | Method | Path | Scope | `_Forbidden` outcome |
+|---|---|---|---|---|
+| 1 | GET | `/api/customers` | `orders.read` | Skipped — `RequireSecondaryIdentityLacks` |
+| 2 | GET | `/api/customers/{id}` | `orders.read` | Skipped — `RequireSecondaryIdentityLacks` |
+| 3 | POST | `/api/customers` | `orders.write` | **Ran, passed** (real 403) |
+| 4 | GET | `/api/orders` | `orders.read` | Skipped — `RequireSecondaryIdentityLacks` |
+| 5 | GET | `/api/orders/{id}` | `orders.read` | Skipped — `RequireSecondaryIdentityLacks` |
+| 6 | POST | `/api/orders` | `orders.write` | **Ran, passed** (real 403) |
+| 7 | DELETE | `/api/orders/{id}` | `orders.write` | **Ran, passed** (real 403) |
+
+This is F11's own table of 7 wrong-scope cases, with the outcome column filled in by the guard
+instead of by hand: the 4 cases F11 named as structurally unprovable against this sample's
+identity pair (rows 1, 2, 4, 5 — all `orders.read`) now skip with a reason instead of running and
+failing; the 3 F11 named as provable (rows 3, 6, 7 — all `orders.write`) ran and passed.
+
+## Negative control
+
+The secondary identity's declared `TestIdentity.Scopes` set to `null`, the token request itself
+unchanged, everything else held fixed:
+
+```
+Test Run Failed.
+Total tests: 24
+     Passed: 20
+     Failed: 4
+```
+
+```
+GetApiCustomersId_Forbidden → expected 403, got 404
+GetApiCustomers_Forbidden   → expected 403, got 200
+GetApiOrdersId_Forbidden    → expected 403, got 404
+GetApiOrders_Forbidden      → expected 403, got 200
+```
+
+The 404s are structural, not a control artifact: auth cases use `Guid.NewGuid()` as the path id
+(decision 6), so a read-authorized identity necessarily gets 404 there rather than 403. Restoring
+the declared scopes returns the run to 20 passed / 4 skipped; the control flips in both
+directions with declared `Scopes` as the only variable changed. This is the same failure F11 was
+originally opened on, reproduced on demand rather than merely cited.
+
+## Catalog and Inventory, unaffected
+
+Neither declares `security` (`authTestsGenerated: 0` for both). Catalog **13 of 13 twice**,
+Inventory **9 of 9 twice**, against an unreset store — v1-b's guarantee survives this change, as
+it survived v1-c's.
+
+## Now permanently guarded
+
+Commit `0cf649a` extended the golden execution test so a scoped 403 case that must *run* is
+pinned too, not only the ones that must skip: a regression flipping the containment check from
+`All` to `Any` now fails that test. Previously such a regression would have made every scoped 403
+skip while the repository's own suite stayed green — the golden suite proved the guard could skip
+but not that it would ever let a provable case through.
+
+## Residual gaps — not covered by this run
+
+An acceptance log that records only successes is not evidence. Four gaps the guard's design
+leaves open, none exercised here:
+
+- **Partial containment is untested live.** This run covers "holds all required scopes → skip"
+  (the 4 read-only cases) and "lacks the required scope → run" (the 3 write-scope cases); the
+  negative control covers "`Scopes` null → run". The "holds some but not all of several required
+  scopes → run" branch is pinned only by unit tests and, as of `0cf649a`, the golden suite — no
+  sample operation requires two scopes, so nothing here exercises it against a real identity
+  server.
+- **The OR/AND union across multiple `security` requirements remains a latent gap.** Flattening
+  scopes across more than one `security` requirement into a single containment check is stricter
+  than OpenAPI's OR-of-requirements semantics: for a multi-requirement spec, a case that should
+  skip (satisfiable by requirement A even though the identity lacks something requirement B
+  needs) can still run and fail — F11 one level in, on the union rather than the single
+  requirement. Every sample used across v0 through the F11 phase declares at most one `security`
+  requirement per operation, so nothing exercises this.
+- **Nothing verifies a declared `Scopes` is true.** The guard trusts
+  `ITestTokenProvider.Identities`'s declared `Scopes` completely; a provider that over-declares —
+  claims a scope its token doesn't actually carry — silently converts a provable 403 into a
+  silent skip instead of a failure. This is inherent to `ITestTokenProvider`'s declared-capability
+  design (its own doc comment: "a declared capability, never a probe"), not a defect in the guard,
+  but it is the residual risk a skip count cannot distinguish from a correctly-scoped one.
+- **`.trx` `<Counters>` reports `notExecuted="0"`** in both runs above even where 4 per-result
+  entries carry `outcome="NotExecuted"`. Anyone confirming skip counts by grepping `<Counters>`
+  rather than reading individual `<UnitTestResult>` entries sees nothing — the per-result
+  attribute is authoritative, the aggregate counter is not, and nothing in InTest's own docs says
+  so yet.
+
+## F11 phase actions
+
+| # | Action | Owner phase | Status |
+|---|---|---|---|
+| 1 | F11 — the wrong-scope 403 case assumes the Secondary identity lacks every scope any secured operation needs | F11 (`docs/superpowers/plans/2026-08-20-intest-f11-scope-aware-403.md`) | **Closed** — Results and negative control above |
+| 2 | Partial containment (holds some but not all required scopes) has no live coverage | next phase touching Orders or another multi-scope sample | Open — recorded above, not fixed here |
+| 3 | The OR/AND union across multiple `security` requirements is stricter than OpenAPI's OR semantics | next phase revisiting `TestPlanBuilder`'s auth-case generation | Open — recorded above, not fixed here |
+| 4 | Nothing verifies a declared `ITestTokenProvider.Identities.Scopes` is true; an over-declaring provider silently converts a provable 403 into a silent skip | inherent to the declared-capability design; recorded as residual risk | Open — recorded above, not fixed here |
+| 5 | `.trx` `<Counters>` under-reports skips (`notExecuted="0"` while per-result `outcome="NotExecuted"` entries exist) | next phase touching acceptance-run tooling or docs | Open — recorded above, not fixed here |
