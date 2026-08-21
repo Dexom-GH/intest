@@ -187,4 +187,24 @@ public class CompileVerificationTests
 
         exitCode.ShouldBe(0, $"Generated project failed to compile:{Environment.NewLine}{output}");
     }
+
+    [TestMethod]
+    public async Task RefusesAnInjectionShapedRootNamespaceInsteadOfCompilingIt()
+    {
+        // Measured before this defect was fixed: this exact rootNamespace made `generate` exit 0
+        // and the generated project compile CLEAN. mstest-class.scriban emits
+        // "namespace {{ namespace }};" as declaration syntax, not inside quotes, so the trailing
+        // "//" comments out the template's own ';' and everything between the semicolon it
+        // supplies and that comment — including "public class Injected"'s static constructor —
+        // is compiled straight into the test assembly. The assertion here is "generate refused",
+        // not "the build failed": by the time a compiler could weigh in, adopter code already
+        // shipped into the assembly, which is the regression this test pins.
+        File.WriteAllText(Path.Combine(_root, "intest.json"), """
+        { "schemaVersion": 1, "spec": { "source": "orders.json" },
+          "project": { "rootNamespace": "Orders.ApiTests; public class Injected { static Injected() { System.Console.WriteLine(\"x\"); } } //", "testBaseClass": "InTest.Runtime.ApiTestBase" } }
+        """);
+
+        (await GenerateCommand.RunAsync(_root, CancellationToken.None)).ShouldBe(2);
+        Directory.Exists(Path.Combine(_root, "Generated")).ShouldBeFalse();
+    }
 }

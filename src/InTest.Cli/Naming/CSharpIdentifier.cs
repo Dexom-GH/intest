@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -81,4 +82,80 @@ public static class CSharpIdentifier
 
     private static string ShortHash(string key)
         => Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(key)))[..6];
+
+    /// <summary>
+    /// Validates a dotted C# name — a namespace or a base class name — before it is emitted as
+    /// declaration syntax. <c>mstest-class.scriban</c> writes <c>project.rootNamespace</c> and
+    /// <c>project.testBaseClass</c> as <c>namespace {{ namespace }};</c> and
+    /// <c>: {{ base_class }}</c> — declaration syntax, not a string literal. No quoting or
+    /// escaping construct makes an invalid identifier resolve there, so refusing a bad value
+    /// before it is ever rendered is the only fix; this is that refusal. That makes this the
+    /// adopter-config rule: it governs <c>intest.json</c>'s <c>project.rootNamespace</c> and
+    /// <c>project.testBaseClass</c> (and <c>init</c>'s <c>--name</c>, which seeds both), and is
+    /// unrelated to the separate rule for escaping spec-derived text — <c>tc.category</c>,
+    /// <c>tc.display_name</c>, and the like — that <c>TemplateRenderer</c> writes into string
+    /// literals instead.
+    /// <para>
+    /// Deliberately not supported: an <c>@</c>-escaped verbatim segment (no legitimate
+    /// <c>rootNamespace</c> or <c>testBaseClass</c> needs one), and generic type arguments in a
+    /// base class name (a generated class derives from it non-generically, so <c>Base&lt;T&gt;</c>
+    /// has nowhere for <c>T</c> to bind).
+    /// </para>
+    /// </summary>
+    public static bool TryValidateDottedName(
+        [NotNullWhen(true)] string? value, string setting, out string reason)
+    {
+        const string rule = "Each dot-separated segment must be a C# identifier — a letter or " +
+                             "underscore, then letters, digits or underscores.";
+
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            reason = $"{setting} is empty. {rule}";
+            return false;
+        }
+
+        var segments = value.Split('.');
+        if (segments.Any(string.IsNullOrEmpty))
+        {
+            reason = $"{setting} '{value}' is not a valid C# name: it has an empty segment. {rule}";
+            return false;
+        }
+
+        // Every per-segment message below leads with the setting and the whole value the
+        // adopter typed, then narrows to the offending segment — the same shape as
+        // FixtureDocument.TryValidateOperationKey ("operationId '<value>' cannot be a fixture
+        // filename: it contains …"). A message that quoted only the segment would drop the value
+        // the adopter actually wrote from anything but the shortest inputs.
+        foreach (var segment in segments)
+        {
+            var first = segment[0];
+            if (!char.IsLetter(first) && first != '_')
+            {
+                reason = char.IsDigit(first)
+                    ? $"{setting} '{value}' is not a valid C# name: the segment '{segment}' starts with a digit. {rule}"
+                    : $"{setting} '{value}' is not a valid C# name: the segment '{segment}' starts with '{first}'. {rule}";
+                return false;
+            }
+
+            var offending = segment.Skip(1)
+                .Where(c => !char.IsLetterOrDigit(c) && c != '_')
+                .Distinct()
+                .ToArray();
+            if (offending.Length > 0)
+            {
+                reason = $"{setting} '{value}' is not a valid C# name: the segment '{segment}' contains " +
+                         $"{string.Join(", ", offending.Select(c => $"'{c}'"))}. {rule}";
+                return false;
+            }
+
+            if (Keywords.Contains(segment))
+            {
+                reason = $"{setting} '{value}' is not a valid C# name: the segment '{segment}' is a C# keyword. {rule}";
+                return false;
+            }
+        }
+
+        reason = string.Empty;
+        return true;
+    }
 }

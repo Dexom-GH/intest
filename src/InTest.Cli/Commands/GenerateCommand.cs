@@ -2,6 +2,7 @@ using System.Text.Json.Nodes;
 using System.Text.Json;
 using InTest.Cli.Coverage;
 using InTest.Cli.Fixtures;
+using InTest.Cli.Naming;
 using InTest.Cli.Planning;
 using InTest.Cli.Rendering;
 using InTest.Cli.Schemas;
@@ -66,8 +67,23 @@ public static class GenerateCommand
             using var config = JsonDocument.Parse(File.ReadAllText(configPath));
             var specRelative = config.RootElement.GetProperty("spec").GetProperty("source").GetString()!;
             var project = config.RootElement.GetProperty("project");
-            var rootNamespace = project.GetProperty("rootNamespace").GetString()!;
-            var baseClass = project.GetProperty("testBaseClass").GetString()!;
+            var rootNamespace = project.GetProperty("rootNamespace").GetString();
+            var baseClass = project.GetProperty("testBaseClass").GetString();
+
+            // rootNamespace and testBaseClass reach mstest-class.scriban as declaration syntax
+            // ("namespace {{ namespace }};" and ": {{ base_class }}"), not as a string literal —
+            // no escaping makes an invalid identifier resolve there, so refusing a bad value here,
+            // before anything is written, is the only fix. See CSharpIdentifier.TryValidateDottedName.
+            if (!CSharpIdentifier.TryValidateDottedName(rootNamespace, "project.rootNamespace", out var namespaceReason))
+            {
+                Console.Error.WriteLine($"{namespaceReason} Change project.rootNamespace in intest.json — for example \"Orders.ApiTests\".");
+                return ExitToolError;
+            }
+            if (!CSharpIdentifier.TryValidateDottedName(baseClass, "project.testBaseClass", out var baseClassReason))
+            {
+                Console.Error.WriteLine($"{baseClassReason} Change project.testBaseClass in intest.json — for example \"Orders.ApiTests.OrdersTestBase\".");
+                return ExitToolError;
+            }
 
             var spec = await SpecLoader.LoadFromFileAsync(Path.Combine(projectRoot, specRelative), cancellationToken)
                                        .ConfigureAwait(false);

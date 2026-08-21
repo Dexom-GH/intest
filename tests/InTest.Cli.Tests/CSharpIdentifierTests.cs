@@ -52,4 +52,56 @@ public class CSharpIdentifierTests
         forward["get_a"].ShouldBe(reverse["get_a"]);
         forward["get_b"].ShouldBe(reverse["get_b"]);
     }
+
+    [TestMethod]
+    [DataRow("Orders.ApiTests")]
+    [DataRow("Orders.ApiTests.OrdersTestBase")]
+    [DataRow("Orders")]
+    [DataRow("_Orders")]
+    [DataRow("Orders2")]
+    public void TryValidateDottedName_AcceptsWellFormedDottedNames(string value)
+    {
+        CSharpIdentifier.TryValidateDottedName(value, "project.rootNamespace", out var reason).ShouldBeTrue();
+        reason.ShouldBe(string.Empty);
+    }
+
+    // One row per rule violation. Every per-segment and empty-segment message quotes the whole
+    // value the adopter typed (the FixtureDocument.TryValidateOperationKey precedent), so the
+    // only case with nothing to quote is empty/whitespace/null input — those three assert
+    // "is empty" instead of the value itself.
+    [TestMethod]
+    [DataRow("My Project")]
+    [DataRow("Orders..Base")]
+    [DataRow(".Orders")]
+    [DataRow("Orders.")]
+    [DataRow("2fa.Tests")]
+    [DataRow("Orders.class")]
+    [DataRow("")]
+    [DataRow("   ")]
+    [DataRow(null)]
+    [DataRow("Orders.ApiTests; public class Injected { static Injected() { System.Console.WriteLine(\"x\"); } } //")]
+    public void TryValidateDottedName_RejectsEachRuleViolation(string? value)
+    {
+        CSharpIdentifier.TryValidateDottedName(value, "project.rootNamespace", out var reason).ShouldBeFalse();
+
+        // The actual requirement: the reason names the setting and quotes the offending value,
+        // not just that the boolean came back false — a caller cannot compose a useful error
+        // message otherwise.
+        reason.ShouldContain("project.rootNamespace");
+        reason.ShouldContain(string.IsNullOrWhiteSpace(value) ? "is empty" : value);
+    }
+
+    [TestMethod]
+    public void TryValidateDottedName_ReportsAGenericFirstCharacterFailureWhenItIsNotADigit()
+    {
+        // Distinct from the digit-specific message: a segment starting with a symbol takes the
+        // "generically otherwise" branch, not the digit branch — it must still name the
+        // offending character, not just avoid the digit wording.
+        CSharpIdentifier.TryValidateDottedName("Orders.$Test", "project.rootNamespace", out var reason).ShouldBeFalse();
+        reason.ShouldContain("project.rootNamespace");
+        reason.ShouldContain("'$'");
+        // The rule sentence itself mentions "digits", so pin the digit-specific phrase exactly
+        // rather than the bare substring "digit".
+        reason.ShouldNotContain("starts with a digit");
+    }
 }

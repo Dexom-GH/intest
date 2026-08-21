@@ -77,6 +77,34 @@ public class InitCommandTests
     }
 
     [TestMethod]
+    public void RefusesAnInvalidNameAndWritesNothing()
+    {
+        // --name seeds project.rootNamespace, project.testBaseClass, baseClassName, and the
+        // `namespace` declaration of two scaffolded files — an invalid value here is invalid
+        // regardless of what is (or is not) already on disk, so this must be checked before the
+        // intest.json-already-exists check and before anything is written.
+        var originalError = Console.Error;
+        var capturedError = new StringWriter();
+        Console.SetError(capturedError);
+        int exitCode;
+        try
+        {
+            exitCode = InitCommand.Run(_root, "My Project", "orders.json");
+        }
+        finally
+        {
+            Console.SetError(originalError);
+        }
+
+        exitCode.ShouldBe(2);
+        Directory.GetFileSystemEntries(_root).ShouldBeEmpty();
+
+        var message = capturedError.ToString();
+        message.ShouldContain("--name");
+        message.ShouldContain("My Project");
+    }
+
+    [TestMethod]
     public void CsprojCopiesFixturesToTheOutputDirectory()
     {
         InitCommand.Run(_root, "Orders.ApiTests", "orders.json");
