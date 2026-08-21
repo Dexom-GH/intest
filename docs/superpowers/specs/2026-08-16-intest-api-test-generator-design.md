@@ -453,15 +453,29 @@ Rev 2 and earlier drafts of rev 3 scattered commands across seven sections, and 
 
 | Command | Writes | Never writes | Exit |
 |---|---|---|---|
-| `intest init` | `intest.json`, `.csproj`, `.editorconfig`, `AssemblyInfo.cs`, `TestStartup.cs`, `<Name>TestBase.cs`, `appsettings*.json`, `*.runsettings`, `.config/dotnet-tools.json` | Anything already present — refuses rather than overwrites | 0 ok · 2 `--name` is not a valid C# name · 3 already initialised |
-| `intest generate` | `Generated/`, `coverage-report.json`, and `spec.json` when `spec.source` is a URL (§9) | `fixtures/`, team-owned files | 0 ok · 1 fixture drift or validation failure · 2 no `intest.json`, malformed `intest.json`, or spec unparseable |
+| `intest init` | `intest.json`, `.csproj`, `.editorconfig`, `AssemblyInfo.cs`, `TestStartup.cs`, `<Name>TestBase.cs`, `appsettings*.json`, `*.runsettings`, `.config/dotnet-tools.json` | Anything already present — refuses rather than overwrites | 0 ok · 2 an argument was refused, or the scaffold failed · 3 already initialised |
+| `intest generate` | `Generated/`, `coverage-report.json`, and `spec.json` when `spec.source` is a URL (§9) | `fixtures/`, team-owned files | 0 ok · 1 fixture drift or validation failure · 2 an argument was refused, no `intest.json`, malformed `intest.json`, or spec unparseable |
 | `intest generate --check` | Nothing | Everything | 0 identical · 1 `Generated/` or `coverage-report.json` differs · 2 tool error · 4 tool-version mismatch |
 | `intest generate --emit-plan` | `TestPlan` JSON to stdout | Everything | 0 ok |
-| `intest fixtures repair` | `fixtures/` — **creates missing fixtures** by tier precedence, adds `TODO:` sentinels for newly-required properties, flags removed ones. Never overwrites an existing value | `Generated/`, team-owned files | 0 ok, including nothing to repair · 2 no `intest.json`, malformed `intest.json`, spec unparseable, or a committed fixture that cannot be read |
+| `intest fixtures repair` | `fixtures/` — **creates missing fixtures** by tier precedence, adds `TODO:` sentinels for newly-required properties, flags removed ones. Never overwrites an existing value | `Generated/`, team-owned files | 0 ok, including nothing to repair · 2 an argument was refused, no `intest.json`, malformed `intest.json`, spec unparseable, or a committed fixture that cannot be read |
 | `intest fixtures promote` | Nothing — prints a paste-ready snippet and names the target file | Everything, `spec.source` especially (§10) | 0 ok |
 | `intest survey <spec-glob\|url>` | Nothing — prints a spec-population report (§17) | Everything | 0 ok · 2 no spec matched or unparseable |
 | `intest upgrade` | `intestVersion` in `intest.json`, the version in `.config/dotnet-tools.json`, then re-runs `generate` | `fixtures/`, team-owned files | 0 ok · 1 regeneration failed |
 | `intest assertions add <name>` | Appends to `project.assertions`, then re-runs `generate` | Existing assertions in hand-written or generated code | 0 ok · 3 already present |
+
+**Argument refusals.** The `init` row above read `0 ok · 2 --name is not a valid C# name · 3
+already initialised` until this was measured. It was not merely incomplete about `--project` and
+`--spec` — it was *contradicted*: both escaped as unhandled `ArgumentException`s, which
+`System.CommandLine` reports as exit **1**. So `init` returned a code the row does not list, and
+the code it returned was the one reserved below for outstanding work — a mistyped `--spec` was
+indistinguishable to CI from fixture drift, which is the single confusion the 1/2 split exists to
+prevent. `intest init --name "My Project"` exited 2 with one sentence while `intest init --name
+""` exited 1 with a stack trace: two spellings of one mistake, two contracts. Every command now
+refuses a bad argument the same way — setting named, rule stated, example given, exit 2, nothing
+written — through `Commands.CommandArguments`, and the rows say "an argument was refused" rather
+than enumerating which ones, so that adding a refusal cannot invalidate a row again. That
+enumeration is why this table has now gone stale three times (`54fc741`, the `ConfigLoader` work,
+and this change); the per-command condition lists are the part worth restructuring.
 
 **Exit-code convention.**
 
