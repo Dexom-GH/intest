@@ -47,6 +47,9 @@ Running example: an `Orders` API using Swashbuckle, deployed to a `staging` envi
 
 Before scaffolding anything, find out what adoption will cost you.
 
+> **`survey` is not built yet** (see the banner above) — skip this command and go straight to
+> Phase 1; everything from there on works today.
+
 ```bash
 dotnet tool install -g InTest.Cli
 intest survey "https://orders-staging.example.com/swagger/v1/swagger.json"
