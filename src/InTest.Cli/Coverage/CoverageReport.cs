@@ -11,6 +11,24 @@ namespace InTest.Cli.Coverage;
 /// </summary>
 public static class CoverageReport
 {
+    // Task 5 review finding: the explanation text used to live twice — once paraphrased in a
+    // `//` comment above each key, once hand-written into the JsonObject literal below — with
+    // nothing binding the two, so rewording one silently left the other a stale paraphrase.
+    // Hoisted here so each explanation is one string, referenced once, the way
+    // TestPlanBuilder.NoPathParameterNoteReason is a single string referenced by both the note
+    // text and CoverageReport's match on it rather than two hand-copied literals.
+    private const string AuthTestsGatedOnSecondIdentityExplanation =
+        "How many generated *_Forbidden tests require a second identity to run at all. These " +
+        "skip rather than run when the suite has fewer than two identities; which ones skip is " +
+        "decided when the suite runs, by the ITestTokenProvider your project registers — which " +
+        "this generator does not execute.";
+
+    private const string AuthTestsRequiringAnUnderScopedSecondIdentityExplanation =
+        "How many generated *_Forbidden tests belong to operations that declare required " +
+        "scopes. These skip rather than fail when the second identity holds those scopes; " +
+        "which ones skip is decided when the suite runs, by the ITestTokenProvider your " +
+        "project registers — which this generator does not execute.";
+
     public static string ToJson(TestPlan plan)
     {
         ArgumentNullException.ThrowIfNull(plan);
@@ -81,57 +99,17 @@ public static class CoverageReport
                 ["inlineResponseSchemas"] = cases.Count(c => c.SchemaKey?.StartsWith("op:", StringComparison.Ordinal) == true),
                 ["declaredErrorTestsGenerated"] = cases.Count(c => c.Role == CaseRole.DeclaredError),
                 ["authTestsGenerated"] = authCases.Count,
-                // Named "gated on", not "skipped for want of": whether a generated case actually
-                // gets skipped is decided at runtime by RequireMultipleIdentities against whatever
-                // ITestTokenProvider a project registers (decision 3) — the CLI generates this
-                // report long before any provider exists (decision 7) and cannot know that number.
-                // What it can say honestly is how many generated cases *require* a second identity
-                // to run at all: only the wrong-scope 403 case (IdentitySlot.Secondary) does: the
-                // no-token 401 case always runs regardless of how many identities a provider has.
+                // Not a skip count: whether a generated case actually gets skipped is decided at
+                // runtime by RequireMultipleIdentities against whatever ITestTokenProvider a
+                // project registers (decision 3) — the CLI generates this report long before any
+                // provider exists (decision 7) and cannot know that number. See "explanations"
+                // below for the adopter-facing statement of what this key does say.
                 ["authTestsGatedOnSecondIdentity"] = authCases.Count(c => c.Slot == IdentitySlot.Secondary),
-                // A different question from the key above: not whether a second identity exists,
-                // but whether it is *usable for this operation*. authTestsGatedOnSecondIdentity
-                // counts every wrong-scope 403 case, scoped or not — a secured operation with no
-                // declared scopes still produces one of those, gated on a second identity existing
-                // at all. This key narrows that to the 403 cases that also carry a RequiredScopes
-                // requirement: the ones whose provability depends on the second identity actually
-                // lacking those scopes, not merely being a different identity. The two keys are
-                // equal on a spec whose secured operations are all scoped and diverge only when a
-                // secured operation declares no scopes — which is why they are reported
-                // separately rather than folded into one number (§12's bodiless-204 mistake:
-                // a note that means one thing and counts another).
-                //
-                // Like authTestsGatedOnSecondIdentity, this is not a skip count. Which cases
-                // actually get skipped is a runtime fact decided by whatever ITestTokenProvider a
-                // project registers against RequireMultipleIdentities (decision 3) — the CLI
-                // generates this report long before any provider exists (decision 7) and cannot
-                // know that number. What it can say honestly, deterministically, and without
-                // depending on a provider that does not exist yet, is how many generated 403 cases
-                // carry a scope requirement at all. Reporting an actual-skip count here instead
-                // would make `generate --check` report drift on an unchanged spec the moment a
-                // provider's runtime behaviour changed which of those cases skip.
-                ["authTestsRequiringAnUnauthorizedSecondIdentity"] =
+                // Also not a skip count, for the same reason, plus one more: reporting an actual
+                // skip count here would make `generate --check` report drift on an unchanged spec
+                // the moment a provider's runtime behaviour changed which of these cases skip.
+                ["authTestsRequiringAnUnderScopedSecondIdentity"] =
                     authCases.Count(c => c.Slot == IdentitySlot.Secondary && c.RequiredScopes.Count > 0),
-                // Review finding on Task 5: JSON carries no comments, so the explanation above
-                // never reached a reader of the artefact itself — only a reader of this source
-                // file. "explanations" is a sibling of the counts it explains, keyed by the same
-                // property name, so a reader who has just read a suspicious number can look it up
-                // by the name they already have. A flat sibling string per key (e.g. an
-                // "...Explanation" key next to each count) was the other option; this shape was
-                // chosen because it scales to future keys needing the same treatment without
-                // doubling the key count of "notes" itself, and because most keys here need no
-                // such caveat — folding them all into one small, opt-in object keeps the ones that
-                // are self-explanatory (like authTestsGenerated) uncluttered. The string is a
-                // fixed literal, not derived from plan data, so it cannot vary between two runs
-                // against the same spec and cannot cause --check drift.
-                ["explanations"] = new JsonObject
-                {
-                    ["authTestsRequiringAnUnauthorizedSecondIdentity"] =
-                        "Counts generated 403 cases that declare scope requirements. It is NOT a " +
-                        "count of cases that will be skipped: which cases skip is decided at run " +
-                        "time by the registered ITestTokenProvider, which does not exist yet when " +
-                        "this report is generated."
-                },
                 // Matched against TestPlanBuilder.NoPathParameterNoteReason — the constant the
                 // builder's no-path-parameter branch builds its note text from — rather than a
                 // second hand-copied literal here. A reword of that constant changes both sides
@@ -139,7 +117,30 @@ public static class CoverageReport
                 // cannot drift from the message a reader of `withheld` actually sees, because
                 // both are the same object in memory, not two copies that happen to agree today.
                 ["notFoundWithoutPathParameter"] = plan.Notes.Count(n =>
-                    n.Reason.Contains(TestPlanBuilder.NoPathParameterNoteReason, StringComparison.Ordinal))
+                    n.Reason.Contains(TestPlanBuilder.NoPathParameterNoteReason, StringComparison.Ordinal)),
+                // Review finding on Task 5: JSON carries no comments, so the reasoning above never
+                // reached a reader of the artefact itself — only a reader of this source file.
+                // "explanations" is a sibling of the counts it explains, keyed by the same
+                // property name, so a reader who has just read a suspicious number can look it up
+                // by the name they already have. A flat sibling string per key (e.g. an
+                // "...Explanation" key next to each count) was the other option; this shape was
+                // chosen because it scales to future keys needing the same treatment without
+                // doubling the key count of "notes" itself, and because most keys here need no
+                // such caveat — folding them all into one small, opt-in object keeps the ones that
+                // are self-explanatory (like authTestsGenerated) uncluttered. Unconditional, not
+                // present only when a spec has security-gated operations: `--check` compares a
+                // committed artefact against a fresh run of the *same* spec, so a spec-dependent
+                // key would still be deterministic and never drift — the real reason is that a
+                // stable key set is easier to diff and parse. Both string constants below are
+                // fixed literals, not derived from plan data, so neither can vary between two runs
+                // against the same spec and cannot cause --check drift. Placed last in "notes",
+                // after the counts it explains, rather than between them.
+                ["explanations"] = new JsonObject
+                {
+                    ["authTestsGatedOnSecondIdentity"] = AuthTestsGatedOnSecondIdentityExplanation,
+                    ["authTestsRequiringAnUnderScopedSecondIdentity"] =
+                        AuthTestsRequiringAnUnderScopedSecondIdentityExplanation
+                }
             }
         };
 

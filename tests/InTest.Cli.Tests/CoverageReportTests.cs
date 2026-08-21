@@ -173,7 +173,7 @@ public class CoverageReportTests
     public void SeparatesScopedFromScopeFreeSecuredOperationsInTheSecondIdentityKeys()
     {
         // Task 5's crux: authTestsGatedOnSecondIdentity counts 403 cases gated on a second
-        // identity *existing at all*; authTestsRequiringAnUnauthorizedSecondIdentity counts the
+        // identity *existing at all*; authTestsRequiringAnUnderScopedSecondIdentity counts the
         // narrower set whose provability also depends on that identity lacking the operation's
         // declared scopes. The two keys differ only on a scope-free secured operation, so this
         // plan deliberately carries both shapes — operation "a" is scoped (RequiredScopes:
@@ -201,31 +201,54 @@ public class CoverageReportTests
 
         doc.RootElement.GetProperty("notes").GetProperty("authTestsGatedOnSecondIdentity").GetInt32().ShouldBe(2,
             "both 403 cases are gated on a second identity existing at all, scoped or not");
-        doc.RootElement.GetProperty("notes").GetProperty("authTestsRequiringAnUnauthorizedSecondIdentity").GetInt32().ShouldBe(1,
+        doc.RootElement.GetProperty("notes").GetProperty("authTestsRequiringAnUnderScopedSecondIdentity").GetInt32().ShouldBe(1,
             "only operation \"a\"'s 403 case carries a scope requirement whose satisfaction by the " +
             "second identity would make it unprovable; operation \"b\" is secured but scope-free, " +
             "so its 403 case has no such requirement to fail on");
     }
 
     [TestMethod]
-    public void ExplainsAuthTestsRequiringAnUnauthorizedSecondIdentityInTheArtefactItself()
+    public void ExplainsAuthTestsRequiringAnUnderScopedSecondIdentityInTheArtefactItself()
     {
         // Review finding on Task 5: the source-only comment above
-        // authTestsRequiringAnUnauthorizedSecondIdentity explained that it is not a skip count,
+        // authTestsRequiringAnUnderScopedSecondIdentity explained that it is not a skip count,
         // but JSON carries no comments, so that explanation reached nobody who opens
         // coverage-report.json. This asserts the explanation is emitted in the JSON and reachable
         // from the key it explains — not merely present somewhere in the document — and that it
-        // actually conveys "not a skip count" plus who decides skipping at run time.
+        // names the tests it counts (*_Forbidden), states the real condition (declared scopes,
+        // not 401's "unauthorized"), and says who decides skipping and when. Assertions are on
+        // content words, not typography: a capitalisation or spelling change to the prose must
+        // not fail this test for reasons unrelated to meaning.
         using var doc = JsonDocument.Parse(CoverageReport.ToJson(Plan()));
 
         var explanation = doc.RootElement.GetProperty("notes").GetProperty("explanations")
-            .GetProperty("authTestsRequiringAnUnauthorizedSecondIdentity").GetString();
+            .GetProperty("authTestsRequiringAnUnderScopedSecondIdentity").GetString();
 
         explanation.ShouldNotBeNullOrWhiteSpace();
-        explanation.ShouldContain("NOT a", customMessage: "must tell a reader this is not a skip count");
-        explanation.ShouldContain("skipped");
-        explanation.ShouldContain("ITestTokenProvider", customMessage: "must say who decides skipping, and that it happens at run time");
-        explanation.ShouldContain("run time", customMessage: "must say skipping is decided at run time, not when the report is generated");
+        explanation.ShouldContain("_Forbidden", customMessage: "must point a reader at the generated test methods this number counts");
+        explanation.ShouldContain("scope", customMessage: "must state the real condition (declared scopes), not 401's 'unauthorized'");
+        explanation.ShouldContain("ITestTokenProvider", customMessage: "must say who decides skipping");
+        explanation.ShouldContain("suite runs", customMessage: "must say skipping is decided when the suite runs, not when the report is generated");
+    }
+
+    [TestMethod]
+    public void ExplainsAuthTestsGatedOnSecondIdentityInTheArtefact()
+    {
+        // Review finding on Task 5: authTestsGatedOnSecondIdentity carries the identical runtime
+        // caveat as its sibling key (both counted by whatever ITestTokenProvider a project
+        // registers, neither known when this report is generated) and is the number a reader
+        // meets first. Its absence from "explanations" would read as "needs no caveat", making
+        // the sibling key look like the one exception rather than one of two. This asserts it
+        // gets its own entry, not merely that the map is non-empty.
+        using var doc = JsonDocument.Parse(CoverageReport.ToJson(Plan()));
+
+        var explanation = doc.RootElement.GetProperty("notes").GetProperty("explanations")
+            .GetProperty("authTestsGatedOnSecondIdentity").GetString();
+
+        explanation.ShouldNotBeNullOrWhiteSpace();
+        explanation.ShouldContain("_Forbidden", customMessage: "must point a reader at the generated test methods this number counts");
+        explanation.ShouldContain("ITestTokenProvider", customMessage: "must say who decides skipping");
+        explanation.ShouldContain("suite runs", customMessage: "must say skipping is decided when the suite runs, not when the report is generated");
     }
 
     [TestMethod]
