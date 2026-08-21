@@ -71,7 +71,9 @@ public static class CSharpIdentifier
             }
 
             foreach (var entry in group)
+            {
                 result[entry.Key] = entry.Value + "_" + ShortHash(entry.Key);
+            }
         }
 
         return result;

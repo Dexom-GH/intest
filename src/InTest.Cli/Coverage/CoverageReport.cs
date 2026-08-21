@@ -37,7 +37,9 @@ public static class CoverageReport
 
         var skipped = new JsonArray();
         foreach (var s in plan.Skipped)
+        {
             skipped.Add(new JsonObject { ["operation"] = s.OperationKey, ["reason"] = s.Reason });
+        }
 
         // Review finding on Task 4: TestPlan.Notes was populated by TestPlanBuilder's three
         // withholding branches and read by nothing — a withheld declared-error case was a
@@ -47,7 +49,9 @@ public static class CoverageReport
         // rather than "nothing generated", not a lesser amount of detail about it.
         var withheld = new JsonArray();
         foreach (var n in plan.Notes)
+        {
             withheld.Add(new JsonObject { ["operation"] = n.OperationKey, ["reason"] = n.Reason });
+        }
 
         // Task 6: an operation can now emit more than one case (declared-error and auth cases,
         // decisions 5 and 3), so a per-operation count is no longer the same number as a

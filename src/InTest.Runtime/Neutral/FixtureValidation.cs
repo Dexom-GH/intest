@@ -39,7 +39,9 @@ public static class FixtureValidation
             var problems = new List<string>();
 
             foreach (var (name, value) in fixture.Parameters)
+            {
                 CheckLeaf(value, name, fileName, resolver, problems);
+            }
 
             if (fixture.Body is not null)
             {

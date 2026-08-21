@@ -27,10 +27,14 @@ public static class SchemaBundleBuilder
         var componentSchemas = document.Components?.Schemas ?? new Dictionary<string, IOpenApiSchema>();
 
         foreach (var (name, schema) in componentSchemas.OrderBy(s => s.Key, StringComparer.Ordinal))
+        {
             definitions[name] = Serialize(schema);
+        }
 
         foreach (var (key, schema) in InlineResponseSchemas(document, plan))
+        {
             definitions[key] = Serialize(schema);
+        }
 
         var bundle = new JsonObject { ["definitions"] = definitions };
         return bundle.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented = true })

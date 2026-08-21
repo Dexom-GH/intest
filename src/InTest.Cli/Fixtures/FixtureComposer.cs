@@ -197,7 +197,9 @@ public static class FixtureComposer
         {
             var obj = new JsonObject();
             foreach (var (name, propertySchema) in schema.Properties ?? new Dictionary<string, IOpenApiSchema>())
+            {
                 obj[name] = ComposeFromSchema(propertySchema, name, tier, visitedRefs);
+            }
             return obj;
         }
 

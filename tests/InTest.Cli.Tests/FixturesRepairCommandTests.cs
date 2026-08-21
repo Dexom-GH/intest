@@ -145,7 +145,9 @@ public class FixturesRepairCommandTests
         await FixturesRepairCommand.RunAsync(_root, CancellationToken.None);
 
         foreach (var (file, written) in before)
+        {
             File.GetLastWriteTimeUtc(file).ShouldBe(written, $"{Path.GetFileName(file)} must not be touched");
+        }
     }
 
     [TestMethod]

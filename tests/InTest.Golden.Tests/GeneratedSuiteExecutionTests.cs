@@ -486,7 +486,9 @@ public class GeneratedSuiteExecutionTests
 
         var output = Path.Combine(_root, "bin", "Debug", "net10.0");
         foreach (var required in new[] { "appsettings.json", "spec-schemas.json", "spec-paths.json" })
+        {
             File.Exists(Path.Combine(output, required)).ShouldBeTrue($"{required} did not reach the output directory.");
+        }
     }
 
     /// <summary>

@@ -36,7 +36,9 @@ public sealed record OperationKey(string Value, bool Synthesized)
             var cleaned = segment.Trim('{', '}');
             sb.Append('_');
             foreach (var ch in cleaned)
+            {
                 sb.Append(char.IsLetterOrDigit(ch) ? char.ToLowerInvariant(ch) : '_');
+            }
         }
 
         return new OperationKey(Collapse(sb.ToString()), Synthesized: true);

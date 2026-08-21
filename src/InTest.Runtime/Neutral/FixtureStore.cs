@@ -43,7 +43,9 @@ public sealed class FixtureStore
         }
 
         foreach (var file in Directory.GetFiles(fixturesDir, "*.json", SearchOption.TopDirectoryOnly))
+        {
             fixtures[KeyOf(file)] = ParseFile(file);
+        }
 
         if (!string.IsNullOrEmpty(profile))
         {
@@ -142,10 +144,12 @@ public sealed class FixtureStore
 
         var fileName = key + ".json";
         foreach (var name in names)
+        {
             if (fixture.Parameters.TryGetValue(name, out var raw))
             {
                 result[name] = resolver.Resolve(raw, fileName);
             }
+        }
 
         return result;
     }
@@ -157,13 +161,17 @@ public sealed class FixtureStore
             case JsonObject obj:
                 var newObj = new JsonObject();
                 foreach (var (name, child) in obj)
+                {
                     newObj[name] = child is null ? null : ResolveNode(child, fileName, resolver);
+                }
                 return newObj;
 
             case JsonArray array:
                 var newArray = new JsonArray();
                 foreach (var element in array)
+                {
                     newArray.Add(element is null ? null : ResolveNode(element, fileName, resolver));
+                }
                 return newArray;
 
             case JsonValue value when value.TryGetValue<string>(out var text):
@@ -193,7 +201,10 @@ public sealed class FixtureStore
     private static Fixture Merge(Fixture baseFixture, Fixture overlay)
     {
         var parameters = new SortedDictionary<string, string>(baseFixture.Parameters, StringComparer.Ordinal);
-        foreach (var (key, value) in overlay.Parameters) parameters[key] = value;
+        foreach (var (key, value) in overlay.Parameters)
+        {
+            parameters[key] = value;
+        }
 
         return new Fixture
         {
@@ -218,7 +229,10 @@ public sealed class FixtureStore
         }
 
         var merged = new JsonObject();
-        foreach (var (key, value) in baseObj) merged[key] = value?.DeepClone();
+        foreach (var (key, value) in baseObj)
+        {
+            merged[key] = value?.DeepClone();
+        }
 
         foreach (var (key, value) in overlayObj)
         {

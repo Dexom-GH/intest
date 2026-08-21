@@ -91,7 +91,9 @@ public static class FixturesRepairCommand
                         var body = existing.Body as JsonObject ?? new JsonObject();
                         var composedBody = (JsonObject)composed.Body!;
                         foreach (var name in drift.MissingProperties)
+                        {
                             body[name] = composedBody[name]?.DeepClone();
+                        }
                         existing.Body = body;
                         changed = true;
                     }
@@ -105,8 +107,10 @@ public static class FixturesRepairCommand
                     // Stale properties are reported, never deleted (§10) — a property no longer in
                     // the schema may be deliberate, and silent deletion is how that intent is lost.
                     foreach (var name in drift.StaleProperties)
+                    {
                         report.WriteLine(
-                            $"{testCase.OperationKey}: '{name}' is no longer in schema (kept — remove by hand if it was not intentional).");
+                        $"{testCase.OperationKey}: '{name}' is no longer in schema (kept — remove by hand if it was not intentional).");
+                    }
 
                     if (changed)
                     {

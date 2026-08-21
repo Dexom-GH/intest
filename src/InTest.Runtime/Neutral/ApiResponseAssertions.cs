@@ -75,7 +75,10 @@ public static class ApiResponseAssertions
         if (violations.Count > 0)
         {
             sb.AppendLine($"Schema: {violations.Count} violation(s)");
-            foreach (var v in violations) sb.Append("  ").Append(v.Kind).Append(" at ").AppendLine(v.Path);
+            foreach (var v in violations)
+            {
+                sb.Append("  ").Append(v.Kind).Append(" at ").AppendLine(v.Path);
+            }
         }
 
         sb.Append("Run:  ").AppendLine(testId);

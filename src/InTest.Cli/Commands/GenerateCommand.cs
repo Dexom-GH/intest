@@ -82,7 +82,10 @@ public static class GenerateCommand
             var drift = DetectFixtureDrift(spec.Document, plan, projectRoot);
             if (drift.Count > 0)
             {
-                foreach (var message in drift) report.WriteLine(message);
+                foreach (var message in drift)
+                {
+                    report.WriteLine(message);
+                }
                 report.WriteLine("Run 'intest fixtures repair' to create or update the fixture(s) listed above.");
                 return ExitWorkOutstanding;
             }

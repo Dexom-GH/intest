@@ -36,7 +36,9 @@ public class InitCommandTests
             "TestStartup.cs", "OrdersTestBase.cs", "appsettings.json", "Orders.ApiTests.runsettings",
             ".config/dotnet-tools.json"
         })
+        {
             File.Exists(Path.Combine(_root, file)).ShouldBeTrue($"{file} was not scaffolded.");
+        }
     }
 
     [TestMethod]

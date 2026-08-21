@@ -116,7 +116,10 @@ public sealed class FixtureDocument
         if (Parameters.Count > 0)
         {
             var parameters = new JsonObject();
-            foreach (var (key, value) in Parameters) parameters[key] = value;
+            foreach (var (key, value) in Parameters)
+            {
+                parameters[key] = value;
+            }
             root["$parameters"] = parameters;
         }
 

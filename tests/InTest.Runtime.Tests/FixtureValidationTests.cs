@@ -36,7 +36,10 @@ public class FixtureValidationTests
         foreach (var (operationKey, problems) in specs)
         {
             var body = new JsonObject();
-            foreach (var problem in problems) SetSentinelAtPath(body, problem);
+            foreach (var problem in problems)
+            {
+                SetSentinelAtPath(body, problem);
+            }
 
             var document = new JsonObject
             {
