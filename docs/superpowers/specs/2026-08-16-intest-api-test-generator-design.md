@@ -2385,7 +2385,9 @@ one list that exists to be the backlog.
 
 ## 18. Verification record
 
-*Measured* = established by running code on .NET SDK 10.0.303, not by reading docs.
+*Measured* = established by running code, not by reading docs. Where an SDK version is
+load-bearing to a finding, the entry states it — the toolchain moves, so a version pinned
+here would not.
 
 ### Corrected from rev 2
 
