@@ -84,10 +84,34 @@ Enumerate them all before deciding where the helper goes. Sites whose value cann
 
 A single shared helper, applied at every site whose value is spec-derived. Cover, per site:
 
+> **Correction, 2026-08-21 — the escape set is the C# grammar's, not the two characters I listed.**
+> C# forbids **five** characters in a regular string literal, not two: `\`, `"`, and the
+> `new_line` set — CR, LF, U+0085, U+2028, U+2029. A raw newline in a generated literal is
+> `CS1010`.
+>
+> This is reachable by the same mechanism `bfa668d` documents, verified by trace:
+> `OperationKey.Resolve` only `.Trim()`s, so an embedded newline survives; `char.IsControl` in
+> `TryValidateOperationKey` runs only behind `TestPlanBuilder.cs:60`'s `needsFixture` gate, which
+> never fires for a parameterless operation. So `"operationId": "list
+Things"` — valid JSON,
+> valid OpenAPI — reaches a literal and does not compile.
+>
+> **Define the set by `regular_string_literal_character` in the C# grammar, not by enumeration.**
+> My listing two characters was the defect: an enumeration is a snapshot, a grammar rule is a
+> boundary with an authority outside our judgement. "Handle a few more that seem risky" would be
+> scope creep; "the set is what the language forbids" is not.
+>
+> **Broader than the operationId:** `path_template`, path and query parameter names, and a
+> `components.schemas` reference id have **no** validation gate at all — `TryValidateOperationKey`
+> only ever validates the operation key. Scopes remain genuinely safe: RFC 6749's `scope-token`
+> grammar excludes everything below `0x21`, which rules out CR and LF for the same reason it rules
+> out `"` and `\`.
+
 | Input | Expected |
 |---|---|
 | A value containing `"` | Emitted escaped; generated project **compiles** |
 | A value containing `\` | Same |
+| A value containing a raw **newline** | Same — this is the one an enumeration missed |
 | An ordinary value | **Byte-identical output to today** — this is what protects the golden file |
 
 The last row matters most: a helper that escapes correctly but alters ordinary output would rewrite `Expected/OrdersTests.g.cs.txt` wholesale and bury the real change.
