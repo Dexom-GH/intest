@@ -122,6 +122,22 @@ what the test would still pass under.
 emit valid, equivalent JSON for the same input, so any test that round-trips and compares is blind
 to which one ran. It was pinned only once a test asserted on the raw file text instead.
 
+**A proof living outside the repository is indistinguishable, to everyone downstream, from a
+proof that was never run.** Running the real check once, by hand, and reporting the result in a
+message is genuine evidence in the moment — but it leaves nothing anyone else can find, re-run,
+or trust later. Only a proof committed as a test survives past the conversation that produced it.
+
+`MSBuildPropertyValue`'s `?` escaping is such a case. The claim that an unescaped `?` makes
+`Include="$(InTestSpecSource)"` silently glob-match a different file was verified against a real
+`dotnet msbuild` evaluation — but only in a terminal, reported in a message. It existed nowhere in
+source, tests, docs, or commit messages. A later session writing this very section went looking
+for that evaluation to cite it here and could not find it anywhere in the repository, so it
+correctly declined to cite it as fact rather than trust the claim on reputation. The gap stayed
+open — every assertion for this escaping still went through `XDocument`, which cannot see a glob
+resolving to the wrong file at all — until it was closed by a test in
+`MSBuildEvaluationTests.cs` that runs the same `dotnet msbuild` evaluation itself and asserts on
+its output.
+
 ## Dependency policy
 
 New dependencies are held to a hard line, because adopters inherit whatever we take on.
