@@ -169,7 +169,7 @@ Applying all three operations to the first three gives a double trailing newline
 >
 > The cost to weigh honestly, in full: §5's `upgrade` row lists only `intestVersion`, the tools pin, and the `generate` re-run in its **writes** column, and lists "`fixtures/`, team-owned files" in its **never-writes** column — and `.gitattributes` is team-owned under `CLAUDE.md`'s ownership table. So this is not one amendment but a **contradiction to resolve**: `upgrade` may create `.gitattributes` *if absent, never overwriting*, and both §5 columns must say so. Task 4 Step 1a is already arguing to cross the ownership line narrowly; this widens it, and the narrowness has to be written down rather than assumed.
 >
-> **It lands in four places, all of which are steps in this plan** — Task 4 Step 1b and Step 2 (build it, and reconcile the "never touched" test), Task 5 (§5's `upgrade` row, both columns; §5's `init` row, which enumerates scaffolded files and the spec itself notes has gone stale three times already), and `InitCommandTests.ScaffoldsEveryTeamOwnedFile` (`InitCommandTests.cs:33`), which enumerates the same list and is the natural place to assert the new file.
+> **Decided: take it.** It lands in four places, all of which are steps in this plan — Task 4 Step 1b and Step 2 (build it, and reconcile the "never touched" test), Task 5 (§5's `upgrade` row, both columns; §5's `init` row, which enumerates scaffolded files and the spec itself notes has gone stale three times already), and `InitCommandTests.ScaffoldsEveryTeamOwnedFile` (`InitCommandTests.cs:33`), which enumerates the same list and is the natural place to assert the new file.
 >
 > The population is zero today, which makes this the cheapest moment it will ever be.
 
@@ -219,7 +219,9 @@ Not "the file contains LF" — that passes on Linux regardless. Assert bytes aft
 
 **a. These are adopter-owned files.** `intest.json` is documented as `jsonc` with inline comments; `.config/dotnet-tools.json` may pin other tools. A parse-and-rewrite round-trip destroys comments, key order and formatting. `upgrade` needs a **targeted text edit**. `CLAUDE.md`'s ownership table gives "everything else" to the adopting team — `upgrade` is the first command to cross that line, so cross it narrowly.
 
-**b. `.gitattributes`, if Task 2 Step 3 was taken.** `upgrade` writes one **if absent, never overwriting** — that is the migration path for projects scaffolded before `[lf-everywhere]` shipped, which `init` cannot reach because it refuses an existing project. If Task 2 Step 3 decided against it, say so here and delete this; a decision recorded in one task and silently dropped in the next is how the `[paired]` failure happens.
+**b. `.gitattributes` — decided, build it.** `upgrade` writes one **if absent, never overwriting**. This is the migration path for projects scaffolded before `[lf-everywhere]` shipped, which `init` cannot reach because it refuses an existing project.
+
+The decision rests on there being **no other reachable remedy** — a documented gate whose fix cannot be applied is the `[paired]` shape this plan exists to avoid. It does **not** rest on precedent: scaffolding tools commonly write `.gitattributes` at *init*, but whether comparison-based codegen tools write one on *upgrade* is unverified, and the weak signal runs the other way (document the requirement rather than touch an adopter-owned file). If that matters to a reviewer later, it is a claim to check, not one this plan makes.
 
 **c. `schemaVersion` migration.** §3: a major bump may change the `intest.json` schema, and `schemaVersion` "moves only on a major". Upgrading 1.x→2.0 while writing only `intestVersion` leaves `schemaVersion: 1` against a CLI whose `SupportedSchemaVersion` is 2 — and `ConfigLoader` exits 2 on the config `upgrade` just wrote. **Major is the only case `upgrade` exists for**, so this is the main path, not an edge.
 
@@ -242,7 +244,7 @@ Five places assert these do not exist. Stale claims are this project's recurring
 - [ ] **Step 3:** `CLAUDE.md` — "`survey`, `generate --check`, `upgrade` … do **not** exist yet".
 - [ ] **Step 4:** `ExitCode.cs`'s doc, and `ConfigLoader.RequireSupportedSchemaVersion`'s message — which "deliberately does not mention `intest upgrade`, which does not exist yet". It now does; naming it is the remedy the message lacked.
 - [ ] **Step 5:** §5 — record `[exact-match]`, the check-order, and the absent-version rule from `[read-what-init-wrote]`.
-- [ ] **Step 6:** If `.gitattributes` was taken: §5's `upgrade` row (**both** the writes and never-writes columns — they currently contradict each other on this), and §5's `init` row, which enumerates scaffolded files and has gone stale three times already. Commit.
+- [ ] **Step 6:** §5's `upgrade` row (**both** the writes and never-writes columns — they currently contradict each other on this), and §5's `init` row, which enumerates scaffolded files and has gone stale three times already. Commit.
 
 ---
 
