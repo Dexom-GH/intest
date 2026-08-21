@@ -18,13 +18,17 @@ namespace InTest.Cli.Configuration;
 /// different idea of what a valid config is than <c>generate</c> had. One loader means one answer.
 /// </para>
 /// <para>
-/// This is the adopter-config rule, and it is the third of three deliberately distinct rules in
+/// This is the adopter-config rule, and it is the third of four deliberately distinct rules in
 /// this repository — see <see cref="CSharpIdentifier.TryValidateDottedName"/>, which it calls.
 /// Spec text naming a file is refused (<see cref="Fixtures.FixtureDocument.TryValidateOperationKey"/>);
 /// spec text reaching a C# string literal is escaped (<see cref="CSharpLiteral"/>); adopter config
-/// reaching declaration syntax is validated here, at load, before anything is written. Merging
-/// them is a known hazard: escaping cannot rescue an invalid identifier, and validation is the
-/// wrong tool for text that is legitimately arbitrary.
+/// reaching declaration syntax is validated here, at load, before anything is written; adopter
+/// input reaching JSON and XML syntax — the <c>--spec</c> value <c>InitCommand</c> writes into
+/// <c>intest.json</c> and the generated <c>.csproj</c> — is escaped (<see cref="MSBuildPropertyValue"/>),
+/// with a narrow refusal for the residue XML 1.0 cannot represent in any form, because both
+/// grammars can carry a path losslessly. Merging them is a known hazard: escaping cannot rescue
+/// an invalid identifier, and validation is the wrong tool for text that is legitimately
+/// arbitrary.
 /// </para>
 /// </summary>
 public static class ConfigLoader

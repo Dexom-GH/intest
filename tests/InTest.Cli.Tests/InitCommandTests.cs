@@ -1,5 +1,8 @@
+using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Xml.Linq;
 using InTest.Cli.Commands;
+using InTest.Cli.Configuration;
 using Shouldly;
 
 namespace InTest.Cli.Tests;
@@ -192,6 +195,114 @@ public class InitCommandTests
         // 2(b)), which is exactly the state this scaffold must ship in.
         startup.ShouldContain("// services.AddSingleton<ITestTokenProvider",
             customMessage: "the scaffold must show the registration, but only as a comment");
+    }
+
+    [TestMethod]
+    public void EscapesAmpersandSoTheGeneratedCsprojActuallyParses()
+    {
+        InitCommand.Run(_root, "Orders.ApiTests", "../R&D/orders.json").ShouldBe(0);
+
+        var csprojText = File.ReadAllText(Path.Combine(_root, "Orders.ApiTests.csproj"));
+        // The real parse, not a string check: an unescaped '&' is not well-formed XML and
+        // XDocument.Parse throws on it rather than silently accepting it.
+        var doc = XDocument.Parse(csprojText);
+
+        doc.Descendants("InTestSpecSource").Single().Value.ShouldBe("../R&D/orders.json");
+    }
+
+    [TestMethod]
+    public void EscapesDollarParenSoItSurvivesAsLiteralTextNotAnMSBuildExpansion()
+    {
+        InitCommand.Run(_root, "Orders.ApiTests", "orders$(Configuration).json").ShouldBe(0);
+
+        var csprojText = File.ReadAllText(Path.Combine(_root, "Orders.ApiTests.csproj"));
+        var doc = XDocument.Parse(csprojText);
+
+        // %24, not a bare $( — a bare $(Configuration) would expand as an MSBuild property
+        // reference rather than surviving as the literal text the adopter typed.
+        doc.Descendants("InTestSpecSource").Single().Value.ShouldBe("orders%24(Configuration).json");
+    }
+
+    [TestMethod]
+    public void EscapesQuestionMarkSoTheIncludeGlobCannotResolveToADifferentFile()
+    {
+        // Confirmed by real `dotnet build` (see MSBuildPropertyValue's doc comment): with
+        // specs/orders.json and specs/ordersX.json both on disk, an unescaped
+        // Include="$(InTestSpecSource)" for "specs/orders?.json" silently resolved to
+        // ordersX.json — the wrong file — instead of failing loudly.
+        InitCommand.Run(_root, "Orders.ApiTests", "orders?.json").ShouldBe(0);
+
+        var csprojText = File.ReadAllText(Path.Combine(_root, "Orders.ApiTests.csproj"));
+        var doc = XDocument.Parse(csprojText);
+
+        doc.Descendants("InTestSpecSource").Single().Value.ShouldBe("orders%3F.json");
+    }
+
+    [TestMethod]
+    public void EscapesQuoteSoTheGeneratedIntestJsonActuallyParses()
+    {
+        InitCommand.Run(_root, "Orders.ApiTests", "orders\".json").ShouldBe(0);
+
+        var jsonText = File.ReadAllText(Path.Combine(_root, "intest.json"));
+        // The real parse: an unescaped '"' inside the JSON string value truncates it and leaves
+        // the rest of the document malformed, which JsonDocument.Parse throws on.
+        using var doc = JsonDocument.Parse(jsonText);
+
+        doc.RootElement.GetProperty("spec").GetProperty("source").GetString().ShouldBe("orders\".json");
+    }
+
+    [TestMethod]
+    public void WritesAmpersandAndNonAsciiCharactersLiterallyIntoIntestJson()
+    {
+        // Pins the choice of JavaScriptEncoder.UnsafeRelaxedJsonEscaping over the default
+        // encoder — a choice round-tripping cannot prove, since both produce valid JSON encoding
+        // the same string. The default encoder would render '&' as \u0026 and 'é' as \u00e9:
+        // still correct JSON, but unreadable by an adopter who opens the file by hand.
+        InitCommand.Run(_root, "Orders.ApiTests", "../R&D/café.json").ShouldBe(0);
+
+        var jsonText = File.ReadAllText(Path.Combine(_root, "intest.json"));
+        jsonText.ShouldContain("R&D");
+        jsonText.ShouldContain("café");
+    }
+
+    [TestMethod]
+    public void RoundTripsAHazardousSpecSourcePastConfigLoad()
+    {
+        // The strongest test on this surface: proves the value survives write (InitCommand) then
+        // read (ConfigLoader) intact, through both escaping layers at once.
+        var hazardous = "../R&D/orders?\"$(x).json";
+        InitCommand.Run(_root, "Orders.ApiTests", hazardous).ShouldBe(0);
+
+        ConfigLoader.Load(_root).SpecSource.ShouldBe(hazardous.Replace("\\", "/"));
+    }
+
+    [TestMethod]
+    public void RefusesACharacterXmlCannotRepresentAndWritesNothing()
+    {
+        // U+0001 is a C0 control character XML 1.0's Char production excludes — no MSBuild or
+        // XML escape sequence represents it, so this must refuse rather than escape.
+        var originalError = Console.Error;
+        var capturedError = new StringWriter();
+        Console.SetError(capturedError);
+        int exitCode;
+        try
+        {
+            exitCode = InitCommand.Run(_root, "Orders.ApiTests", "orders\u0001.json");
+        }
+        finally
+        {
+            Console.SetError(originalError);
+        }
+
+        exitCode.ShouldBe(2);
+        Directory.GetFileSystemEntries(_root).ShouldBeEmpty();
+
+        var message = capturedError.ToString();
+        message.ShouldContain("--spec");
+        // Pins that the diagnosis itself — not just the boilerplate sentence appended in
+        // InitCommand — reached the message: MSBuildPropertyValue renders the offending
+        // character as U+0001 rather than pasting the raw control character into the terminal.
+        message.ShouldContain("U+0001");
     }
 
     // ScaffoldStillBuildsWithNoTokenProviderRegistered moved to InTest.Golden.Tests, next to
