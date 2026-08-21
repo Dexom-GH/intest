@@ -477,6 +477,8 @@ public IReadOnlyList<TestIdentity> Identities { get; } =
 
 Record, per skipped case, which of the two guards skipped it.
 
+> **This result deserves an automated guard, not only a transcript.** An acceptance run is prose, and this repo has already written down what happens to prose results — `TheGeneratedSuitePassesTwiceAgainstTheSameStore`'s own doc says a manual result "regresses silently — nobody notices until the next acceptance run", which is why v1-b converted F7's manual proof into a live test. "Three write-scope 403s run and pass, four read-scoped ones skip" is F11's equivalent headline. Before closing this task, decide deliberately whether it becomes a live test too, and say so either way rather than leaving it implied.
+
 - [ ] **Step 3: Prove the skip is not vacuous**
 
 Set the secondary identity's `Scopes` back to `null` and re-run. **All 7 must run again and 4 must fail** — reproducing F11 exactly. A guard that skips regardless of what the provider declares passes Step 2 and fails this.
