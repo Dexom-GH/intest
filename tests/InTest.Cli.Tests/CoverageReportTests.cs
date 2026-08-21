@@ -208,6 +208,27 @@ public class CoverageReportTests
     }
 
     [TestMethod]
+    public void ExplainsAuthTestsRequiringAnUnauthorizedSecondIdentityInTheArtefactItself()
+    {
+        // Review finding on Task 5: the source-only comment above
+        // authTestsRequiringAnUnauthorizedSecondIdentity explained that it is not a skip count,
+        // but JSON carries no comments, so that explanation reached nobody who opens
+        // coverage-report.json. This asserts the explanation is emitted in the JSON and reachable
+        // from the key it explains — not merely present somewhere in the document — and that it
+        // actually conveys "not a skip count" plus who decides skipping at run time.
+        using var doc = JsonDocument.Parse(CoverageReport.ToJson(Plan()));
+
+        var explanation = doc.RootElement.GetProperty("notes").GetProperty("explanations")
+            .GetProperty("authTestsRequiringAnUnauthorizedSecondIdentity").GetString();
+
+        explanation.ShouldNotBeNullOrWhiteSpace();
+        explanation.ShouldContain("NOT a", customMessage: "must tell a reader this is not a skip count");
+        explanation.ShouldContain("skipped");
+        explanation.ShouldContain("ITestTokenProvider", customMessage: "must say who decides skipping, and that it happens at run time");
+        explanation.ShouldContain("run time", customMessage: "must say skipping is decided at run time, not when the report is generated");
+    }
+
+    [TestMethod]
     public void CountsOperationsDeclaring404WithNoPathParameterToTarget()
     {
         var plan = new TestPlan(

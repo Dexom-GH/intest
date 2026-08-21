@@ -112,6 +112,26 @@ public static class CoverageReport
                 // provider's runtime behaviour changed which of those cases skip.
                 ["authTestsRequiringAnUnauthorizedSecondIdentity"] =
                     authCases.Count(c => c.Slot == IdentitySlot.Secondary && c.RequiredScopes.Count > 0),
+                // Review finding on Task 5: JSON carries no comments, so the explanation above
+                // never reached a reader of the artefact itself — only a reader of this source
+                // file. "explanations" is a sibling of the counts it explains, keyed by the same
+                // property name, so a reader who has just read a suspicious number can look it up
+                // by the name they already have. A flat sibling string per key (e.g. an
+                // "...Explanation" key next to each count) was the other option; this shape was
+                // chosen because it scales to future keys needing the same treatment without
+                // doubling the key count of "notes" itself, and because most keys here need no
+                // such caveat — folding them all into one small, opt-in object keeps the ones that
+                // are self-explanatory (like authTestsGenerated) uncluttered. The string is a
+                // fixed literal, not derived from plan data, so it cannot vary between two runs
+                // against the same spec and cannot cause --check drift.
+                ["explanations"] = new JsonObject
+                {
+                    ["authTestsRequiringAnUnauthorizedSecondIdentity"] =
+                        "Counts generated 403 cases that declare scope requirements. It is NOT a " +
+                        "count of cases that will be skipped: which cases skip is decided at run " +
+                        "time by the registered ITestTokenProvider, which does not exist yet when " +
+                        "this report is generated."
+                },
                 // Matched against TestPlanBuilder.NoPathParameterNoteReason — the constant the
                 // builder's no-path-parameter branch builds its note text from — rather than a
                 // second hand-copied literal here. A reword of that constant changes both sides
