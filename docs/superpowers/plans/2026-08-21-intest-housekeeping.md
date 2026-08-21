@@ -6,6 +6,18 @@
 
 **Prerequisite:** F11 merged to `main` (`12c5c32`). 434 tests passing, 0 failing.
 
+**Status: complete, 2026-08-21.** All three tasks landed. 434 → 480 tests passing.
+
+| Task | Landed | By |
+|---|---|---|
+| 1 — escape spec-derived text | `8c32bd4`, `01f77ff`, `b531b00`, `7d1a2fb`, `3a6df6e` | a separate session, from this plan after two corrections |
+| 2 — phase labels | `74267d9` | here |
+| 3 — decision convention | `58eb6ab` | here |
+
+Task 1 outgrew its own brief twice, and both corrections are recorded inline above rather than rewritten away: the defect turned out to be reachable from a valid document, and the escape set turned out to be the C# grammar's rather than the two characters I listed. A third correction, to the `Inventory.Api.json` entry below, was mine.
+
+Two things landed alongside but are **not** part of this plan: adopter-config validation (`0f42984`) and a merge-collision fix (`3912535`) where two independently-green branches produced a test that compiled and threw.
+
 ---
 
 ## Why one plan and not three
