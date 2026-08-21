@@ -1,7 +1,13 @@
 # Contributing to InTest
 
-Thanks for looking. InTest is at **design stage** — the specification exists, the code does
-not. That shapes what is useful right now.
+Thanks for looking. InTest is a working tool with an incomplete command surface. `intest init`,
+`generate`, and `fixtures repair` run end to end today, verified against three sample APIs with
+a documented walkthrough in [`docs/getting-started.md`](docs/getting-started.md). `survey`,
+`generate --check`, and `upgrade` don't exist yet — that doc's own preamble tracks the gap
+precisely, and is the source of truth if this file and it ever disagree. Nothing is published to
+NuGet, so building from source is still how anyone tries it. The
+[design spec](docs/superpowers/specs/2026-08-16-intest-api-test-generator-design.md) remains the
+reference for why things are built the way they are.
 
 ## The most useful contribution today
 
@@ -15,8 +21,9 @@ reproduction beats an assertion.
 
 Reviews have already caught a build-breaking interaction between two documented MSTest
 mechanisms, a correlation identifier that collapsed to one value across every data-driven test
-row, and a validator gap that would have passed invalid responses silently. That kind of
-reading is worth more than code right now.
+row, and a validator gap that would have passed invalid responses silently. That kind of reading
+is still the highest-leverage contribution: it catches defects a fresh implementation would only
+rediscover later, and it costs nothing to build or run first.
 
 ## Ground rules for changes to the spec
 
@@ -82,8 +89,6 @@ on `net8.0` works today. If the SDK requirement is the blocker for you, say so i
 that is useful data.
 
 ## Pull requests
-
-Once code exists:
 
 - One logical change per PR, with a description saying what it changes and why.
 - Tests for behaviour changes. §16 lists the suites the project commits to, including several
