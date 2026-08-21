@@ -264,6 +264,13 @@ public class FixturesRepairCommandTests
         return error;
     }
 
+    /// <summary>
+    /// Before ConfigLoader this test failed on the exit code, not the message: repair SUCCEEDED
+    /// and wrote fixtures against a config <c>generate</c> refuses. Partial validity was not a
+    /// hypothetical the shape permitted — it was a state the tool actively produced, on the most
+    /// ordinary hand edit there is. That is why the fix is one loader rather than a matching
+    /// guard added here.
+    /// </summary>
     [TestMethod]
     public async Task ExplainsAMissingProjectSectionInsteadOfReportingAnUnexpectedFailure()
     {
