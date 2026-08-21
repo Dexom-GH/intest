@@ -5,9 +5,8 @@
 **Supersedes:** Revision 2
 
 Revision 3 replaces rev 2 after every external claim was re-verified against vendor
-documentation and, where possible, against a real build. Claims marked *measured* were
-established by restoring, building, and running code on .NET SDK 10.0.303 — not by reading
-documentation. §18 records what changed and why.
+documentation and, where possible, against a real build. §18 defines *measured*, and records
+what changed and why.
 
 > **Name.** The tool is `InTest`, invoked as `intest`. Availability verified against
 > nuget.org on 2026-08-16: `InTest`, `InTest.Cli`, `InTest.Runtime` and `InTest.Core` all
