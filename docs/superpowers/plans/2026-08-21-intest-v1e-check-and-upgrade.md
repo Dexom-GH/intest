@@ -4,39 +4,43 @@
 
 **Goal:** Make the pull-request workflow `getting-started` Phase 8 already documents actually run.
 
-**Prerequisite:** `main` at `3ea4838`. **590 passing, 0 failing** (Architecture 2, Cli 350, Runtime 205, Golden 33). Measure it yourself — it moved more than twenty times on 2026-08-21.
+**Prerequisite:** `main` at `19f9ebd` or later. **590 passing, 0 failing** (Architecture 2, Cli 350, Runtime 205, Golden 33). Measure it yourself — it moved more than twenty times on 2026-08-21.
 
-**Spec:** §5's command table (lines ~451–462) and exit-code convention (~484), §3's semver contract (~239–241), §8's CI story.
+**Spec:** §5's command table and exit-code convention, §8's `--check` cost section (the worked message at ~line 796 is a deliverable), §3's semver contract, the Design principles preamble (principle 3, ~line 37).
+
+---
+
+## Revision note — rev 2, after review
+
+Rev 1 shipped a wrong named decision and a pre-flight that could not see the defect it existed to catch. Both are corrected below and the originals are named rather than quietly replaced, because the reasoning that produced them is the reasoning most likely to recur.
 
 ---
 
 ## Decisions are named, not numbered
 
-`[no-write]`, `[major-only]`, `[read-what-init-wrote]`, `[paired]`. A reference is a word; inserting a decision cannot invalidate one.
+`[no-write]`, `[exact-match]`, `[lf-everywhere]`, `[read-what-init-wrote]`, `[paired]`.
 
 ---
 
 ## Why these two ship together, and `assertions add` does not
 
-v1-e's roadmap row bundles `--check`, `upgrade` and `assertions add`. The first two are **coupled by the exit-code contract** and the third is not.
+`[paired]` — §5 gives `generate --check` exit **4** for a tool-version mismatch, and `intest upgrade` is the path that resolves it. Ship `--check` alone and exit 4 names a remedy that does not exist — the documented-but-unwired shape this project has closed **six** times (`ITestTokenProvider`, §9's `MemberCondition`, `schemaVersion`, §5's exit-2 row, the `--spec` URL promise, `fixtures promote`). A seventh, deliberately, is indefensible.
 
-`[paired]` — §5 gives `generate --check` exit **4** for a tool-version mismatch, and `intest upgrade` is the deliberate path that resolves it. Ship `--check` alone and exit 4 names a remedy that does not exist. That is the documented-but-unwired shape this project has now closed **six** times: `ITestTokenProvider`, §9's `MemberCondition`, `schemaVersion`, §5's exit-2 row, the `--spec` URL promise, and `fixtures promote`. Shipping a seventh deliberately, in the same commit that closes one, would be indefensible.
-
-`assertions add` proves the assertion seam and blocks nothing. It is a separate plan.
+`assertions add` proves the assertion seam and blocks nothing. Separate plan.
 
 ---
 
 ## The defect this closes
 
-`docs/getting-started.md` Phase 8 tells an adopter to run, in CI, on every pull request:
+`getting-started` Phase 8 tells an adopter to run, in CI, on every pull request:
 
 ```bash
 intest generate --check                # fail if committed output is stale
 ```
 
-**That command does not exist.** `Program.cs` registers `generate` with `--project` only. So the mechanism that makes committing generated code safe — the reviewable diff, the drift gate, the whole argument for `Generated/` being in the repository — is documented and unrunnable.
+**That command does not exist.** `Program.cs` registers `generate` with `--project` only.
 
-**And the version half is worse than absent.** `intestVersion` is written into `intest.json` by `InitCommand.cs:139` and **read by nothing** — verified: `git grep intestVersion -- src/` returns that one write site. It has the same shape `schemaVersion` had before `ConfigLoader` began validating it: a field the spec describes as load-bearing, that no code consults.
+**And `intestVersion` is written by `InitCommand.cs:139` and read by nothing** — `git grep intestVersion -- src/` returns one write site and no reads.
 
 ---
 
@@ -44,146 +48,173 @@ intest generate --check                # fail if committed output is stale
 
 ### `[no-write]` — `--check` compares without writing anything
 
-§5 line 37 states it as a principle: *"Generation never writes in the pipeline. `intest generate --check` reads and compares."* So `--check` must render to memory and compare against what is on disk. It must not write, not write-then-diff-then-restore, and not write to a temp directory and compare — the first two are observable if the process dies mid-run, and the third invites a path bug that silently compares nothing.
+Preamble principle 3: *"Generation never writes in the pipeline. `intest generate --check` reads and compares."* Render to memory and compare. Not write-then-diff-then-restore (observable if the process dies), not write-to-temp-and-compare (invites a path bug that silently compares nothing).
 
-The comparison covers `Generated/` **and** `coverage-report.json`, per §5's table.
+Covers `Generated/` **and** `coverage-report.json`.
 
-**A pre-flight worth taking:** confirm `coverage-report.json` is byte-stable across two runs against an unchanged spec before building anything on top of it. The `notes.explanations` strings are compile-time literals and the counts are derived from the plan, so it *should* be — but "should be" is what this codebase keeps getting wrong, and `--check` is worthless if its own input drifts. Measure it; report the result either way.
+### `[exact-match]` — exit 4 fires on any version difference
 
-### `[major-only]` — exit 4 fires on a major mismatch, not any difference
+**Rev 1 said majors only. That was wrong, and the spec says so in text rather than by inference.** §8's worked example:
 
-§5 says exit **4** is a "tool-version mismatch" without saying what counts as one. §3's semver contract answers it:
+> ```
+> intest.json was generated by intest 1.0.0; running tool is 1.1.0.
+> Regenerate with the pinned version, or run `intest upgrade` to adopt 1.1.0 deliberately.
+> ```
 
-> `InTest.Runtime` **N.x** accepts code generated by `InTest.Cli` **N.y` for any `y`
-> A **major** bump may change generated code shape … Requires `intest upgrade` and a reviewed diff
+`1.0.0` vs `1.1.0` is a **minor** difference, presented as the failing case, with a prescribed message. Rev 1 reached for §3's `Runtime N.x accepts Cli N.y` guarantee — but that is a **different axis**: package-to-generated-code compatibility, not whether committed output is fresh. Conflating them is what produced the error.
 
-So a difference **within a major is explicitly supported** and must not fail CI. Exit 4 on any version difference would break every pipeline on every CLI patch release — the opposite of what §3 promises adopters.
+Rev 1's objection — "exit 4 on any difference breaks CI on every patch release" — is answered by the mechanism §8 already requires: `.config/dotnet-tools.json` pins the version (scaffolded by `init`) and CI runs `dotnet tool restore`. **CI runs the pinned version by construction.** Versions differ only when someone bumps the pin, and `upgrade` bumps the pin and `intestVersion` together. That pairing *is* the answer.
 
-**Compare majors.** A CLI on `1.4.2` against an `intestVersion` of `1.0.0` is fine. `2.0.0` against `1.9.9` is exit 4.
+And `[major-only]` would have made exit 4 **dead code for the project's entire pre-1.0 life**: everything is major 0 today, while under 0.x semver the minor is exactly where shape changes.
 
-Two consequences to handle deliberately rather than discover:
-- A **missing** `intestVersion` is not a mismatch — it is a malformed config, which `ConfigLoader` already owns and which exits 2. Do not invent a third behaviour.
-- An **unparseable** `intestVersion` is the same: `ConfigLoader`'s problem, exit 2, with a message naming the setting.
+**Two deliverables rev 1 omitted:**
+- §8 requires the version check to fail **before comparing any output**. A version mismatch *and* a diff yields **4**, not 1. Order it explicitly.
+- The message above is specified text, not a suggestion. Match it.
 
-### `[read-what-init-wrote]` — `intestVersion` joins `ConfigLoader`, it does not get its own reader
+### `[lf-everywhere]` — generated artifacts are LF, and `init` scaffolds a `.gitattributes`
 
-`ConfigLoader` already reads and validates `schemaVersion` and both `project` values, and both commands call it. `intestVersion` belongs there for the same reason: `[Where validation lives]` in `CONTRIBUTING.md` — a guard at a read site is bounded by what that read site can observe, and `ConfigLoader` is where the whole document is available.
+**Rev 1's pre-flight — two runs, one machine, unchanged spec — passes while the gate is broken.** Measured:
 
-Adding a second, separate reader would recreate the split `ConfigLoader` was built to remove.
+| Artifact | Endings | Why |
+|---|---|---|
+| `Generated/*.g.cs` | **LF** | `TemplateRenderer.Normalize` does `.Replace("\r\n", "\n")` |
+| `coverage-report.json`, `spec-schemas.json`, `spec-paths.json` | **CRLF on Windows** | `ToJsonString(WriteIndented: true)` follows `Environment.NewLine` |
 
-### `[paired]` — see above
+So a single run emits **mixed** endings, and the JSON half is **platform-dependent**. Generate on Windows, `--check` on a Linux agent, and every JSON line differs with a diff nobody can act on.
+
+`init` scaffolds **no `.gitattributes`** (verified: zero mentions in `InitCommand.cs`). With Git-for-Windows' default `core.autocrlf=true`, the LF `.g.cs` files check out as CRLF and mismatch a fresh render **on every line**.
+
+This repository has already been bitten by exactly this and documented the fix in its own `.gitattributes`: *"A clone with `core.autocrlf=true` … would otherwise rewrite these to CRLF on checkout and fail the comparison on every line."* Same file type, same failure, already measured here.
+
+**Both halves are required and neither is sufficient.** Normalizing the JSON writers makes a fresh render platform-independent; the scaffolded `.gitattributes` makes the *checked-out bytes* match that render. Fix the generator's own inconsistency first — it already normalizes `.g.cs` and not JSON, which is a defect independent of `--check`.
+
+### `[read-what-init-wrote]` — `intestVersion` joins `ConfigLoader`, and stays optional
+
+`ConfigLoader` already reads `schemaVersion` and both `project` values; `intestVersion` belongs there per `CONTRIBUTING.md`'s **Where validation lives**.
+
+**But it must stay optional.** `ConfigLoaderTests.IgnoresSettingsItDoesNotRead` asserts exactly that, with reasoning: *"§5's config grows by addition, and a config written by a newer patch release still has to load."* Rev 1 would have reversed a reviewed decision without naming it.
+
+Surface it **nullable**, validate format-when-present, and leave *"missing means what?"* to `--check`. That satisfies `[read-what-init-wrote]` without making `fixtures repair` refuse a config over a field it has no interest in. Note the existing test's comment says no command reads `intestVersion` *and* that `init` does not write it — the second half is already wrong; correct it while you are there.
 
 ---
 
-## Task 1: `ConfigLoader` reads `intestVersion`
+## Task 1: `ConfigLoader` surfaces `intestVersion`
 
-**Files:** `src/InTest.Cli/Configuration/ConfigLoader.cs`, `LoadedConfig.cs`; tests in `tests/InTest.Cli.Tests/ConfigLoaderTests.cs`.
+**Files:** `Configuration/ConfigLoader.cs`, `LoadedConfig.cs`; `tests/InTest.Cli.Tests/ConfigLoaderTests.cs`.
 
 - [ ] **Step 1: Write the failing tests**
 
-Follow the shape `schemaVersion` already established there — it is the closest precedent and it landed with review. Cover: present and well-formed; missing; not a string; not a parseable version. The last three are `ConfigLoadException` at exit 2 with a message naming the setting, per the established refusal shape.
+Present and well-formed → surfaced. **Missing → loads, surfaced as null.** Present but unparseable → `ConfigLoadException`, exit 2, message naming the setting.
 
-**Do not add version *comparison* here.** `ConfigLoader` reads and validates the document; deciding what a version means is `--check`'s job. Mixing them is how `ConfigLoader` grows a second responsibility.
+**Do not add version comparison here.** `ConfigLoader` reads and validates the document; deciding what a version *means* is `--check`'s job.
 
-- [ ] **Step 2–4: Run, implement, re-run, commit**
+- [ ] **Step 2: Check the blast radius before implementing**
 
-```bash
-git commit -m "feat(cli): intest.json's declared tool version is finally read"
-```
-
----
-
-## Task 2: `generate --check`
-
-**Files:** `src/InTest.Cli/Commands/GenerateCommand.cs`, `Program.cs`, `ExitCode.cs`; tests in `tests/InTest.Cli.Tests/` and `tests/InTest.Golden.Tests/CliExitCodeTests.cs`.
-
-- [ ] **Step 1: Pre-flight — is `coverage-report.json` byte-stable?**
-
-Per `[no-write]`. Generate twice against an unchanged spec, compare bytes, report. If it is not stable, **stop** — that is a defect in `generate`, it is bigger than this task, and building `--check` on an unstable input would produce a gate that fails at random.
-
-- [ ] **Step 2: Write the failing tests**
-
-The four exit codes, each proved failing for the reason its name states:
-
-| Condition | Exit |
-|---|---|
-| `Generated/` and `coverage-report.json` match a fresh render | 0 |
-| Either differs | 1 |
-| Malformed config, unreadable spec, crash | 2 |
-| CLI major ≠ `intestVersion` major | 4 |
-
-`ExitCode` will need a `4`. It has one owner now; add it there.
-
-**Assert against the real CLI for the exit codes** — `CliExitCodeTests` spawns the built binary, and `InTest.Cli.Tests` calls command methods directly so `Program.cs` never executes there.
-
-**The test that matters most is that `--check` wrote nothing.** Assert the directory is unchanged after a run that reports a difference — not merely that the exit code was 1. A gate that reports drift correctly while writing is still broken, and no exit-code assertion can see it.
+Hand-written configs without `intestVersion` exist in `ConfigLoaderTests` (the shared `Valid` const), `GenerateCommandTests` (~9), `FixturesRepairCommandTests` (~5), `CompileVerificationTests` (~2). Under `[read-what-init-wrote]` none should break. **If any do, stop** — that means it was made required.
 
 - [ ] **Step 3–5: Run, implement, re-run, commit**
 
-```bash
-git commit -m "feat(cli): generate --check compares committed output without writing"
-```
+---
+
+## Task 2: Line endings
+
+**Do this before `--check`.** It is a defect in `generate` on its own terms, and `--check` built on unstable bytes is a gate that fails at random.
+
+- [ ] **Step 1: Measure, don't assume**
+
+Count `0x0D` in every generated artifact after a real `init` + `generate`. Record which are LF and which CRLF. Then check out a committed generated project on a machine with `core.autocrlf=true` and compare the bytes on disk against a fresh render.
+
+- [ ] **Step 2: Normalize the JSON writers**
+
+Every `ToJsonString(WriteIndented: true)` site in `src/InTest.Cli/` — `CoverageReport.cs:151`, `GenerateCommand.cs:119`, `SchemaBundleBuilder.cs:40`, `FixtureDocument.cs:131`. Match what `TemplateRenderer.Normalize` already does. **Check `FixtureDocument` deliberately** — fixtures are adopter-edited, so normalizing them changes files people own; decide and say why either way.
+
+- [ ] **Step 3: Scaffold a `.gitattributes`**
+
+`init` writes one pinning generated artifacts to LF. Model it on this repository's own, which documents the reasoning for the identical case.
+
+- [ ] **Step 4: A test that would fail without it**
+
+Not "the file contains LF" — that passes on Linux regardless. Assert bytes after a simulated `autocrlf=true` checkout, or assert the scaffolded `.gitattributes` covers every path `generate` writes. Say which and why.
+
+- [ ] **Step 5–6: Run, implement, re-run, commit**
 
 ---
 
-## Task 3: `intest upgrade`
+## Task 3: `generate --check`
 
-**Files:** new `src/InTest.Cli/Commands/UpgradeCommand.cs`, `Program.cs`; tests as above.
+**Files:** `GenerateCommand.cs`, `Program.cs`, `ExitCode.cs`; tests in `tests/InTest.Cli.Tests/` and `CliExitCodeTests.cs`.
 
-- [ ] **Step 1: Write the failing tests**
+- [ ] **Step 1: Name the seam before writing it**
 
-§5: `upgrade` writes `intestVersion` in `intest.json`, the pinned version in `.config/dotnet-tools.json`, then re-runs `generate`. Exit **0** ok, **1** regeneration failed.
+`GenerateCommand.RunAsync` plans, **deletes `Generated/` wholesale**, then writes. `[no-write]` needs rendering to a path→content map with write-vs-compare branching. That is a real refactor; state the shape before starting.
 
-Cover: both files updated; `generate` re-run; a regeneration failure surfacing as 1 and **not** leaving `intestVersion` bumped against un-regenerated output — that half-applied state is the one worth a test, because it is the state that makes `--check` lie afterwards.
+- [ ] **Step 2: Write the failing tests**
 
-**`fixtures/` and team-owned files are never touched.** §5 says so explicitly; pin it.
+| Condition | Exit |
+|---|---|
+| Everything matches a fresh render | 0 |
+| Any file differs | 1 |
+| **A file exists on disk that a fresh render does not produce** | 1 |
+| Malformed config, unreadable spec, crash | 2 |
+| CLI version ≠ `intestVersion`, **checked first** | 4 |
 
-- [ ] **Step 2–4: Run, implement, re-run, commit**
+`ExitCode` needs a `4`; its doc currently says 4 is "deliberately absent: it belongs to `generate --check`, which is not shipped." Update that too.
 
-```bash
-git commit -m "feat(cli): upgrade adopts a new tool version deliberately"
-```
+**The stale-file row is the silently-permissive case.** `generate` deletes `Generated/` before writing, so an operation dropped from the spec leaves an orphan `.g.cs`. A naive for-each-rendered-file comparison reports 0. Its own test.
 
----
+**Fixture drift is undefined and must be decided.** `generate` returns 1 on drift *before* rendering. Same exit code, different meaning, different message. Decide and record.
 
-## Task 4: Documentation
+**The "wrote nothing" test matters most.** Assert `Generated/` *and* `coverage-report.json` are byte- and mtime-unchanged after a run reporting a difference. A gate that reports drift correctly while writing is still broken, and no exit-code assertion sees it.
 
-- [ ] **Step 1: The banner's not-built list**
-
-`docs/getting-started.md`'s banner names `generate --check` and `intest upgrade` as not built. Both now are. Remove them — and **check the banner's opening sentence separately**, which enumerates gaps inline and went stale independently of the list on 2026-08-21.
-
-- [ ] **Step 2: Phase 8's inline hedge**
-
-Phase 8 carries "*but it is not built yet (see the preamble above)*" beside `intest upgrade`. Remove it.
-
-- [ ] **Step 3: §5, and the `--check` semantics**
-
-Record `[major-only]` in §5 — the table says "tool-version mismatch" and does not say a *major* mismatch. That ambiguity is what this plan resolved; leaving it invites the next reader to resolve it the other way.
-
-- [ ] **Step 4: Commit**
-
-```bash
-git commit -m "docs: --check and upgrade are built; record what a version mismatch means"
-```
+- [ ] **Step 3–5: Run, implement, re-run, commit**
 
 ---
 
-## Task 5: Acceptance
+## Task 4: `intest upgrade`
 
-**This task is the verdict.** Tasks 1–4 can be green while the documented workflow still fails.
+**Files:** new `Commands/UpgradeCommand.cs`, `Program.cs`; tests as above.
 
-- [ ] **Step 1: Run Phase 8's pull-request block verbatim** against a sample, from `getting-started`, as written. It must pass.
+- [ ] **Step 1: Two design decisions before code**
 
-- [ ] **Step 2: Make it fail for the right reason.** Edit the spec, do not regenerate, re-run `--check`. It must exit **1** and name what differs. Restore.
+**a. These are adopter-owned files.** `intest.json` is documented as `jsonc` with inline comments; `.config/dotnet-tools.json` may pin other tools. A parse-and-rewrite round-trip destroys comments, key order and formatting. `upgrade` needs a **targeted text edit**. `CLAUDE.md`'s ownership table gives "everything else" to the adopting team — `upgrade` is the first command to cross that line, so cross it narrowly.
 
-- [ ] **Step 3: Prove the version gate.** Contrive a major mismatch, confirm exit **4**, run `upgrade`, confirm the workflow passes again. That round trip is the whole reason the two ship together.
+**b. `schemaVersion` migration.** §3: a major bump may change the `intest.json` schema, and `schemaVersion` "moves only on a major". Upgrading 1.x→2.0 while writing only `intestVersion` leaves `schemaVersion: 1` against a CLI whose `SupportedSchemaVersion` is 2 — and `ConfigLoader` exits 2 on the config `upgrade` just wrote. **Major is the only case `upgrade` exists for**, so this is the main path, not an edge.
 
-- [ ] **Step 4: Update `docs/v0-acceptance.md`** with the run, including anything that did not work.
+- [ ] **Step 2: Write the failing tests**
+
+Both files updated; `generate` re-run; exit 0 ok, 1 regeneration failed. **A failed regeneration must not leave `intestVersion` bumped against un-regenerated output** — that half-applied state makes `--check` lie afterwards, and it is the one worth a test. `fixtures/` and team-owned files never touched (§5).
+
+- [ ] **Step 3–5: Run, implement, re-run, commit**
+
+---
+
+## Task 5: Documentation
+
+Five places assert these do not exist. Stale claims are this project's recurring defect.
+
+- [ ] **Step 1:** `getting-started` — the banner's not-built list **and** its opening sentence, which enumerates gaps inline and has gone stale independently before. Phase 8's inline "not built yet" hedge beside `upgrade`.
+- [ ] **Step 2:** `README.md` — both "Not yet built" and "Designed, not yet built".
+- [ ] **Step 3:** `CLAUDE.md` — "`survey`, `generate --check`, `upgrade` … do **not** exist yet".
+- [ ] **Step 4:** `ExitCode.cs`'s doc, and `ConfigLoader.RequireSupportedSchemaVersion`'s message — which "deliberately does not mention `intest upgrade`, which does not exist yet". It now does; naming it is the remedy the message lacked.
+- [ ] **Step 5:** §5 — record `[exact-match]` and the check-order. Commit.
+
+---
+
+## Task 6: Acceptance
+
+**This task is the verdict.**
+
+- [ ] **Step 1:** Run Phase 8's pull-request block **verbatim** from the guide against a sample. It must pass.
+- [ ] **Step 2:** Edit the spec, do not regenerate, re-run. Exit **1**, naming what differs. Restore.
+- [ ] **Step 3:** Delete a path from the spec, regenerate nothing. Exit **1** — the stale-file case.
+- [ ] **Step 4:** Contrive a version difference. Exit **4**, with §8's message, **before** any diff is reported. Run `upgrade`; the workflow passes again.
+- [ ] **Step 5:** **Cross-platform.** Generate on one platform, `--check` on the other — or simulate via `autocrlf`. This is what rev 1's pre-flight could not see.
+- [ ] **Step 6:** Update `docs/v0-acceptance.md`, including anything that did not work.
 
 ---
 
 ## Self-review
 
-**Where a reviewer should push.** `[major-only]` is an interpretation of a spec line that does not say it. I believe §3's contract forces it — a patch release failing every adopter's CI cannot be what "N.x accepts N.y" means — but it is inference, not text, and if the intent was exact-match then `[major-only]` is wrong and Task 2's test encodes the error. Challenge it before it ships.
+**Rev 1 got two things wrong and both are instructive.** `[major-only]` was inference from an adjacent section when the governing text existed one section away — reaching for a principle instead of reading the spec. And the byte-stability pre-flight measured *determinism* when the risk was *portability*: two runs on one machine is a valid measurement of the wrong quantity, which is harder to catch than no measurement at all.
 
-**The risk worth stating.** `--check` is a gate. A gate that is wrong in the permissive direction is worse than no gate, because it is trusted. The byte-stability pre-flight in Task 2 Step 1 is what stops that, and if it cannot be made to pass, this plan stops there rather than working around it.
+**Where a reviewer should push now.** Task 2 changes bytes in files adopters have already committed — anyone with a generated project sees a whole-file diff on their next `generate`. Nothing is published, so the population is zero and this is the cheapest moment it will ever be. But it is the one task here whose cost rises with every day it is deferred, and if it is deferred, `--check` should not ship without it.
