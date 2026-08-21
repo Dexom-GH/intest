@@ -1048,6 +1048,64 @@ public class TestPlanBuilderTests
         forbidden.RequiredScopes.ShouldBe(["orders.write"]);
     }
 
+    // A single security *requirement* naming two schemes (two keys in the same JSON object),
+    // where one of those schemes itself names two scopes — the two axes the requirement-spanning
+    // and duplicate-scope fixtures above never exercise together, since both of those put each
+    // scheme in its own separate requirement. An implementation that only flattens across
+    // requirements (SelectMany(requirement => requirement.Values)) but takes just the first
+    // scheme's scopes within a requirement, or that flattens schemes but takes just the first
+    // scope within a scheme (SelectMany(scopes => scopes)), would still pass every other fixture
+    // in this file but would miss scopes here.
+    private const string SpecDeclaringSecurityWithTwoSchemesInOneRequirement = """
+    {
+      "openapi": "3.0.3",
+      "info": { "title": "Orders", "version": "1.0" },
+      "paths": {
+        "/orders/{id}": {
+          "delete": {
+            "operationId": "deleteOrder",
+            "tags": ["Orders"],
+            "security": [
+              { "oauth2A": ["orders.read", "orders.write"], "oauth2B": ["orders.admin"] }
+            ],
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+            "responses": { "204": { "description": "no content" } }
+          }
+        }
+      },
+      "components": {
+        "schemas": {},
+        "securitySchemes": {
+          "oauth2A": {
+            "type": "oauth2",
+            "flows": { "clientCredentials": {
+              "tokenUrl": "https://example.com/token",
+              "scopes": { "orders.read": "Read orders", "orders.write": "Write orders" } } }
+          },
+          "oauth2B": {
+            "type": "oauth2",
+            "flows": { "clientCredentials": {
+              "tokenUrl": "https://example.com/token",
+              "scopes": { "orders.admin": "Administer orders" } } }
+          }
+        }
+      }
+    }
+    """;
+
+    [TestMethod]
+    public async Task TheForbiddenCaseUnionsScopesAcrossEverySchemeInASingleSecurityRequirement()
+    {
+        var plan = await BuildAsync(SpecDeclaringSecurityWithTwoSchemesInOneRequirement);
+        var forbidden = plan.Classes.SelectMany(c => c.Cases)
+            .Single(c => c.OperationKey == "deleteOrder" && c.ExpectedStatus == 403);
+
+        forbidden.RequiredScopes.Count.ShouldBe(3);
+        forbidden.RequiredScopes.ShouldContain("orders.read");
+        forbidden.RequiredScopes.ShouldContain("orders.write");
+        forbidden.RequiredScopes.ShouldContain("orders.admin");
+    }
+
     [TestMethod]
     public async Task ASecuredButScopeFreeOperationStillGetsAForbiddenCaseWithNoRequiredScopes()
     {

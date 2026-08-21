@@ -337,6 +337,9 @@ public static class TestPlanBuilder
             NeedsFixture: false,
             PathParameterKinds: pathParameterKinds,
             Slot: slot,
+            // The null-to-empty normalization that actually matters lives on
+            // TestCasePlan.RequiredScopes's init property; the `?? []` here is redundant
+            // belt-and-braces defense, not the load-bearing normalization.
             RequiredScopes: requiredScopes ?? []);
 
     /// <summary>
