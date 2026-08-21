@@ -23,7 +23,11 @@ public class CompileVerificationTests
     /// <see cref="CreateProject"/> then fails at compile time (its local <c>root</c> simply
     /// doesn't exist) rather than at runtime against an obscure <c>_root == null!</c>.
     /// <see cref="_root"/> itself is still set here, purely so <see cref="RemoveProject"/> has
-    /// something to clean up regardless of whether the caller kept its own reference.
+    /// something to clean up regardless of whether the caller kept its own reference. A test
+    /// that needs a project root must obtain it from here, not from <see cref="_root"/> directly
+    /// — <see cref="_root"/> exists only for <see cref="RemoveProject"/>. A test that never calls
+    /// <see cref="CreateProject"/> at all skips past this guard entirely, which is exactly how
+    /// this regression happened once already.
     /// </summary>
     private string CreateProject(string specFileName)
     {
@@ -199,12 +203,14 @@ public class CompileVerificationTests
         // is compiled straight into the test assembly. The assertion here is "generate refused",
         // not "the build failed": by the time a compiler could weigh in, adopter code already
         // shipped into the assembly, which is the regression this test pins.
-        File.WriteAllText(Path.Combine(_root, "intest.json"), """
+        var root = CreateProject("orders.json");
+
+        File.WriteAllText(Path.Combine(root, "intest.json"), """
         { "schemaVersion": 1, "spec": { "source": "orders.json" },
           "project": { "rootNamespace": "Orders.ApiTests; public class Injected { static Injected() { System.Console.WriteLine(\"x\"); } } //", "testBaseClass": "InTest.Runtime.ApiTestBase" } }
         """);
 
-        (await GenerateCommand.RunAsync(_root, CancellationToken.None)).ShouldBe(2);
-        Directory.Exists(Path.Combine(_root, "Generated")).ShouldBeFalse();
+        (await GenerateCommand.RunAsync(root, CancellationToken.None)).ShouldBe(2);
+        Directory.Exists(Path.Combine(root, "Generated")).ShouldBeFalse();
     }
 }
