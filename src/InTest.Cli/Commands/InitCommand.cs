@@ -1,8 +1,11 @@
+using InTest.Cli.Naming;
+
 namespace InTest.Cli.Commands;
 
 public static class InitCommand
 {
     public const int ExitOk = 0;
+    public const int ExitToolError = 2;
     public const int ExitAlreadyInitialised = 3;
 
     public static int Run(string projectRoot, string projectName, string specSource)
@@ -10,6 +13,17 @@ public static class InitCommand
         ArgumentException.ThrowIfNullOrWhiteSpace(projectRoot);
         ArgumentException.ThrowIfNullOrWhiteSpace(projectName);
         ArgumentException.ThrowIfNullOrWhiteSpace(specSource);
+
+        // projectName seeds project.rootNamespace, project.testBaseClass, baseClassName, and the
+        // `namespace` declaration of two scaffolded files (TestStartup.cs and
+        // <Name>TestBase.cs) — refusing an invalid --name here is what stops a scaffold that
+        // cannot compile from ever being written. Checked before the intest.json-already-exists
+        // check below: an invalid name is invalid regardless of what is already on disk.
+        if (!CSharpIdentifier.TryValidateDottedName(projectName, "--name", out var nameReason))
+        {
+            Console.Error.WriteLine($"{nameReason} Pass a valid C# name to `intest init --name` — for example \"Orders.ApiTests\".");
+            return ExitToolError;
+        }
 
         if (File.Exists(Path.Combine(projectRoot, "intest.json")))
         {

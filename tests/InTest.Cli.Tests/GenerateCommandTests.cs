@@ -92,6 +92,70 @@ public class GenerateCommandTests
     }
 
     [TestMethod]
+    public async Task ReturnsToolErrorForAnInvalidRootNamespaceAndWritesNothing()
+    {
+        File.WriteAllText(Path.Combine(_root, "intest.json"), """
+        { "schemaVersion": 1, "spec": { "source": "orders.json" },
+          "project": { "rootNamespace": "My Project", "testBaseClass": "Orders.ApiTests.OrdersTestBase" } }
+        """);
+
+        var originalError = Console.Error;
+        var capturedError = new StringWriter();
+        Console.SetError(capturedError);
+        int exitCode;
+        try
+        {
+            exitCode = await RunAsync();
+        }
+        finally
+        {
+            Console.SetError(originalError);
+        }
+
+        exitCode.ShouldBe(2);
+        Directory.Exists(Path.Combine(_root, "Generated")).ShouldBeFalse();
+        capturedError.ToString().ShouldContain("rootNamespace");
+    }
+
+    [TestMethod]
+    public async Task ReturnsToolErrorForAnInvalidTestBaseClassAndWritesNothing()
+    {
+        File.WriteAllText(Path.Combine(_root, "intest.json"), """
+        { "schemaVersion": 1, "spec": { "source": "orders.json" },
+          "project": { "rootNamespace": "Orders.ApiTests", "testBaseClass": "Orders.class" } }
+        """);
+
+        var originalError = Console.Error;
+        var capturedError = new StringWriter();
+        Console.SetError(capturedError);
+        int exitCode;
+        try
+        {
+            exitCode = await RunAsync();
+        }
+        finally
+        {
+            Console.SetError(originalError);
+        }
+
+        exitCode.ShouldBe(2);
+        Directory.Exists(Path.Combine(_root, "Generated")).ShouldBeFalse();
+        capturedError.ToString().ShouldContain("testBaseClass");
+    }
+
+    [TestMethod]
+    public async Task ReturnsToolErrorWhenRootNamespaceIsJsonNull()
+    {
+        File.WriteAllText(Path.Combine(_root, "intest.json"), """
+        { "schemaVersion": 1, "spec": { "source": "orders.json" },
+          "project": { "rootNamespace": null, "testBaseClass": "Orders.ApiTests.OrdersTestBase" } }
+        """);
+
+        (await RunAsync()).ShouldBe(2);
+        Directory.Exists(Path.Combine(_root, "Generated")).ShouldBeFalse();
+    }
+
+    [TestMethod]
     public async Task PrintsHowManyOperationsWereNoted()
     {
         // Task 10 item 8(a): found by mutation — deleting the whole `if (plan.Notes.Count > 0)`
