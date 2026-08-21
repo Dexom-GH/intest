@@ -19,15 +19,15 @@ public static class CoverageReport
     // text and CoverageReport's match on it rather than two hand-copied literals.
     private const string AuthTestsGatedOnSecondIdentityExplanation =
         "How many generated *_Forbidden tests require a second identity to run at all. These " +
-        "skip rather than run when the suite has fewer than two identities; which ones skip is " +
-        "decided when the suite runs, by the ITestTokenProvider your project registers — which " +
-        "this generator does not execute.";
+        "skip rather than run when the suite has fewer than two identities; whether that " +
+        "happens is decided when the suite runs, by the ITestTokenProvider your project " +
+        "registers, which this generator does not execute.";
 
     private const string AuthTestsRequiringAnUnderScopedSecondIdentityExplanation =
         "How many generated *_Forbidden tests belong to operations that declare required " +
         "scopes. These skip rather than fail when the second identity holds those scopes; " +
         "which ones skip is decided when the suite runs, by the ITestTokenProvider your " +
-        "project registers — which this generator does not execute.";
+        "project registers, which this generator does not execute.";
 
     public static string ToJson(TestPlan plan)
     {

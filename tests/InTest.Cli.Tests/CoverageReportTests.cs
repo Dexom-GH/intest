@@ -247,6 +247,7 @@ public class CoverageReportTests
 
         explanation.ShouldNotBeNullOrWhiteSpace();
         explanation.ShouldContain("_Forbidden", customMessage: "must point a reader at the generated test methods this number counts");
+        explanation.ShouldContain("two identities", customMessage: "must state the real condition (identity count), not the sibling key's scope comparison");
         explanation.ShouldContain("ITestTokenProvider", customMessage: "must say who decides skipping");
         explanation.ShouldContain("suite runs", customMessage: "must say skipping is decided when the suite runs, not when the report is generated");
     }
