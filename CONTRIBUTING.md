@@ -67,6 +67,22 @@ against a document whose entire value is being an accurate record of what was de
 is the same reasoning that kept F11's closure from rewriting the v1-c run record. Treat this rule
 as governing plans not yet written, never as a mandate to clean up the ones already closed.
 
+## One canonical explanation
+
+**One canonical explanation, pointers elsewhere.** When the same reasoning needs to appear in
+more than one place, one copy is authoritative and the others point at it — never two copies
+that must agree by discipline. The rule bites when the *reasoning itself* is duplicated, not
+when text merely looks alike: two comments explaining two different things that happen to share
+vocabulary are fine.
+
+`CoverageReport.cs` already does this: its `notFoundWithoutPathParameter` key is matched against
+`TestPlanBuilder.NoPathParameterNoteReason` rather than a hand-copied literal, so the count
+"cannot drift from the message a reader ... actually sees, because both are the same object in
+memory, not two copies that happen to agree today." The failure this avoids has shown up
+elsewhere without the fix — a doc comment on `RequireSecondaryIdentityLacks` once contradicted
+itself two paragraphs apart about what runs before it, because the two paragraphs stated the same
+fact independently instead of one deferring to the other.
+
 ## Dependency policy
 
 New dependencies are held to a hard line, because adopters inherit whatever we take on.
