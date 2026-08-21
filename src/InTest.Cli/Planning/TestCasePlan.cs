@@ -125,17 +125,37 @@ public sealed record TestCasePlan(
     // NeedsFixture. Defaults to an empty array, never null, so every call site that predates
     // this member — every Success and DeclaredError case, and the 401 case, none of which have a
     // scope requirement to state — reads as "nothing required" rather than an absent value a
-    // consumer would have to null-check. TestPlanBuilder.PlanAuthCases is the only site that
-    // assigns a non-default value, and it always assigns the result of a Distinct() projection
-    // (never a nullable expression), so this invariant holds end to end, not just at the default.
+    // consumer would have to null-check. This holds unconditionally, not because
+    // TestPlanBuilder.PlanAuthCases (the only site that assigns a non-default value) happens to
+    // be careful about it: the property below backs this parameter with a field and coalesces
+    // null in its `init` accessor, so every construction path — this default, an explicit
+    // constructor call, and a `with` expression alike — reads back a non-null empty collection.
+    // Caveat (see TestPlanBuilder.RequiredScopes, [containment], for the full reasoning): this is
+    // a union across every security requirement, which enlarges the required set beyond what any
+    // single requirement demands. For a multi-requirement spec that can make a case run and fail
+    // against a status the API is correct to return, because it gets compared against every
+    // requirement's scopes rather than just the one the identity actually satisfies. Every sample
+    // spec today declares exactly one requirement, so this gap is real but untriggered, not safe.
     IReadOnlyList<string>? RequiredScopes = null)
 {
     // Collection-typed record parameters cannot default to a non-constant expression
     // (Array.Empty<string>() is not a compile-time constant) directly in the parameter list, so
     // the primary constructor parameter above stays nullable and this explicitly-declared
     // property — which overrides the compiler-generated one for the same-named positional
-    // parameter — normalizes it to an empty array instead. Every call site that never states
-    // RequiredScopes, and every call site that passes null outright, reads back a non-null empty
-    // collection, never a null reference.
-    public IReadOnlyList<string> RequiredScopes { get; init; } = RequiredScopes ?? Array.Empty<string>();
+    // parameter — normalizes it to an empty array instead.
+    //
+    // The coalesce has to live in the init accessor, not only in the field initializer below: a
+    // `with` expression drives the init accessor directly (the compiler-generated copy
+    // constructor plus init setters), bypassing the field initializer entirely. A version of this
+    // fix that only coalesced in the initializer would guarantee non-null for a freshly
+    // constructed plan but not for `plan with { RequiredScopes = null! }`, which would read back
+    // a null reference. Backing the property with an explicit field and coalescing in `init`
+    // makes the never-null guarantee hold for both construction paths, not just the first one.
+    private readonly IReadOnlyList<string> _requiredScopes = RequiredScopes ?? Array.Empty<string>();
+
+    public IReadOnlyList<string> RequiredScopes
+    {
+        get => _requiredScopes;
+        init => _requiredScopes = value ?? Array.Empty<string>();
+    }
 }

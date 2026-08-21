@@ -295,18 +295,53 @@ public static class TestPlanBuilder
     /// itself a <c>Dictionary&lt;OpenApiSecuritySchemeReference, List&lt;string&gt;&gt;</c> — the
     /// scopes are the dictionary's *values*, not its keys, and a requirement can name more than
     /// one scheme (each contributing its own scope list) just as the security array can hold more
-    /// than one requirement. This flattens every scope list from every requirement and every
-    /// scheme, distinct, with no attempt to preserve OpenAPI's AND/OR semantics between them —
-    /// decision 3 needs only "what scopes did the spec name at all", not which combination
-    /// satisfies which requirement.
+    /// than one requirement.
+    /// <para>
+    /// [containment]: OpenAPI's <c>security</c> array is a logical OR across requirements — an
+    /// identity satisfying any single requirement in full is authorized. The dictionary *within*
+    /// one requirement is an AND across its schemes. Flattening every requirement's every scheme
+    /// into one set enlarges the required set beyond what any single requirement alone demands.
+    /// </para>
+    /// <para>
+    /// That enlargement is not a safe approximation in general, only against one failure mode: it
+    /// cannot make a case skip when it should have run. It does nothing to prevent the opposite —
+    /// for a multi-requirement spec, an identity that fully satisfies one alternative requirement
+    /// gets measured, by the runtime guard this union feeds, against the union of *every*
+    /// requirement's scopes rather than just the one it satisfies. A case that should skip as
+    /// unable to produce a 403 instead runs, and fails, against a status the API is correct to
+    /// return — F11 itself, one level down: the exact bug this plan exists to fix, recurring
+    /// inside the plan's own scope-union logic. Every sample spec today declares exactly one
+    /// security requirement, so this failure mode has not fired yet — that is a fact about
+    /// today's samples, not a property of this method. It is a real latent gap, not something
+    /// this flattening makes safe.
+    /// </para>
     /// </summary>
     private static IReadOnlyList<string> RequiredScopes(OpenApiOperation operation) =>
+        // Unreachable given this method's sole call site: PlanAuthCases only ever calls this
+        // inside `if (operation.Security is { Count: > 0 })`, so the null/empty branch below
+        // never actually executes today. Kept anyway — defensively, and so this method stays
+        // correct on its own terms for any future caller that doesn't already guard the same
+        // way. A guard being redundant for its current caller doesn't make every guard in this
+        // file meaningless; each one is evaluated against its own call site.
         operation.Security is not { Count: > 0 } securityRequirements
             ? []
             : securityRequirements
                 .SelectMany(requirement => requirement.Values)
                 .SelectMany(scopes => scopes)
+                // RFC 6749 scope tokens are case-sensitive (mirrors the reasoning in
+                // ApiTestBase.RequireSecondaryIdentityLacks around its own scopes.Contains call):
+                // "orders.read" and "ORDERS.READ" are two distinct scopes, so an ignore-case
+                // comparer here would silently collapse them and drop a requirement the 403
+                // guard should be comparing against.
                 .Distinct(StringComparer.Ordinal)
+                // Dictionary<,> enumeration order is unspecified, and this is the only collection
+                // this file builds that isn't explicitly ordered. It matters here because Task 4
+                // renders this union into RequireSecondaryIdentityLacks("...", "...") calls in a
+                // golden file compared byte-exact, and the existing determinism test only renders
+                // twice in the same process — it cannot catch an order shift that only shows up
+                // across processes or runs from unspecified Dictionary enumeration. Ordering pins
+                // it the same way every other collection here already is.
+                .OrderBy(s => s, StringComparer.Ordinal)
                 .ToList();
 
     /// <summary>

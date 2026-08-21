@@ -1106,6 +1106,61 @@ public class TestPlanBuilderTests
         forbidden.RequiredScopes.ShouldContain("orders.admin");
     }
 
+    // Same shape as the requirement-spanning union spec above, but the two requirements name
+    // scopes that differ only in case. RFC 6749 scope tokens are case-sensitive, so these are two
+    // distinct scopes, not a duplicate — an implementation that unioned with an ignore-case
+    // comparer would collapse them to one and silently drop a requirement the 403 guard should be
+    // comparing against.
+    private const string SpecDeclaringSecurityWithScopesDifferingOnlyByCase = """
+    {
+      "openapi": "3.0.3",
+      "info": { "title": "Orders", "version": "1.0" },
+      "paths": {
+        "/orders/{id}": {
+          "delete": {
+            "operationId": "deleteOrder",
+            "tags": ["Orders"],
+            "security": [
+              { "oauth2Lower": ["orders.read"] },
+              { "oauth2Upper": ["ORDERS.READ"] }
+            ],
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+            "responses": { "204": { "description": "no content" } }
+          }
+        }
+      },
+      "components": {
+        "schemas": {},
+        "securitySchemes": {
+          "oauth2Lower": {
+            "type": "oauth2",
+            "flows": { "clientCredentials": {
+              "tokenUrl": "https://example.com/token",
+              "scopes": { "orders.read": "Read orders" } } }
+          },
+          "oauth2Upper": {
+            "type": "oauth2",
+            "flows": { "clientCredentials": {
+              "tokenUrl": "https://example.com/token",
+              "scopes": { "ORDERS.READ": "Read orders (shouty)" } } }
+          }
+        }
+      }
+    }
+    """;
+
+    [TestMethod]
+    public async Task TheForbiddenCasesUnionedScopesArePreservedCaseSensitively()
+    {
+        var plan = await BuildAsync(SpecDeclaringSecurityWithScopesDifferingOnlyByCase);
+        var forbidden = plan.Classes.SelectMany(c => c.Cases)
+            .Single(c => c.OperationKey == "deleteOrder" && c.ExpectedStatus == 403);
+
+        forbidden.RequiredScopes.Count.ShouldBe(2);
+        forbidden.RequiredScopes.ShouldContain("orders.read");
+        forbidden.RequiredScopes.ShouldContain("ORDERS.READ");
+    }
+
     [TestMethod]
     public async Task ASecuredButScopeFreeOperationStillGetsAForbiddenCaseWithNoRequiredScopes()
     {
@@ -1145,5 +1200,21 @@ public class TestPlanBuilderTests
         nonAuthCases.ShouldNotBeEmpty();
         nonAuthCases.ShouldAllBe(c => c.RequiredScopes != null);
         nonAuthCases.ShouldAllBe(c => c.RequiredScopes.Count == 0);
+    }
+
+    [TestMethod]
+    public void WithExpressionSettingRequiredScopesToNullNormalizesToEmpty()
+    {
+        // `with` expressions drive the init accessor directly (compiler-generated copy
+        // constructor + init setters) rather than re-running the primary constructor's field
+        // initializer, so the never-null guarantee has to be enforced in the init accessor
+        // itself — a coalesce that only lived in the field initializer would guarantee non-null
+        // for a freshly-constructed plan but not for one produced by `with`.
+        var plan = new TestCasePlan("A_Contract", "d", "a", true, "GET", "/a", [], 200, "Order", "Contract");
+
+        var mutated = plan with { RequiredScopes = null! };
+
+        mutated.RequiredScopes.ShouldNotBeNull();
+        mutated.RequiredScopes.ShouldBeEmpty();
     }
 }
