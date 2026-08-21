@@ -57,6 +57,31 @@ public static class TestPlanBuilder
                 // this without risking drift from what a fixture write would really do.
                 var needsFixture = FixtureComposer.NeedsFixture(operation);
 
+                // This is a filename check, not a general "is this operationId OK?" validator —
+                // narrow on purpose, and worth spelling out because two separate investigations
+                // have already had to re-derive this reasoning from scratch. TryValidateOperationKey's
+                // authority is the filesystem: it refuses a key that cannot become a fixture
+                // filename (see its doc comment and reason strings in FixtureDocument.cs). Gating
+                // on `needsFixture` follows directly from that authority — a key only becomes a
+                // filename when a fixture is written for it, so an operation that writes none has
+                // nothing here for this check to protect.
+                //
+                // The consequence is real and worth stating plainly rather than leaving implicit:
+                // for a parameterless operation (needsFixture == false) the key is never checked
+                // by this line at all — including TryValidateOperationKey's char.IsControl check,
+                // so an operationId with an embedded newline passes straight through here.
+                //
+                // That is safe only because a different, separately-scoped mechanism owns that
+                // hazard: CSharpLiteral.Escape, applied to every operation key TemplateRenderer
+                // emits regardless of NeedsFixture (TemplateRenderer.cs), whose authority is the
+                // C# grammar rather than the filesystem — it neutralizes what would otherwise be a
+                // compile-breaking or line-splitting literal. The two rules are deliberately kept
+                // separate and must not be merged into one check run unconditionally: refuse here
+                // when the text would have to name a file nothing can write; escape there when the
+                // text is only ever going to be a C# string literal. Running the filename check
+                // unconditionally would trade a compile error for a silently missing test on every
+                // parameterless operation with an inconvenient operationId — the worse failure in
+                // this codebase's terms.
                 if (needsFixture && !FixtureDocument.TryValidateOperationKey(key.Value, out var reason))
                 {
                     skipped.Add(new SkippedOperation(key.Value, reason));
