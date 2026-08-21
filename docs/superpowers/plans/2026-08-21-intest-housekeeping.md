@@ -172,4 +172,16 @@ One pass at the end covering all three tasks, rather than two per task. Check sp
 
 ## Self-review
 
-**The risk worth stating.** Task 1 touches the renderer and the template, which every generated file flows through, for a defect no valid OpenAPI document can currently trigger — RFC 6749 excludes `"` and `\` from scope tokens, and an operationId carrying them is already refused. The justification is that generated code is committed and diffed by adopters, and this codebase already refuses rather than emitting code that will not compile; the inconsistency is the defect, not the reachability. But it is the one task here with real blast radius, and the byte-identical-output test is what keeps it honest. If that test cannot be made to pass, the helper is wrong.
+**Correction, 2026-08-21 — this defect is reachable from a valid OpenAPI document.** The session executing Task 1 found the gap and I verified it. `TestPlanBuilder.cs:60` validates an operationId only when `needsFixture` is true:
+
+```csharp
+if (needsFixture && !FixtureDocument.TryValidateOperationKey(key.Value, out var reason))
+```
+
+But `TemplateRenderer`'s `emits_fixture_lookup` is `c.Role == CaseRole.Success` with **no** `NeedsFixture` condition, so `RequireFixture("{{ tc.operation_key }}")` is emitted for every success case. A **parameterless** operation — no path or query parameter carrying a value, no JSON body — has `NeedsFixture == false`, so its operationId is never validated and flows straight into a C# literal. `operationId: 'list"Things'` on a parameterless `GET` produces a project that does not compile, today, from a fully valid document.
+
+Scopes remain unreachable (RFC 6749 excludes `"` and `\`). **Operation keys are not.** `CompileVerificationTests` must therefore use a *parameterless* operation with a hostile operationId — a parameterised one is refused before it reaches the template and would prove nothing.
+
+**The gate stays as it is.** Its refusal exists because the key becomes a *filename*; an operation needing no fixture names no file, so validating there would skip a perfectly testable operation over a character that causes no problem once escaped. Escaping is the fix; the two rules stay distinguishable.
+
+**The risk worth stating.** Task 1 touches the renderer and the template, which every generated file flows through. The justification is that generated code is committed and diffed by adopters, and this codebase already refuses rather than emitting code that will not compile; the inconsistency is the defect, not the reachability. But it is the one task here with real blast radius, and the byte-identical-output test is what keeps it honest. If that test cannot be made to pass, the helper is wrong.
