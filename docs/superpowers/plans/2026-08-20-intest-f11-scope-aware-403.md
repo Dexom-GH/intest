@@ -413,6 +413,14 @@ git commit -m "feat(cli): report auth cases whose provability depends on the sec
 
 ## Task 6: Docs, spec, and close F11
 
+> **Ordering defect, found during execution: this task straddles Task 7.**
+>
+> Steps 1 and 5 **cannot be done before Task 7 runs.** Step 1's banners state a live pass rate ("20 of 24") that only Task 7 produces, and Step 5 closes F11 "with Task 7's evidence". Writing either beforehand means inventing numbers — the exact failure the acceptance log exists to prevent.
+>
+> Steps 2, 3 and 4 have no such dependency, and Step 4 touches `InitCommand.cs`'s scaffold, which Task 7 then generates from — so it should land *before* the acceptance run rather than after it.
+>
+> **Execution order is therefore: 6.2 → 6.3 → 6.4 → Task 7 → 6.1 → 6.5 → 6.6.** The task is left whole rather than renumbered, because splitting it would break every reference to "Task 6 Step 4" elsewhere in this document.
+
 - [ ] **Step 1: The two status banners — do this first, not last**
 
 Both currently read "passes **20 of 24** live … (**F11**, still open)":
