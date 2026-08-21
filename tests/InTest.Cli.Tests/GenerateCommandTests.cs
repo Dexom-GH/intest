@@ -1,3 +1,4 @@
+using InTest.Cli;
 using InTest.Cli.Commands;
 using Shouldly;
 
@@ -312,7 +313,7 @@ public class GenerateCommandTests
     {
         var (exitCode, error) = await RunCapturingErrorAsync(projectRoot: "");
 
-        exitCode.ShouldBe(GenerateCommand.ExitToolError);
+        exitCode.ShouldBe(ExitCode.ToolError);
         error.ShouldNotContain("unexpected failure",
             customMessage: "an argument the adopter got wrong is refused, not reported as a crash");
         error.ShouldStartWith("--project",

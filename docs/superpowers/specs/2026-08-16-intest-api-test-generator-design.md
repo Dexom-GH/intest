@@ -510,6 +510,28 @@ meant *adding* a branch asserting that some parse failures mean outstanding work
 `dc8370d`) from enumerating conditions where it could have stated them; the enumeration above is
 now illustration, and the sentence before the colon is the rule.
 
+**Unhandled exceptions.** The `2` row above has always said "an exception went unhandled", and
+the same reasoning that put parse failures here applies to it unchanged: `System.CommandLine`'s
+default exception handler answers an exception escaping a command's action with `1`. That the
+tool returned `2` was true only because `init`, `generate` and `fixtures repair` each carried a
+`try/catch` of their own — three copies of one rule, agreeing by discipline, with nothing
+structural behind them. A fourth command would have shipped returning `1` for a crash, and no
+test could have caught it: the parse layer is not involved and `ParseResult.Errors` is empty.
+
+The rule is now caught in the same layer as the parse rule — above all of them, where no command
+owns it — so it holds for commands not yet written, and a new command inherits exit `2` for a
+crash by writing no code at all. That is the whole of the guarantee: **a crash in any command is
+`2` because it is caught above every command, not because each command remembers to catch it.**
+
+What stayed behind in the commands is the distinction between a crash and a refusal, and it is
+load-bearing. A `ConfigLoadException`, `SpecLoadException` or `FixtureFormatException` carries a
+sentence written for the adopter and is printed as-is; only an unanticipated escape is prefixed
+with "unexpected failure". Both are `2`, so this table does not change — but catching the typed
+ones in the outer layer too would relabel every curated refusal as a crash, one sentence for two
+very different situations. Only a real process can observe either half: a test that calls a
+command method directly never runs the outer layer, and an escaping exception reaches it with no
+exit code to assert on.
+
 `--help` and `--version` still exit `0`. Both are terminating actions that suppress the parse
 errors prompting them, so those errors never arise and the rule never fires — measured against
 the pinned `System.CommandLine`, not inferred from the API's names.

@@ -1,3 +1,4 @@
+using InTest.Cli;
 using InTest.Cli.Commands;
 using InTest.Cli.Fixtures;
 using Shouldly;
@@ -220,7 +221,7 @@ public class FixturesRepairCommandTests
         var report = new StringWriter();
         var exitCode = await FixturesRepairCommand.RunAsync(_root, CancellationToken.None, report);
 
-        exitCode.ShouldBe(FixturesRepairCommand.ExitToolError,
+        exitCode.ShouldBe(ExitCode.ToolError,
             "a malformed committed fixture is a real tool error and must be reflected in the exit code");
         FixtureDocument.Parse(File.ReadAllText(widgetPath)).Body!["color"]!.GetValue<string>()
             .ShouldBe("TODO:color", "the unrelated, legitimate repair must still be applied");
@@ -258,7 +259,7 @@ public class FixturesRepairCommandTests
 
         var (exitCode, error) = await RunCapturingErrorAsync();
 
-        exitCode.ShouldBe(FixturesRepairCommand.ExitToolError);
+        exitCode.ShouldBe(ExitCode.ToolError);
         Directory.Exists(Path.Combine(_root, "fixtures")).ShouldBeFalse(
             "§5 reserves exit 2 for a tool error where nothing was written");
         error.ShouldNotContain("unexpected failure");
@@ -350,7 +351,7 @@ public class FixturesRepairCommandTests
     {
         var (exitCode, error) = await RunCapturingErrorAsync(projectRoot: "");
 
-        exitCode.ShouldBe(FixturesRepairCommand.ExitToolError);
+        exitCode.ShouldBe(ExitCode.ToolError);
         error.ShouldNotContain("unexpected failure",
             customMessage: "an argument the adopter got wrong is refused, not reported as a crash");
         error.ShouldStartWith("--project",

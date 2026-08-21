@@ -13,10 +13,6 @@ namespace InTest.Cli.Commands;
 
 public static class GenerateCommand
 {
-    public const int ExitOk = 0;
-    public const int ExitWorkOutstanding = 1;
-    public const int ExitToolError = 2;
-
     /// <summary>Longest leading run of path segments shared by every generated operation.</summary>
     internal static string CommonPathPrefix(Planning.TestPlan plan)
     {
@@ -59,7 +55,7 @@ public static class GenerateCommand
         {
             // --project is an argument the adopter typed, so it is refused, not reported as a
             // crash. Without this it reached ConfigLoader.Load's ThrowIfNullOrWhiteSpace and came
-            // back through the catch-all below as "intest: unexpected failure: ArgumentException:
+            // back through Program's crash floor as "intest: unexpected failure: ArgumentException:
             // ... (Parameter 'projectRoot')" — the right exit code attached to the wrong sentence,
             // naming a C# parameter the adopter never wrote. Same rule and same shape as `init`
             // uses; see CommandArguments.
@@ -67,7 +63,7 @@ public static class GenerateCommand
                     projectRoot, "--project", CommandArguments.ProjectRule, out var projectReason))
             {
                 Console.Error.WriteLine(projectReason);
-                return ExitToolError;
+                return ExitCode.ToolError;
             }
 
             // Every intest.json setting this command reads is validated here, before anything is
@@ -93,7 +89,7 @@ public static class GenerateCommand
                     report.WriteLine(message);
                 }
                 report.WriteLine("Run 'intest fixtures repair' to create or update the fixture(s) listed above.");
-                return ExitWorkOutstanding;
+                return ExitCode.WorkOutstanding;
             }
 
             var generated = Path.Combine(projectRoot, "Generated");
@@ -136,22 +132,17 @@ public static class GenerateCommand
                 Console.WriteLine($"Noted {plan.Notes.Count} operation(s) — see coverage-report.json.");
             }
 
-            return ExitOk;
+            return ExitCode.Ok;
         }
         catch (ConfigLoadException ex)
         {
             Console.Error.WriteLine(ex.Message);
-            return ExitToolError;
+            return ExitCode.ToolError;
         }
         catch (SpecLoadException ex)
         {
             Console.Error.WriteLine(ex.Message);
-            return ExitToolError;
-        }
-        catch (Exception ex)
-        {
-            Console.Error.WriteLine($"intest: unexpected failure: {ex.GetType().Name}: {ex.Message}");
-            return ExitToolError;
+            return ExitCode.ToolError;
         }
     }
 

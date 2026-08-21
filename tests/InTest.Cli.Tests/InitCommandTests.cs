@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
+using InTest.Cli;
 using InTest.Cli.Commands;
 using InTest.Cli.Configuration;
 using Shouldly;
@@ -350,7 +351,7 @@ public class InitCommandTests
     {
         var (exitCode, error) = RunCapturingError(projectRoot ?? _root, name, spec);
 
-        exitCode.ShouldBe(InitCommand.ExitToolError,
+        exitCode.ShouldBe(ExitCode.ToolError,
             "§5 gives 2 for a tool error and 1 for outstanding work — an argument the adopter " +
             "mistyped is a tool error, and reporting it as 1 makes it indistinguishable from drift");
         error.ShouldStartWith(setting,
@@ -381,7 +382,7 @@ public class InitCommandTests
         {
             var (exitCode, error) = RunCapturingError("", "Orders.ApiTests", "orders.json");
 
-            exitCode.ShouldBe(InitCommand.ExitToolError);
+            exitCode.ShouldBe(ExitCode.ToolError);
             error.ShouldStartWith("--project");
             Directory.GetFileSystemEntries(_root).ShouldBeEmpty(
                 "a blank --project must be refused, not resolved to the current directory");
@@ -414,7 +415,7 @@ public class InitCommandTests
     {
         var (exitCode, error) = RunCapturingError(_root, "Orders.ApiTests", spec);
 
-        exitCode.ShouldBe(InitCommand.ExitToolError);
+        exitCode.ShouldBe(ExitCode.ToolError);
         Directory.GetFileSystemEntries(_root).ShouldBeEmpty(
             "§5's exit 2 is \"nothing was written\", and an argument is judged before the first write");
         error.ShouldStartWith("--spec",
@@ -443,29 +444,17 @@ public class InitCommandTests
     {
         var (exitCode, error) = RunCapturingError(_root, "Orders.ApiTests", spec);
 
-        exitCode.ShouldBe(InitCommand.ExitOk, error);
+        exitCode.ShouldBe(ExitCode.Ok, error);
         var config = JsonDocument.Parse(File.ReadAllText(Path.Combine(_root, "intest.json")));
         config.RootElement.GetProperty("spec").GetProperty("source").GetString().ShouldBe(spec);
     }
 
-    /// <summary>
-    /// The floor `generate` and `fixtures repair` already had and `init` did not. `init` was the
-    /// only command with no catch-all, so anything it failed to anticipate reached the adopter as
-    /// an unhandled exception at exit 1. This is deliberately not phrased as a refusal: the path
-    /// is well-formed as far as this command can tell, so the adopter broke no stated rule. It
-    /// also makes no claim that nothing was written — a scaffold that fails on its sixth file has
-    /// already written five, which is why the refusals above run before the first write rather
-    /// than relying on this.
-    /// </summary>
-    [TestMethod]
-    public void ReportsAnUnanticipatedScaffoldFailureAsAToolErrorRatherThanAStackTrace()
-    {
-        var (exitCode, error) = RunCapturingError(_root + "\0nul", "Orders.ApiTests", "orders.json");
-
-        exitCode.ShouldBe(InitCommand.ExitToolError);
-        error.ShouldStartWith("intest: unexpected failure:",
-            customMessage: "the sentence generate and fixtures repair already use for this situation");
-    }
+    // ReportsAnUnanticipatedScaffoldFailureAsAToolErrorRatherThanAStackTrace moved to
+    // InTest.Golden.Tests/CliExitCodeTests as CrashInACommandWithNoCatchOfItsOwnExitsToolError.
+    // It asserted the catch-all inside InitCommand.Run, and that catch-all is now Program's, so a
+    // test calling InitCommand.Run directly can no longer reach it — the exception escapes before
+    // any exit code exists. Only a real process can observe the floor, which is the point of
+    // moving it rather than deleting it.
 
     // ScaffoldStillBuildsWithNoTokenProviderRegistered moved to InTest.Golden.Tests, next to
     // CompileVerificationTests (Task 10 item 7): it is the only out-of-process build that lived

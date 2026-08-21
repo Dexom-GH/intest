@@ -16,9 +16,6 @@ namespace InTest.Cli.Commands;
 /// </summary>
 public static class FixturesRepairCommand
 {
-    public const int ExitOk = 0;
-    public const int ExitToolError = 2;
-
     public static async Task<int> RunAsync(
         string projectRoot, CancellationToken cancellationToken, TextWriter? report = null)
     {
@@ -28,7 +25,7 @@ public static class FixturesRepairCommand
         {
             // --project is an argument the adopter typed, so it is refused, not reported as a
             // crash. Without this it reached ConfigLoader.Load's ThrowIfNullOrWhiteSpace and came
-            // back through the catch-all below as "intest: unexpected failure: ArgumentException:
+            // back through Program's crash floor as "intest: unexpected failure: ArgumentException:
             // ... (Parameter 'projectRoot')" — the right exit code attached to the wrong sentence,
             // naming a C# parameter the adopter never wrote. Same rule and same shape as `init`
             // uses; see CommandArguments.
@@ -36,7 +33,7 @@ public static class FixturesRepairCommand
                     projectRoot, "--project", CommandArguments.ProjectRule, out var projectReason))
             {
                 Console.Error.WriteLine(projectReason);
-                return ExitToolError;
+                return ExitCode.ToolError;
             }
 
             // The whole of intest.json, through the same loader `generate` uses — not just the
@@ -144,27 +141,22 @@ public static class FixturesRepairCommand
                 ? "Nothing to repair."
                 : $"Created {created} fixture(s), updated {updated} fixture(s).");
 
-            return failed == 0 ? ExitOk : ExitToolError;
+            return failed == 0 ? ExitCode.Ok : ExitCode.ToolError;
         }
         catch (ConfigLoadException ex)
         {
             Console.Error.WriteLine(ex.Message);
-            return ExitToolError;
+            return ExitCode.ToolError;
         }
         catch (SpecLoadException ex)
         {
             Console.Error.WriteLine(ex.Message);
-            return ExitToolError;
+            return ExitCode.ToolError;
         }
         catch (FixtureFormatException ex)
         {
             Console.Error.WriteLine(ex.Message);
-            return ExitToolError;
-        }
-        catch (Exception ex)
-        {
-            Console.Error.WriteLine($"intest: unexpected failure: {ex.GetType().Name}: {ex.Message}");
-            return ExitToolError;
+            return ExitCode.ToolError;
         }
     }
 }

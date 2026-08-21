@@ -1,4 +1,4 @@
-using InTest.Cli.Commands;
+using InTest.Cli;
 using Shouldly;
 
 namespace InTest.Golden.Tests;
@@ -7,10 +7,12 @@ namespace InTest.Golden.Tests;
 /// §5's exit-code convention at the one layer no command owns: the command line itself.
 /// <para>
 /// These invoke the built <c>InTest.Cli</c> assembly as a real process and assert on the code it
-/// hands the shell. Nothing shorter would do. The defect under test lived in <c>Program</c>'s
-/// final expression, above every command and below every test that calls a <c>Command.Run</c>
-/// directly — <c>InTest.Cli.Tests</c> could not have observed it, because a test that starts at
-/// <c>InitCommand.Run</c> has already skipped the parse.
+/// hands the shell. Nothing shorter would do. Two defects live here, both above every command and
+/// below every test that calls a <c>Command.Run</c> directly: the parse layer answering exit 1
+/// where §5 says 2, and the crash floor doing the same. <c>InTest.Cli.Tests</c> could observe
+/// neither — a test that starts at <c>InitCommand.Run</c> has already skipped the parse, and now
+/// that the floor is <c>Program</c>'s rather than each command's, an in-process call cannot reach
+/// it at all: the exception escapes before there is any exit code to assert on.
 /// </para>
 /// <para>
 /// They live in this assembly and not in <c>InTest.Cli.Tests</c> because
@@ -105,12 +107,90 @@ public class CliExitCodeTests
         try
         {
             var first = await RunCliAsync($"init --project \"{root}\" --name Orders.ApiTests --spec orders.json");
-            first.ExitCode.ShouldBe(InitCommand.ExitOk, first.Output);
+            first.ExitCode.ShouldBe(ExitCode.Ok, first.Output);
 
             var (exitCode, output) = await RunCliAsync(
                 $"init --project \"{root}\" --name Orders.ApiTests --spec orders.json");
 
-            exitCode.ShouldBe(InitCommand.ExitAlreadyInitialised, output);
+            exitCode.ShouldBe(ExitCode.AlreadyInitialised, output);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// The regression this floor exists to prevent, and the one nothing else guards. §5 puts "an
+    /// exception went unhandled" under 2, but <c>EnableDefaultExceptionHandler</c> — on by default
+    /// — answers an exception escaping a command's action with 1, the code reserved for work a
+    /// human must go and do. That was masked while <c>init</c>, <c>generate</c> and
+    /// <c>fixtures repair</c> each carried a catch-all of their own; a fourth command would have
+    /// shipped returning 1 for a crash, and no test in <c>InTest.Cli.Tests</c> could have noticed,
+    /// because the parse layer is not involved and <c>ParseResult.Errors</c> is empty.
+    /// <para>
+    /// <c>init</c> now has no catch of its own, so this reaches the floor in <c>Program</c> and
+    /// nowhere else. The trigger is a <c>--project</c> naming an existing <b>file</b>: it passes
+    /// every rule the command states — non-blank, and <c>intest.json</c> is not present inside it
+    /// — and then <c>Directory.CreateDirectory</c> throws <c>IOException</c>. Genuinely
+    /// unanticipated rather than a refusal in disguise, which is what makes it a crash.
+    /// </para>
+    /// <para>
+    /// The predecessor of this test passed <c>"\0nul"</c> to <c>InitCommand.Run</c> in-process. A
+    /// NUL cannot cross a process-argument boundary, and an in-process call can no longer observe
+    /// the floor anyway, so both halves had to change together.
+    /// </para>
+    /// </summary>
+    [TestMethod]
+    public async Task CrashInACommandWithNoCatchOfItsOwnExitsToolError()
+    {
+        var file = Path.Combine(Path.GetTempPath(), "intest-crash-" + Guid.NewGuid().ToString("N")[..8]);
+        await File.WriteAllTextAsync(file, "not a directory");
+        try
+        {
+            var (exitCode, output) = await RunCliAsync(
+                $"init --project \"{file}\" --name Orders.ApiTests --spec orders.json");
+
+            exitCode.ShouldBe(ExitCode.ToolError,
+                $"§5 puts an unhandled exception under 2; System.CommandLine's default handler " +
+                $"would answer 1:{Environment.NewLine}{output}");
+            output.ShouldContain("intest: unexpected failure:",
+                customMessage: "the sentence the three per-command catch-alls used before it moved up");
+        }
+        finally
+        {
+            File.Delete(file);
+        }
+    }
+
+    /// <summary>
+    /// A crash is not a refusal, and the floor must not blur them. The typed catches inside the
+    /// commands — <c>ConfigLoadException</c>, <c>SpecLoadException</c>,
+    /// <c>FixtureFormatException</c> — print their message bare because it is written for the
+    /// adopter; only the floor prefixes. Hoisting those catches up alongside the catch-all would
+    /// have relabelled every curated refusal as "unexpected failure", so this pins the boundary
+    /// from outside the process, where the distinction is actually visible to CI.
+    /// <para>
+    /// Both commands that catch typed exceptions are covered, not just one. The property is held
+    /// per-command rather than structurally — each command has to remember to catch — so pinning
+    /// it for <c>generate</c> alone would leave it unpinned for <c>fixtures repair</c>, which
+    /// carries the most typed catches of the two and is therefore the likelier place to lose it.
+    /// </para>
+    /// </summary>
+    [TestMethod]
+    [DataRow("generate", DisplayName = "generate")]
+    [DataRow("fixtures repair", DisplayName = "fixtures repair")]
+    public async Task ARefusalIsNotReportedThroughTheCrashFloor(string command)
+    {
+        var root = Path.Combine(Path.GetTempPath(), "intest-refusal-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(root);
+        try
+        {
+            var (exitCode, output) = await RunCliAsync($"{command} --project \"{root}\"");
+
+            exitCode.ShouldBe(ExitCode.ToolError, output);
+            output.ShouldNotContain("unexpected failure",
+                customMessage: "a missing intest.json is a stated tool error, not a crash");
         }
         finally
         {
@@ -170,7 +250,7 @@ public class CliExitCodeTests
             var (exitCode, output) = await RunCliAsync(
                 $"init --project \"{root}\" --name Orders.ApiTests --spec https://example.com/openapi.json");
 
-            exitCode.ShouldBe(InitCommand.ExitToolError, output);
+            exitCode.ShouldBe(ExitCode.ToolError, output);
             output.ShouldContain("--spec",
                 customMessage: "a refusal leads with the setting the adopter got wrong");
             output.ShouldContain("URL",

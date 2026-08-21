@@ -8,10 +8,6 @@ namespace InTest.Cli.Commands;
 
 public static class InitCommand
 {
-    public const int ExitOk = 0;
-    public const int ExitToolError = 2;
-    public const int ExitAlreadyInitialised = 3;
-
     // See JsonSpecSource below for why this uses the relaxed encoder.
     private static readonly JsonSerializerOptions SpecSourceJsonOptions = new()
     {
@@ -30,27 +26,14 @@ public static class InitCommand
         "Pass the path to the OpenAPI document to `intest init --spec` — for example " +
         "\"../Orders/bin/Debug/net10.0/orders.json\".";
 
+    /// <summary>
+    /// Every refusal below runs before the first write, and none of them catches: an exception
+    /// this command does not anticipate is §5's exit 2 by way of <c>Program</c>'s crash floor,
+    /// which covers every command rather than only the three that remembered to catch. This was
+    /// a <c>Run</c>/<c>Scaffold</c> pair until that floor moved up; the wrapper existed only to
+    /// hold the catch-all, so it went with it.
+    /// </summary>
     public static int Run(string projectRoot, string projectName, string specSource)
-    {
-        try
-        {
-            return Scaffold(projectRoot, projectName, specSource);
-        }
-        catch (Exception ex)
-        {
-            // The floor `generate` and `fixtures repair` already had and this command did not.
-            // Without it `init` was the only command that could reach an adopter as an unhandled
-            // exception — and System.CommandLine reports one as exit 1, the code §5 gives to
-            // outstanding work. Deliberately not phrased as a refusal: nothing here says the
-            // adopter broke a stated rule, and unlike the refusals in Scaffold it cannot promise
-            // that nothing was written, since a scaffold that fails on its sixth file has already
-            // written five. That is exactly why every rule `init` can state is checked up front.
-            Console.Error.WriteLine($"intest: unexpected failure: {ex.GetType().Name}: {ex.Message}");
-            return ExitToolError;
-        }
-    }
-
-    private static int Scaffold(string projectRoot, string projectName, string specSource)
     {
         // Every argument, refused the same way, before the first write — §5's exit 2 is "Nothing
         // was written", and an argument is the one thing that can be judged with nothing on disk
@@ -60,7 +43,7 @@ public static class InitCommand
         if (!CommandArguments.TryRequireValue(projectRoot, "--project", CommandArguments.ProjectRule, out var projectReason))
         {
             Console.Error.WriteLine(projectReason);
-            return ExitToolError;
+            return ExitCode.ToolError;
         }
 
         // Normalised once, before either escaping step, and reused at both sites below — the
@@ -81,7 +64,7 @@ public static class InitCommand
         if (!CSharpIdentifier.TryValidateDottedName(projectName, "--name", out var nameReason))
         {
             Console.Error.WriteLine($"{nameReason} Pass a valid C# name to `intest init --name` — for example \"Orders.ApiTests\".");
-            return ExitToolError;
+            return ExitCode.ToolError;
         }
 
         // Two questions about --spec, asked in the order that makes the second one meaningful:
@@ -93,7 +76,7 @@ public static class InitCommand
         if (!CommandArguments.TryRequireValue(specSource, "--spec", SpecRemedy, out var blankSpecReason))
         {
             Console.Error.WriteLine(blankSpecReason);
-            return ExitToolError;
+            return ExitCode.ToolError;
         }
 
         // The same rule as the blank guard above — `init` never writes a config it knows
@@ -118,7 +101,7 @@ public static class InitCommand
         if (SpecLoader.IsUrl(normalizedSpecSource))
         {
             Console.Error.WriteLine(SpecLoader.UrlReason("--spec", normalizedSpecSource, SpecRemedy));
-            return ExitToolError;
+            return ExitCode.ToolError;
         }
 
         // specSource reaches the generated .csproj as bare XML inside <InTestSpecSource> — a
@@ -138,13 +121,13 @@ public static class InitCommand
         if (!MSBuildPropertyValue.TryEscape(normalizedSpecSource, "--spec", out var specSourceEscaped, out var specReason))
         {
             Console.Error.WriteLine($"{specReason} {SpecRemedy}");
-            return ExitToolError;
+            return ExitCode.ToolError;
         }
 
         if (File.Exists(Path.Combine(projectRoot, "intest.json")))
         {
             Console.Error.WriteLine("intest.json already exists. `init` never overwrites; edit it or delete it first.");
-            return ExitAlreadyInitialised;
+            return ExitCode.AlreadyInitialised;
         }
 
         var baseClassName = projectName.Split('.')[0] + "TestBase";
@@ -344,7 +327,7 @@ public static class InitCommand
         """);
 
         Console.WriteLine($"Initialised {projectName}. Next: `intest generate`.");
-        return ExitOk;
+        return ExitCode.Ok;
     }
 
     private static void Write(string root, string relativePath, string content)
