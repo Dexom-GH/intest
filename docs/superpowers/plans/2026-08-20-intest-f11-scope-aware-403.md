@@ -388,14 +388,20 @@ git commit -m "feat(cli): emit the scope guard on wrong-scope 403 cases"
 A new key, separate from `authTestsGatedOnSecondIdentity` ([counted]), named for what it counts:
 
 ```
-"authTestsRequiringAnUnauthorizedSecondIdentity": 7
+"authTestsRequiringAnUnderScopedSecondIdentity": 7
 ```
+
+> **Not "Unauthorized".** In this codebase `_Unauthorized` means **401** and `_Forbidden` means **403** (`TestPlanBuilder` mints both). An adopter reads `coverage-report.json` beside generated methods named `Foo_Unauthorized` and `Foo_Forbidden`, so a key using "Unauthorized" to describe a **403** condition collides with the vocabulary the generated code already established. "UnderScoped" says the actual condition: the identity authenticates fine, it simply holds too few scopes.
 
 **The test that matters is the one that separates the two keys**, and it needs a spec with both a scoped and a scope-free secured operation — the same shape Task 4 Step 2 preserves in the golden corpus. Given both, the keys must differ. A fixture with only scoped operations lets one key be a copy of the other and still pass.
 
 **The report itself must say the count is not a skip count — in the emitted JSON, not in a source comment.** JSON carries no comments, so a `//` explanation in `CoverageReport.cs` reaches nobody who opens the artefact, and a reader seeing `7` here against 3 actual skips in a run has nothing to reconcile them with. The key name alone is not enough; the pre-existing `authTestsGatedOnSecondIdentity` already uses that convention, so restating the requirement for this key is asking for more than a careful name.
 
 `notes.withheld` is the precedent — it emits `{operation, reason}` objects with real explanatory text. Whatever shape you choose must be **deterministic**: no runtime data, nothing that could vary between two runs against the same spec, or `generate --check` reports drift on an unchanged spec — which is the very failure this explanation exists to describe.
+
+**Emit it unconditionally, including when the count is 0 — but not for the reason it is tempting to give.** A key whose *presence* depended on spec content would still be perfectly deterministic under `--check`, which compares a committed artefact against a fresh run of the **same** spec; it would never report drift. The real reason is plainer: a stable key set is easier for a human to diff and for a consumer to parse. Say that, and do not claim a `--check` justification the mechanism does not support.
+
+**Every key carrying the same caveat needs an entry.** Once an explanations map exists, a key's *absence* from it reads as "this one needs no explanation." `authTestsGatedOnSecondIdentity` carries the identical runtime caveat and is the number a reader meets first, so leaving it unexplained makes the older key look more trustworthy than it is.
 
 - [ ] **Step 2–4: Run, implement, re-run, commit**
 
