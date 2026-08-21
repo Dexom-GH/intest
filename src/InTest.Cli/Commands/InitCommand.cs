@@ -129,13 +129,26 @@ public static class InitCommand
             {
                 // StaticTokenProvider ships as the one-identity, one-token implementation; write
                 // your own (like YourTokenProvider below) for more than one identity, which the
-                // wrong-scope 403 cases need. Catalog and Inventory declare no `security` and
-                // register nothing at all — they cannot, since StaticTokenProvider needs a real
-                // token neither has a source for — so this stays commented for the same reason
-                // the IAssemblyFixture example below does: a live registration here would
-                // reference a type that does not exist yet, breaking every fresh scaffold's
-                // build before a team has written one. See "Auth" in Phase 3 of
-                // getting-started.md for a worked example.
+                // wrong-scope 403 cases need — and declare each identity's Scopes, or a read-only
+                // identity's own read operations can never produce a provable 403. Catalog and
+                // Inventory declare no `security` and register nothing at all — they cannot,
+                // since StaticTokenProvider needs a real token neither has a source for — so this
+                // stays commented for the same reason the IAssemblyFixture example below does: a
+                // live registration here would reference a type that does not exist yet, breaking
+                // every fresh scaffold's build before a team has written one. See "Auth" in Phase
+                // 3 of getting-started.md for a worked example.
+                //
+                // public sealed class YourTokenProvider : ITestTokenProvider
+                // {
+                //     public IReadOnlyList<TestIdentity> Identities { get; } =
+                //     [
+                //         new TestIdentity("default", ["orders.read", "orders.write"]),
+                //         new TestIdentity("read-only", ["orders.read"])
+                //     ];
+                //
+                //     public Task<string> GetTokenAsync(string audience, string? identity = null,
+                //         CancellationToken cancellationToken = default) => throw new NotImplementedException();
+                // }
                 // services.AddSingleton<ITestTokenProvider, YourTokenProvider>();
 
                 // Per-request fixtures: path and query parameter values live in fixtures/, not

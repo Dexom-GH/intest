@@ -1000,7 +1000,7 @@ assertion sits at the right. That gap is the defect.
 | Bodyless `POST` under `[ApiController]` — no `Content-Type` | 403 | **415** | content negotiation |
 | Required query parameter omitted | 404 | 400 *or* 404, framework-dependent | model binding |
 | 404 case on an operation with no path parameter | 404 | 200 — nowhere to put an unmatchable value | handler |
-| Wrong-scope 403 where the second identity holds the scope | 403 | 200 or 404 — the API is correct | authorization |
+| Wrong-scope 403 where the second identity holds the scope — **fixed** (F11) | 403 | 200 or 404 — the API is correct | authorization |
 
 The last is F11, and it is the one that shows why the rule needs stating in this form: it is not
 about a *malformed* request at all. The request is perfectly well-formed and correctly
@@ -1017,13 +1017,21 @@ runtime rather than being guessed or dropped — the same move as §9's `MemberC
 below, where the question turned out to be answerable just not at the moment the original design
 asked it.
 
-> **F11 is the worked example, and is planned rather than built**
-> (`docs/superpowers/plans/2026-08-20-intest-f11-scope-aware-403.md`). Which scopes an identity
-> holds is unknowable when the code is generated and knowable when it runs, so the case will
-> carry the operation's declared scopes and a runtime guard will skip it with a stated reason.
-> **Today the generator still emits a wrong-scope 403 for every secured operation**, so against a
-> read-only second identity the read-scoped ones fail. The row above describes the defect, not
-> current behaviour.
+> **F11 is fixed** (`docs/superpowers/plans/2026-08-20-intest-f11-scope-aware-403.md`). Which
+> scopes an identity holds is unknowable when the code is generated and knowable when it runs, so
+> the wrong-scope 403 case carries the operation's declared scopes — the distinct union of every
+> OAuth scope named across every `security` requirement and every scheme within it, ordered —
+> and the generated test calls `RequireSecondaryIdentityLacks(...)` with them, after
+> `RequireMultipleIdentities()` and before selecting the secondary identity. The runtime guard
+> skips, with a stated reason, only when the secondary identity's own declared scopes already
+> cover everything the operation requires; a `null` `Scopes` means "not declared" rather than
+> "holds nothing", so the test runs — deliberately, so auth testing can never be switched off
+> silently by an adopter who has not populated it. `coverage-report.json` reports
+> `authTestsRequiringAnUnderScopedSecondIdentity`, counting how many generated cases have a
+> provability that depends on the second identity's scopes; like its siblings, it is **not** a
+> skip count (§12) — the CLI still cannot know at generation time which of them a project's
+> registered provider will actually skip. The row above records the defect that motivated the
+> fix, not current behaviour.
 
 ### Declared-error contract tests
 
@@ -1102,7 +1110,7 @@ static-token provider only — one token, one identity:
 | Test | Needs | Behaviour |
 |---|---|---|
 | no token → 401 | Nothing. Send no `Authorization` header | **Always generated, always runs** |
-| wrong scope → 403 | A second identity | Generated; skips with a stated reason when unavailable |
+| wrong scope → 403 | A second identity, and — the two are separate requirements, not one — that identity's declared scopes must lack at least one the operation requires. A second identity alone is necessary but not sufficient: one that holds everything the operation needs is authorized for it, and asserting 403 against it would fail a correct API | Generated; skips at runtime with a stated reason when either requirement is unmet — fewer than two identities, or a second identity that already covers the operation's scopes |
 | wrong tenant → 403 | A concept of "another tenant" a spec has no way to declare | **Not in v1-c.** `IdentitySlot.Secondary` and `Identities[1]` are the same mechanism a team could seed as a second tenant, but `TestPlanBuilder` builds no case that asserts it — nothing in a spec distinguishes "wrong scope" from "wrong tenant" for it to key on. `ITestTokenProvider.cs`'s own doc comment and this section still name the possibility; recorded rather than lost, the same treatment decision 5 gives its own exclusions |
 
 Both send a generated, unmatchable id and no body — decision 6, and the reasoning is safety, not
@@ -1143,6 +1151,7 @@ The wrong-scope case therefore calls a plain method, in the test body, after
 public async Task GetOrderById_Forbidden()
 {
     RequireMultipleIdentities();
+    RequireSecondaryIdentityLacks("orders.read");
     using var _ = UseIdentity(IdentitySlot.Secondary);
 
     using var request = new HttpRequestMessage(
@@ -1161,7 +1170,22 @@ public async Task GetOrderById_Forbidden()
 `RequireMultipleIdentities` (`ApiTestBase`) reads the registered provider's `Identities.Count`
 and calls `Assert.Inconclusive` with a stated reason below two — confirmed to survive verbatim
 into the `.trx`'s `<Message>`, spelled `NotExecuted` there, not the console summary's "Skipped".
-The no-token case needs no such guard and always runs:
+
+`RequireSecondaryIdentityLacks` (F11) runs next, before `UseIdentity` selects the secondary
+identity — never before `RequireMultipleIdentities`, since it indexes `Identities[1]` and that
+guard is what makes the index safe. Its arguments are the operation's declared scopes: the
+distinct union of every OAuth scope named across every `security` requirement and every scheme
+within it, in sorted order (`TestPlanBuilder.RequiredScopes`). It `Assert.Inconclusive`s, with the
+secondary identity's name and held scopes in the message, only when that identity's own
+`TestIdentity.Scopes` already contains every scope listed here — otherwise the 403 is still real,
+and the method falls through and the test runs. `mstest-class.scriban` emits this call only for an
+operation whose scope union is non-empty; an operation with no declared scopes (or `security` with
+no scopes at all) never renders it, and its 403 case still runs unconditionally once
+`RequireMultipleIdentities` passes. A `null` `TestIdentity.Scopes` — the identity's own scopes not
+declared, distinct from an empty list declaring it holds none — always falls through too: not
+declared means unknown, and unknown means run, never skip, so auth testing cannot be switched off
+merely by an adopter leaving `Scopes` unset. The no-token case needs no such guard and always
+runs:
 
 ```csharp
 [TestMethod, TestCategory("Contract")]
@@ -1186,11 +1210,27 @@ named "gated **on**", not "skipped for want of": whether a generated case is act
 decided at runtime, against whatever `ITestTokenProvider` a project registers, and the CLI
 writes this report long before that provider exists. What it can say honestly is how many
 generated cases *require* a second identity to run at all — only the wrong-scope 403 case does;
-the no-token 401 case always runs regardless.
+the no-token 401 case always runs regardless. A third key, `authTestsRequiringAnUnderScopedSecondIdentity`
+(F11), narrows that further to how many of those cases belong to an operation that declares
+required scopes at all — the ones whose skip additionally depends on the second identity's own
+declared `Scopes`, not just its presence. Like its sibling, this is **not** a skip count, for the
+same reason: the CLI cannot know at generation time what any project's provider will advertise.
 
 **The cost is now entirely the team's** — rev 2 costed this as "a multi-identity token
 provider" that InTest would ship; rev 3 ships none, so the 401 half is free and the 403 half
 costs the team an `ITestTokenProvider` implementation.
+
+**A known limitation: the scope union is stricter than OpenAPI's OR semantics.** `security` is a
+logical OR across requirements — an identity satisfying any one requirement in full is
+authorized — but `RequiredScopes` flattens every requirement's every scheme into a single union
+(`TestPlanBuilder.RequiredScopes`), which is an over-approximation for any operation that declares
+more than one requirement. That enlargement is only safe against one failure mode: it cannot make
+a case skip when it should have run. It does not prevent the opposite — for a multi-requirement
+operation, an identity that fully satisfies one alternative requirement gets measured against the
+union of *every* requirement's scopes rather than just the one it satisfies, so a case that should
+skip as unable to produce a 403 can instead run and fail against a status the API is correct to
+return. Every sample spec today declares exactly one security requirement, so this is a real,
+documented gap, not one any shipped spec has triggered.
 
 **This is unconditional in v1.** An earlier draft made auth tests go/no-go on whether one
 organisation's specs widely declared `security`, which is the wrong dependency for a tool other

@@ -151,7 +151,11 @@ the interface.
 ```csharp
 public sealed class OrdersTokenProvider : ITestTokenProvider
 {
-    public IReadOnlyList<string> Identities => ["default", "wrong-scope"];
+    public IReadOnlyList<TestIdentity> Identities { get; } =
+    [
+        new TestIdentity("orders-client", ["orders.read", "orders.write"]),
+        new TestIdentity("orders-readonly", ["orders.read"])
+    ];
 
     public Task<string> GetTokenAsync(string audience, string? identity = null,
                                       CancellationToken ct = default) => /* ... */;
@@ -171,11 +175,17 @@ private static void Register(IServiceCollection services, IConfiguration configu
 handlers both setting `Authorization` does not fail loudly — the one registered last silently
 wins, and whichever one lost looks, from the outside, like it was never called.
 
-`Identities` decides which auth tests run. Return one and the generated "wrong scope → 403"
-cases skip at run time with a stated reason (`RequireMultipleIdentities`, §9). Return more and
-they run. The "no token → 401" cases always run regardless of how many identities a provider
-advertises. InTest ships only a static-token provider — no cloud SDK, no identity library — so
-anything past one identity is the team's to write.
+`Identities` decides which auth tests run, and for the "wrong scope → 403" cases, so does each
+identity's declared `Scopes`. Return one identity and every "wrong scope → 403" case skips at run
+time with a stated reason (`RequireMultipleIdentities`, §9). Return two or more and each case
+runs unless the second identity's `Scopes` already cover everything the operation requires, in
+which case `RequireSecondaryIdentityLacks` (§9) skips it instead. A read-only second identity
+like `orders-readonly` above is the common case for a real API, and without declaring its
+`Scopes`, its read operations' "wrong scope → 403" tests cannot pass — there is nothing for the
+guard to skip them on, so they run against a request that identity is genuinely authorized for,
+and fail. The "no token → 401" cases always run regardless of how many identities a provider
+advertises or what scopes they hold. InTest ships only a static-token provider — no cloud SDK, no
+identity library — so anything past one identity is the team's to write.
 
 **Readiness never depends on any of this.** It probes on `InTestClients.Readiness`, a client
 with no auth handler attached at all, so an unreachable identity provider cannot make the
