@@ -38,6 +38,15 @@
           "200": { "description": "ok" }
         }
       }
+    },
+    "/widgets/newline": {
+      "get": {
+        "operationId": "list\nThings\rMore",
+        "tags": ["Widgets"],
+        "responses": {
+          "200": { "description": "ok" }
+        }
+      }
     }
   }
 }

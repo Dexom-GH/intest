@@ -103,6 +103,17 @@ public class CompileVerificationTests
     /// example or default never gets a fixture-sentinelled value (see
     /// <c>FixtureComposer.ParameterValue</c>), so it appears in
     /// <c>TestCasePlan.QueryParameterNames</c> without ever making the operation need a fixture.
+    /// Its fourth operation carries an embedded LF and CR in its operationId (also parameterless
+    /// and fixture-free) — CSharpLiteral.Escape's forbidden set is the full C# grammar rule, not
+    /// just the two characters the original bug report happened to name, and CR/LF specifically
+    /// must be proven through a real compile, not only through CSharpLiteralTests' unit
+    /// assertions: this is what actually confirms <c>OperationKey.Resolve</c>'s <c>.Trim()</c>
+    /// does not strip an embedded (as opposed to leading/trailing) newline before it reaches the
+    /// template. The three other New_Line_Characters the grammar also forbids — NEL (U+0085), LS
+    /// (U+2028), PS (U+2029) — are exercised only at the unit level in CSharpLiteralTests; all
+    /// three were confirmed (by direct experiment against csc, and by tracing them through
+    /// SpecLoader into a parsed operationId) to survive JSON parsing and to break a real
+    /// compile if left raw, so the gap is unproven-through-this-pipeline, not untested.
     /// A hostile path *parameter* name could not be added the same way: any path parameter is
     /// unconditionally sentinelled (decision 1), so it unconditionally sets NeedsFixture — that
     /// site's escaping is covered instead by TemplateRendererTests, which does not need a real
