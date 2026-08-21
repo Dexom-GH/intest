@@ -327,11 +327,14 @@ public static class TestPlanBuilder
             : securityRequirements
                 .SelectMany(requirement => requirement.Values)
                 .SelectMany(scopes => scopes)
-                // RFC 6749 scope tokens are case-sensitive (mirrors the reasoning in
-                // ApiTestBase.RequireSecondaryIdentityLacks around its own scopes.Contains call):
-                // "orders.read" and "ORDERS.READ" are two distinct scopes, so an ignore-case
-                // comparer here would silently collapse them and drop a requirement the 403
-                // guard should be comparing against.
+                // RFC 6749 scope tokens are case-sensitive: "orders.read" and "ORDERS.READ" are
+                // two distinct scopes, so an ignore-case comparer here would silently collapse
+                // them and drop a requirement the 403 guard should be comparing against. This is
+                // the same explicit-Ordinal discipline ApiTestBase.RequireSecondaryIdentityLacks
+                // applies to its own scope comparison, via the three-argument
+                // scopes.Contains(s, StringComparer.Ordinal) overload — not the two-argument
+                // scopes.Contains, which would silently defer to whatever comparer the
+                // secondary identity's own Scopes collection happens to have been built with.
                 .Distinct(StringComparer.Ordinal)
                 // Dictionary<,> enumeration order is unspecified, and this is the only collection
                 // this file builds that isn't explicitly ordered. It matters here because Task 4

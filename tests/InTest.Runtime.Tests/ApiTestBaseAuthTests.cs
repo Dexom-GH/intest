@@ -288,12 +288,28 @@ public class ApiTestBaseAuthTests
     [TestMethod]
     public void ScopeComparisonIsOrdinalAndCaseSensitive()
     {
-        // RFC 6749 scope tokens are case-sensitive, so EqualityComparer<string>.Default (what
-        // scopes.Contains binds to) is the correct comparer. Pins the behaviour so a future
-        // switch to OrdinalIgnoreCase would be caught rather than passing every existing test.
+        // RFC 6749 scope tokens are case-sensitive, so the explicit StringComparer.Ordinal
+        // passed to the three-argument Contains overload is the correct comparer. Pins the
+        // behaviour so a future switch to OrdinalIgnoreCase would be caught rather than passing
+        // every existing test.
         TestHost.TokenProvider = new FakeTokenProvider(
             new TestIdentity("default"),
             new TestIdentity("readonly", ["ORDERS.READ"]));
+
+        Should.NotThrow(() => ApiTestBase.RequireSecondaryIdentityLacks("orders.read"));
+
+        // Regression: a secondary whose Scopes is a HashSet<string> built with
+        // OrdinalIgnoreCase must not change the outcome. requiredScopes.All(scopes.Contains)
+        // (the two-argument form) hits Enumerable.Contains's ICollection<T> fast path, which
+        // delegates to the collection's own Contains — HashSet<string>.Contains uses whatever
+        // comparer the set was constructed with, not EqualityComparer<string>.Default. That
+        // silently made a case-insensitive match look like the identity held the exact scope,
+        // skipping a provable 403. The explicit three-argument overload has no such fast path:
+        // it always enumerates and compares with the comparer passed to it, regardless of what
+        // collection type backs `scopes`.
+        TestHost.TokenProvider = new FakeTokenProvider(
+            new TestIdentity("default"),
+            new TestIdentity("readonly", new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "ORDERS.READ" }));
 
         Should.NotThrow(() => ApiTestBase.RequireSecondaryIdentityLacks("orders.read"));
     }

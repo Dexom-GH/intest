@@ -154,14 +154,25 @@ public abstract class ApiTestBase
     /// hand-written 403 test can call it directly, with nothing having run before it. This gate
     /// reaches further than <see cref="ResolveIdentitySlot"/> does — all the way to
     /// <c>Identities[1]</c> and its <see cref="TestIdentity.Scopes"/> — so every one of "no
-    /// provider", "<c>Identities</c> itself null", "fewer than two identities", and "the second
-    /// element itself is null" must fall through to running the test, never to skipping and
-    /// never to throwing. v1-c shipped a live <see cref="NullReferenceException"/> on exactly
-    /// this shape (a provider guarded, but not its <c>Identities</c>) in
-    /// <see cref="RequireMultipleIdentities"/> itself; this guard exists precisely so that
-    /// mistake is not repeated one index further in. A <c>null</c> <see cref="TestIdentity.Scopes"/>
-    /// also falls through here — not declared / unknown means run and allow the test to fail,
-    /// never skip.
+    /// provider", "<c>Identities</c> itself null", and "fewer than two identities" must fall
+    /// through to this method returning without a skip. v1-c shipped a live
+    /// <see cref="NullReferenceException"/> on exactly this shape (a provider guarded, but not
+    /// its <c>Identities</c>) in <see cref="RequireMultipleIdentities"/> itself; this guard
+    /// exists precisely so that mistake is not repeated one index further in. A <c>null</c>
+    /// <see cref="TestIdentity.Scopes"/> also falls through here — not declared / unknown means
+    /// run and allow the test to fail, never skip.
+    /// </para>
+    /// <para>
+    /// "The second element itself is null" also falls through this method without a skip — but
+    /// that is narrower than it sounds. This method only ever guarantees it will not itself
+    /// <em>skip</em> the test on that shape; it does not guarantee the test goes on to run.
+    /// A provider whose second element is null violates <see cref="ITestTokenProvider.Identities"/>'s
+    /// non-null annotation, and the generated case's very next call, <see cref="UseIdentity"/>,
+    /// resolves through <see cref="ResolveIdentitySlot"/>, which indexes
+    /// <c>Identities[1].Name</c> unguarded and throws <see cref="NullReferenceException"/> on
+    /// exactly that shape. That is intended: failing loudly on a provider that breaks its own
+    /// contract is preferable to this method inventing a defensive skip for a state it has no
+    /// principled reason to call "not a 403".
     /// </para>
     /// <para>
     /// <c>protected internal</c> for the same two reasons as <see cref="RequireMultipleIdentities"/>.
@@ -181,12 +192,17 @@ public abstract class ApiTestBase
         // the line above must be its own check rather than falling through to this one: a
         // scope-free operation can still 403 on other grounds (tenant, role, resource
         // ownership), and skipping would assert something this code has no basis for.
-        if (!requiredScopes.All(scopes.Contains)) return;    // lacks at least one: the 403 is real
+        if (!requiredScopes.All(s => scopes.Contains(s, StringComparer.Ordinal))) return;    // lacks at least one: the 403 is real
 
-        // scopes.Contains (above) binds Enumerable.Contains, so comparison is
-        // EqualityComparer<string>.Default — ordinal, case-sensitive. That is correct: RFC 6749
-        // scope tokens are case-sensitive, so "ORDERS.READ" must not satisfy a requirement for
-        // "orders.read".
+        // The comparer above is explicit, not incidental: Enumerable.Contains(source, value) has
+        // an ICollection<T> fast path that delegates to the collection's own Contains, so
+        // `scopes.Contains` (the two-argument form) would use *whatever comparer `scopes` itself
+        // was built with* — e.g. OrdinalIgnoreCase, if the adopter's TestIdentity used a
+        // case-insensitive HashSet<string> — rather than a comparer this method controls. The
+        // three-argument overload used above has no such fast path; it always enumerates and
+        // compares with the comparer passed to it. RFC 6749 scope tokens are case-sensitive, so
+        // "ORDERS.READ" must not satisfy a requirement for "orders.read" regardless of how the
+        // secondary identity's Scopes collection happens to compare equality internally.
         var extra = scopes.Except(requiredScopes).Any();
         Assert.Inconclusive(extra
             ? $"Skipped: the secondary identity '{secondary.Name}' holds {string.Join(", ", scopes)} — " +
@@ -229,7 +245,13 @@ public abstract class ApiTestBase
     /// <c>Identities[1]</c> directly rather than defensively, because the only caller that ever
     /// selects it — a generated 403 case — has already called
     /// <see cref="RequireMultipleIdentities"/> first, in the same method body, which would have
-    /// thrown before reaching this if fewer than two identities were registered.
+    /// thrown before reaching this if fewer than two identities were registered. That prior call
+    /// says nothing about the element itself being non-null, though: a provider whose
+    /// <c>Identities[1]</c> is itself null — violating <see cref="ITestTokenProvider.Identities"/>'s
+    /// non-null annotation, which nothing at compile time or in <see cref="RequireMultipleIdentities"/>
+    /// enforces — reaches <c>Identities[1].Name</c> here unguarded and throws
+    /// <see cref="NullReferenceException"/>, deliberately: failing loudly on a provider that
+    /// breaks its own contract is the intended treatment, not a gap this method should paper over.
     /// </summary>
     internal static string ResolveIdentitySlot(IdentitySlot slot, ITestTokenProvider? provider) => slot switch
     {

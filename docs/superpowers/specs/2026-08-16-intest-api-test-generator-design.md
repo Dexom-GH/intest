@@ -1181,9 +1181,9 @@ identity — always after `RequireMultipleIdentities`, but not because that guar
 `Identities[1]` safe to index; `RequireSecondaryIdentityLacks` re-checks `Identities` itself and
 falls through safely even when called on its own (`ApiTestBase`'s doc comment on the member says
 so). The two guards' firing conditions are mutually exclusive, not a matter of precedence:
-`RequireMultipleIdentities` (`ApiTestBase.cs:114-118`) falls through to `Assert.Inconclusive`
+`RequireMultipleIdentities` falls through to `Assert.Inconclusive`
 iff the provider advertises fewer than two identities, and `RequireSecondaryIdentityLacks`
-(`ApiTestBase.cs:173-176`) returns immediately on that exact condition — `provider?.Identities
+returns immediately on that exact condition — `provider?.Identities
 is not { Count: >= 2 } identities || identities[1] is not { } secondary` — before it ever
 reaches a scope comparison. So the scope guard can only fire in a state the identity-count guard
 has already passed; swapping the two would change neither behavior nor the surfaced message. The
@@ -1977,8 +1977,10 @@ public interface ITestTokenProvider
     /// Identities this provider can issue tokens for, in order. Index 0 is the default identity
     /// every ordinary case authenticates as; index 1, when present, is the "some other identity"
     /// the wrong-scope 403 case selects (v1-c decision 7). Empty or single-element gates that
-    /// case off. Also the source of the coverage-report count.
-    IReadOnlyList<string> Identities { get; }
+    /// case off. Also the source of the coverage-report count. Each element carries its own
+    /// declared TestIdentity.Scopes (F11), which RequireSecondaryIdentityLacks compares against
+    /// an operation's required scopes to decide whether a wrong-scope 403 is still provable.
+    IReadOnlyList<TestIdentity> Identities { get; }
 
     Task<string> GetTokenAsync(string audience, string? identity = null, CancellationToken cancellationToken = default);
 }
@@ -1990,10 +1992,13 @@ case sends no `Authorization` header at all and never reaches the provider.)
 `IReadOnlyList`, not `IReadOnlyCollection`: the CLI generates test code long before an adopter
 has written a provider, so generated code can never reference an identity by name — only by
 position (decision 7). A case selects an identity by *slot*, never by name; nothing anywhere
-emits a literal identity name into a plan or a template. This is a breaking change from the
-`IReadOnlyCollection` this shipped as, made while nothing outside this repository implements the
-interface yet — the last point at which it was free. From the first published version onward,
-this ordering is a semver promise (§3), not an implementation detail.
+emits a literal identity name into a plan or a template. This reshaped across two breaking
+changes: `IReadOnlyCollection<string>` (what this shipped as) to `IReadOnlyList<string>`, made
+while nothing outside this repository implemented the interface yet — the last point at which it
+was free — and then, in F11, `IReadOnlyList<string>` to `IReadOnlyList<TestIdentity>`, to carry
+each identity's own declared scopes so the wrong-scope 403 guard has something to compare
+against. From the first published version onward, this ordering is a semver promise (§3), not an
+implementation detail.
 
 **`Identities` exists so the 403 gate is a property, not a probe.** Without it the only way to
 discover whether a provider supports a second identity is to call `GetTokenAsync` with an

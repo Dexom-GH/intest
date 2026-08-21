@@ -186,7 +186,12 @@ which case `RequireSecondaryIdentityLacks` (§9) skips it instead. A read-only s
 like `orders-readonly` above is the common case for a real API, and without declaring its
 `Scopes`, its read operations' "wrong scope → 403" tests cannot pass — there is nothing for the
 guard to skip them on, so they run against a request that identity is genuinely authorized for,
-and fail. The "no token → 401" cases always run regardless of how many identities a provider
+and fail. `Scopes` has two distinct empty-looking shapes and the guard treats them differently
+from a non-empty declaration but identically to each other: leaving it `null` means "not
+declared" — unknown, so the test runs — and declaring it `[]` means "declared, and holds none" —
+also always runs, since an empty set can never cover a non-empty requirement. Only a declared,
+non-empty `Scopes` that actually covers everything an operation requires makes the guard skip.
+The "no token → 401" cases always run regardless of how many identities a provider
 advertises or what scopes they hold. InTest ships only a static-token provider — no cloud SDK, no
 identity library — so anything past one identity is the team's to write.
 
