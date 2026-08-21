@@ -52,9 +52,10 @@ dotnet tool install -g InTest.Cli
 intest survey "https://orders-staging.example.com/swagger/v1/swagger.json"
 ```
 
-`survey` takes the same inputs as `spec.source` — a glob over local files, or a URL — because
-when you are still deciding whether to adopt, a Swagger endpoint is often all you have. It
-reads specs and reports; it writes nothing. What it tells you and why you care:
+`survey` takes a glob over local files or a URL directly — broader than `spec.source`, which is
+local-file-only (Prerequisites) — because when you are still deciding whether to adopt, a
+Swagger endpoint is often all you have. It reads specs and reports; it writes nothing. What it
+tells you and why you care:
 
 | Measure | What it means for you |
 |---|---|
