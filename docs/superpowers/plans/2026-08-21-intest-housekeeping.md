@@ -38,6 +38,15 @@ Same convention F11 used, and Task 3 is about making it the house rule.
 
 ## Task 1: Escape spec-derived text in generated C# literals
 
+> **Dispatched externally on 2026-08-21 — do not execute from this plan.** The user started this
+> as a background task (`task_cf790217`) in a separate local session, from the original chip text
+> rather than from this task. That chip is wrong in two ways this task corrects: it asks the
+> implementer to *decide* between escaping and refusing (already decided — see Step 1), and it
+> points only at `TemplateRenderer.cs` (most quoting is in the Scriban template — see Step 2).
+> The corrections were sent to that session directly. **Verify against this task when its work
+> lands**, particularly the byte-identical-ordinary-output constraint in Step 3, which the chip
+> does not mention at all.
+
 **Files:**
 - Modify: `src/InTest.Cli/Rendering/TemplateRenderer.cs`, `src/InTest.Cli/Rendering/Templates/mstest-class.scriban`
 - Test: `tests/InTest.Cli.Tests/TemplateRendererTests.cs`, `tests/InTest.Golden.Tests/CompileVerificationTests.cs`
