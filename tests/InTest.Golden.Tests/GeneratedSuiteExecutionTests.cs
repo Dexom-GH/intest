@@ -284,6 +284,24 @@ public class GeneratedSuiteExecutionTests
     /// <c>HandleSecureResource</c> — answers 200 to any authenticated caller. Its own path, tag,
     /// and operationId, distinct from <see cref="SpecWithSecuredOperation"/>'s, so nothing here
     /// touches the class or test names that test already asserts on.
+    /// <para>
+    /// Task 4 / F11's other half — closing the gap the first pass left open: nothing above proves
+    /// the guard does not skip a case it should not. <c>getScopedSecureResourceRequiringDelete</c>
+    /// below requires both <c>"orders.write"</c> and <c>"orders.delete"</c> — deliberately more
+    /// than one scope, and deliberately one the secondary identity holds and one it does not
+    /// (<see cref="GoldenTokenProviderSources.TwoIdentityTokenProvider"/>'s secondary identity
+    /// declares only <c>"orders.write"</c>). A single-scope requirement the secondary entirely
+    /// lacks cannot tell <c>All</c> from <c>Any</c> apart — both evaluate to false over one
+    /// element — so it would not catch the exact regression this test exists to catch
+    /// (containment flipped from <c>All</c> to <c>Any</c>): partial overlap is what makes them
+    /// diverge. <c>RequireSecondaryIdentityLacks</c>'s <c>requiredScopes.All(scopes.Contains)</c>
+    /// is false (the secondary lacks <c>"orders.delete"</c>), so the case must run rather than
+    /// skip; a mutated <c>Any</c> would see <c>"orders.write"</c> and skip it wrongly. Same tag as
+    /// <c>getScopedSecureResource</c> above (<c>TestPlanBuilder</c> groups generated classes by an
+    /// operation's first tag, <c>ClassName: g.Key + "Tests"</c>), so this lands in the same
+    /// <c>ScopedSecureTests.g.cs</c> file and the same trx run the existing assertions already
+    /// read — no new file, no new build/test invocation needed to prove it.
+    /// </para>
     /// </summary>
     private const string SpecWithScopedSecuredOperation = """
     {
@@ -295,6 +313,23 @@ public class GeneratedSuiteExecutionTests
             "operationId": "getScopedSecureResource",
             "tags": ["ScopedSecure"],
             "security": [{ "bearerAuth": ["orders.write"] }],
+            "responses": {
+              "200": {
+                "description": "ok",
+                "content": {
+                  "application/json": {
+                    "schema": { "$ref": "#/components/schemas/Status" }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "/api/secure-scoped-delete": {
+          "get": {
+            "operationId": "getScopedSecureResourceRequiringDelete",
+            "tags": ["ScopedSecure"],
+            "security": [{ "bearerAuth": ["orders.write", "orders.delete"] }],
             "responses": {
               "200": {
                 "description": "ok",
@@ -889,6 +924,21 @@ public class GeneratedSuiteExecutionTests
     /// .trx's own spelling for an <c>Assert.Inconclusive</c> outcome; "Skipped" is only the console
     /// summary's word for the same thing.
     /// </para>
+    /// <para>
+    /// The other half, closing a gap the first pass of this test left open: pinning only the
+    /// skip branch means a guard that over-skips — <c>All</c> flipped to <c>Any</c>, or the
+    /// empty-<c>requiredScopes</c> early return removed — would still leave the whole repo suite
+    /// green, since every scoped 403 case would turn skip-green too. <c>SpecWithScopedSecuredOperation</c>
+    /// now also declares <c>getScopedSecureResourceRequiringDelete</c>, requiring both
+    /// <c>"orders.write"</c> (which the secondary identity holds) and <c>"orders.delete"</c>
+    /// (which it does not) — partial overlap, deliberately, so <c>All</c> and <c>Any</c> actually
+    /// disagree on it; a single scope the secondary entirely lacks would not distinguish them. So
+    /// its <c>_Forbidden</c> case must run (<c>Passed</c>, not <c>NotExecuted</c>) and receive a
+    /// real 403 from <see cref="GoldenApiStub.HandleScopedSecureResourceRequiringDelete"/>. Both
+    /// operations share the <c>ScopedSecure</c> tag, so both land in the same generated
+    /// <c>ScopedSecureTests.g.cs</c> file and the same trx this test already reads — one guard,
+    /// both branches, proven in one run.
+    /// </para>
     /// </summary>
     [TestMethod]
     public async Task AForbiddenCaseTheSecondaryIdentityIsAuthorizedForSkipsRatherThanFails()
@@ -912,6 +962,11 @@ public class GeneratedSuiteExecutionTests
             customMessage: "the wrong-scope 403 case this test exists to prove must actually be generated");
         generated.ShouldContain("RequireSecondaryIdentityLacks(\"orders.write\");",
             customMessage: "Task 4: the scoped 403 case must carry both guards, not just RequireMultipleIdentities");
+        generated.ShouldContain("GetScopedSecureResourceRequiringDelete_Forbidden",
+            customMessage: "the wrong-scope 403 case that must actually run — the guard's other half — must be generated");
+        generated.ShouldContain("RequireSecondaryIdentityLacks(\"orders.delete\", \"orders.write\");",
+            customMessage: "Task 4: the running scoped 403 case must carry both guards too, not just RequireMultipleIdentities, " +
+                "and must union both required scopes (ordinal-sorted) rather than just one");
 
         var build = await ProcessRunner.RunAsync("dotnet", $"build \"{_root}\" --nologo -v q");
         build.ExitCode.ShouldBe(0, $"generated project failed to build:{Environment.NewLine}{build.Output}");
@@ -926,8 +981,9 @@ public class GeneratedSuiteExecutionTests
         var trx = XDocument.Load(trxPath);
         var results = trx.Descendants().Where(e => e.Name.LocalName == "UnitTestResult").ToList();
 
-        results.Count.ShouldBe(3,
-            $"expected exactly 3 tests (Contract, Unauthorized, Forbidden) but the trx recorded {results.Count}:{Environment.NewLine}{test.Output}");
+        results.Count.ShouldBe(6,
+            $"expected exactly 6 tests (Contract, Unauthorized, Forbidden for each of the two scoped " +
+            $"operations) but the trx recorded {results.Count}:{Environment.NewLine}{test.Output}");
 
         // "No failures" alone would also describe a suite that stopped generating the case at
         // all — the count assertion above already rules that out, but this states the "no
@@ -955,6 +1011,28 @@ public class GeneratedSuiteExecutionTests
                 $"{name} did not receive its expected real status over the wire:{Environment.NewLine}{test.Output}");
         }
 
+        // The gap this test exists to close: nothing above proves the guard does not over-skip.
+        // GetScopedSecureResourceRequiringDelete_Forbidden's secondary identity lacks
+        // "orders.delete" entirely, so RequireSecondaryIdentityLacks must let this case run —
+        // Passed, not NotExecuted — and it must receive a real 403 over the wire from
+        // GoldenApiStub.HandleScopedSecureResourceRequiringDelete.
+        var runningForbiddenResult = results.SingleOrDefault(e =>
+            (e.Attribute("testName")?.Value ?? "").Contains("GetScopedSecureResourceRequiringDelete_Forbidden", StringComparison.Ordinal));
+        runningForbiddenResult.ShouldNotBeNull(
+            $"GetScopedSecureResourceRequiringDelete_Forbidden did not appear in the trx at all:{Environment.NewLine}{test.Output}");
+        runningForbiddenResult!.Attribute("outcome")?.Value.ShouldBe("Passed",
+            $"GetScopedSecureResourceRequiringDelete_Forbidden should have run — the secondary identity does " +
+            $"not hold \"orders.delete\", so RequireSecondaryIdentityLacks must not skip it, and it must " +
+            $"receive a real 403:{Environment.NewLine}{test.Output}");
+
+        foreach (var name in new[] { "GetScopedSecureResourceRequiringDelete_Contract", "GetScopedSecureResourceRequiringDelete_Unauthorized" })
+        {
+            var result = results.SingleOrDefault(e => (e.Attribute("testName")?.Value ?? "").Contains(name, StringComparison.Ordinal));
+            result.ShouldNotBeNull($"{name} did not appear in the trx at all:{Environment.NewLine}{test.Output}");
+            result!.Attribute("outcome")?.Value.ShouldBe("Passed",
+                $"{name} did not receive its expected real status over the wire:{Environment.NewLine}{test.Output}");
+        }
+
         test.ExitCode.ShouldBe(0, test.Output);
 
         // outcome="NotExecuted" is also satisfied by a guard that runs after the request has
@@ -964,6 +1042,12 @@ public class GeneratedSuiteExecutionTests
         // can.
         _stub.ReceivedPaths.Count(p => p == "/api/secure-scoped").ShouldBe(2,
             "Contract and Unauthorized reach the stub; the skipped Forbidden case must never build a request.");
+
+        // The stub-hit assertion is what distinguishes "ran and got a real 403" from "skipped
+        // quietly": all three cases for this operation — including Forbidden — must reach the
+        // wire, unlike the skipped operation just above.
+        _stub.ReceivedPaths.Count(p => p == "/api/secure-scoped-delete").ShouldBe(3,
+            "Contract, Unauthorized, and the running Forbidden case must all reach the stub over the wire.");
     }
 
     /// <summary>

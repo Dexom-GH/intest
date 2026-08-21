@@ -124,6 +124,9 @@ internal sealed class GoldenApiStub : IDisposable
                     // Task 4 / F11's live wire proof — see HandleScopedSecureResource's own doc for
                     // why this path authorizes any bearer token rather than discriminating identities.
                     "/api/secure-scoped" => HandleScopedSecureResource(context.Request),
+                    // Task 4 / F11's other half — see HandleScopedSecureResourceRequiringDelete's
+                    // own doc for why this path, unlike the one above, does discriminate identities.
+                    "/api/secure-scoped-delete" => HandleScopedSecureResourceRequiringDelete(context.Request),
                     // Belt-and-braces, not the primary catch: RequireFixture already throws before a
                     // request carrying an unresolved sentinel is ever built (confirmed by sabotaging
                     // the replace step in FixtureParameterReachesALiveRequestEndToEnd — the failure
@@ -189,6 +192,34 @@ internal sealed class GoldenApiStub : IDisposable
         return string.IsNullOrEmpty(authorization)
             ? (401, """{"error":"unauthorized"}""")
             : (200, """{"state":"ok"}""");
+    }
+
+    /// <summary>
+    /// Task 4 / F11's other live wire proof, alongside <see cref="HandleScopedSecureResource"/>:
+    /// that guard's over-skip failure mode (containment flipped from <c>All</c> to <c>Any</c>, or
+    /// the empty-<c>requiredScopes</c> early return removed) is invisible if every scoped operation
+    /// in the golden suite happens to be one the secondary identity is authorized for — the whole
+    /// run stays green whether the guard skips correctly or skips everything. This path requires
+    /// both <c>"orders.write"</c> and <c>"orders.delete"</c> — the secondary identity in
+    /// <c>GoldenTokenProviderSources.TwoIdentityTokenProvider</c> holds only the former, so it
+    /// does not hold everything this path requires and <c>RequireSecondaryIdentityLacks</c> must
+    /// let the generated 403 case run rather than skip it. Discriminates identity the same way
+    /// <see cref="HandleSecureResource"/> does — <c>"Bearer token-for-default"</c> is authorized,
+    /// anything else is 403 — rather than authorizing any bearer token the way
+    /// <see cref="HandleScopedSecureResource"/> does, because this path's whole point is that the
+    /// secondary identity is genuinely unauthorized here and a real 403 must come back over the wire.
+    /// </summary>
+    private static (int, string) HandleScopedSecureResourceRequiringDelete(HttpListenerRequest request)
+    {
+        var authorization = request.Headers["Authorization"];
+        if (string.IsNullOrEmpty(authorization))
+        {
+            return (401, """{"error":"unauthorized"}""");
+        }
+
+        return authorization == "Bearer token-for-default"
+            ? (200, """{"state":"ok"}""")
+            : (403, """{"error":"forbidden"}""");
     }
 
     private (int, string) HandleHealthCheck()
