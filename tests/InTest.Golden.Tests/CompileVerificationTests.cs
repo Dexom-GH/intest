@@ -78,7 +78,7 @@ public class CompileVerificationTests
     [TestMethod]
     public async Task GeneratedProjectCompiles()
     {
-        var root = CreateProject("hostile-text.json");
+        var root = CreateProject("orders.json");
 
         // Specs/orders.json's GET /orders/{id} has a required path parameter, so under decision
         // 1 that operation needs a fixture. This test never calls `init` — it hand-writes
@@ -89,6 +89,20 @@ public class CompileVerificationTests
 
         (await GenerateCommand.RunAsync(root, CancellationToken.None)).ShouldBe(0);
 
+        // Pins that this test actually compiled orders.json, not some other spec — the same
+        // premise its sibling GeneratedProjectWithHostileSpecTextCompiles pins for its own spec.
+        // A future edit that accidentally swaps CreateProject's argument (exactly what happened
+        // here once already) would otherwise still build a syntactically valid but wrong project
+        // and this test would stay green having compiled the wrong thing. FixtureParameter and
+        // the auth-guard calls only exist because orders.json declares a required path parameter
+        // and a secured operation with scopes — hostile-text.json's four plain parameterless
+        // GETs can never produce either.
+        var generated = await File.ReadAllTextAsync(Path.Combine(root, "Generated", "OrdersTests.g.cs"));
+        generated.ShouldContain("FixtureParameter(\"getOrderById\", \"id\")",
+            customMessage: "orders.json's required path parameter is missing from the generated source — did CreateProject run against the wrong spec?");
+        generated.ShouldContain("RequireMultipleIdentities();",
+            customMessage: "orders.json's auth-guard case is missing from the generated source — did CreateProject run against the wrong spec?");
+
         var (exitCode, output) = await ProcessRunner.RunAsync("dotnet", $"build \"{root}\" --nologo -v q");
 
         exitCode.ShouldBe(0, $"Generated project failed to compile:{Environment.NewLine}{output}");
@@ -97,25 +111,26 @@ public class CompileVerificationTests
     /// <summary>
     /// The real proof that spec-derived text is escaped before it lands in a generated C#
     /// string literal — a string assertion can only confirm a backslash appears somewhere;
-    /// only the compiler can confirm the result is valid C#. Specs/hostile-text.json's
-    /// <c>GET /widgets</c> operation is deliberately parameterless with no JSON request body, so
-    /// <c>FixtureComposer.NeedsFixture</c> is false and its operationId — which contains both
-    /// <c>"</c> and <c>\</c> — reaches <see cref="Rendering.TemplateRenderer"/> unvalidated by
-    /// <c>FixtureDocument.TryValidateOperationKey</c> (that check only runs when
-    /// <c>needsFixture</c> is true, because only then does the key become a fixture filename).
-    /// That is the exact live path the reported defect travels: a fully valid OpenAPI document
-    /// whose parameterless operation's operationId embeds a C#-literal-breaking character. The
-    /// same spec's second operation exercises a hostile path template (a literal <c>"</c> and
-    /// <c>\</c> in the URL text, still with no parameters, so it stays fixture-free too), and its
-    /// third exercises a hostile query parameter name — an optional query parameter with no
-    /// example or default never gets a fixture-sentinelled value (see
-    /// <c>FixtureComposer.ParameterValue</c>), so it appears in
-    /// <c>TestCasePlan.QueryParameterNames</c> without ever making the operation need a fixture.
-    /// Its fourth operation carries an embedded LF and CR in its operationId (also parameterless
-    /// and fixture-free) — CSharpLiteral.Escape's forbidden set is the full C# grammar rule, not
-    /// just the two characters the original bug report happened to name, and CR/LF specifically
-    /// must be proven through a real compile, not only through CSharpLiteralTests' unit
-    /// assertions: this is what actually confirms <c>OperationKey.Resolve</c>'s <c>.Trim()</c>
+    /// only the compiler can confirm the result is valid C#.
+    /// <para>
+    /// Every operation in Specs/hostile-text.json is deliberately parameterless with no JSON
+    /// request body, so none of them ever trips TestPlanBuilder.cs's <c>needsFixture</c> gate —
+    /// see that file's comment on the <c>if (needsFixture &amp;&amp; !FixtureDocument.TryValidateOperationKey(...))</c>
+    /// check for the canonical explanation of why the gate stays that narrow and what it means
+    /// for a hostile operationId to reach <see cref="Rendering.TemplateRenderer"/> unvalidated.
+    /// This is the exact live path the reported defect travels: a fully valid OpenAPI document
+    /// whose parameterless operation's operationId embeds a C#-literal-breaking character.
+    /// </para>
+    /// <para>
+    /// The spec's four operations each isolate one site: the first's operationId contains both
+    /// <c>"</c> and <c>\</c>; the second exercises a hostile path template (still parameterless,
+    /// so it stays fixture-free too); the third exercises a hostile query parameter name — an
+    /// optional query parameter with no example or default never gets a fixture-sentinelled
+    /// value (see <c>FixtureComposer.ParameterValue</c>), so it appears in
+    /// <c>TestCasePlan.QueryParameterNames</c> without ever making the operation need a fixture;
+    /// the fourth carries an embedded LF and CR in its operationId, proving CSharpLiteral.Escape's
+    /// full C# grammar set through a real compile rather than only CSharpLiteralTests' unit
+    /// assertions — this is what actually confirms <c>OperationKey.Resolve</c>'s <c>.Trim()</c>
     /// does not strip an embedded (as opposed to leading/trailing) newline before it reaches the
     /// template. The three other New_Line_Characters the grammar also forbids — NEL (U+0085), LS
     /// (U+2028), PS (U+2029) — are exercised only at the unit level in CSharpLiteralTests; all
@@ -124,8 +139,9 @@ public class CompileVerificationTests
     /// compile if left raw, so the gap is unproven-through-this-pipeline, not untested.
     /// A hostile path *parameter* name could not be added the same way: any path parameter is
     /// unconditionally sentinelled (decision 1), so it unconditionally sets NeedsFixture — that
-    /// site's escaping is covered instead by TemplateRendererTests, which does not need a real
-    /// spec to reach it.
+    /// site's escaping is covered instead by TemplateRendererEscapingTests, which does not need
+    /// a real spec to reach it.
+    /// </para>
     /// <para>
     /// No <c>FixturesRepairCommand.RunAsync</c> call here, unlike <see cref="GeneratedProjectCompiles"/>:
     /// every operation in hostile-text.json is deliberately fixture-free (that's the whole

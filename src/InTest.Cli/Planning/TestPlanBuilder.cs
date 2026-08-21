@@ -67,9 +67,12 @@ public static class TestPlanBuilder
                 // nothing here for this check to protect.
                 //
                 // The consequence is real and worth stating plainly rather than leaving implicit:
-                // for a parameterless operation (needsFixture == false) the key is never checked
-                // by this line at all — including TryValidateOperationKey's char.IsControl check,
-                // so an operationId with an embedded newline passes straight through here.
+                // for a parameterless, body-free operation (needsFixture == false — see
+                // FixtureComposer.NeedsFixture: false only when there is no JSON body to compose
+                // AND no path/query parameter carrying a value, so a parameterless operation with
+                // a JSON body is NOT this case) the key is never checked by this line at all —
+                // including TryValidateOperationKey's char.IsControl check, so an operationId
+                // with an embedded newline passes straight through here.
                 //
                 // That is safe only because a different, separately-scoped mechanism owns that
                 // hazard: CSharpLiteral.Escape, applied to every operation key TemplateRenderer
@@ -79,9 +82,16 @@ public static class TestPlanBuilder
                 // separate and must not be merged into one check run unconditionally: refuse here
                 // when the text would have to name a file nothing can write; escape there when the
                 // text is only ever going to be a C# string literal. Running the filename check
-                // unconditionally would trade a compile error for a silently missing test on every
-                // parameterless operation with an inconvenient operationId — the worse failure in
-                // this codebase's terms.
+                // unconditionally would skip a perfectly testable operation over a character that
+                // causes no problem once escaped — trading a working test for no test at all, to
+                // guard against a failure mode (a broken compile) that no longer exists once the
+                // escaping side of this pair is in place.
+                //
+                // This comment is the canonical explanation of the needsFixture gate and why it
+                // stays narrow; TemplateRendererEscapingTests.cs and CompileVerificationTests.cs
+                // each restate only what they locally need and point back here rather than
+                // re-deriving the mechanism — keep it that way rather than letting a future edit
+                // re-explain the gate a fourth time somewhere else.
                 if (needsFixture && !FixtureDocument.TryValidateOperationKey(key.Value, out var reason))
                 {
                     skipped.Add(new SkippedOperation(key.Value, reason));

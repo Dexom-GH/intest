@@ -49,4 +49,28 @@ public class GoldenFileTests
     {
         (await RenderAsync()).ShouldBe(await RenderAsync());
     }
+
+    /// <summary>
+    /// Closes a gap review found in TemplateEscapingGuardTests: that test allow-lists
+    /// mstest-class.scriban's bare {{ tc.category }} interpolation on the strength of a comment
+    /// claiming Category is always the constant TestPlanBuilder.ContractCategory = "Contract"
+    /// (TestPlanBuilder.cs:12) — never spec-derived, so nothing needs escaping there. Nothing
+    /// mechanically enforced that claim; TestCasePlan.Category is a plain public string with no
+    /// invariant of its own. This asserts it directly against the plan that also drives the
+    /// golden file, which — unlike TestPlanBuilderTests' narrower specs — already produces
+    /// Success, DeclaredError and Auth cases together, so the assertion covers every role this
+    /// branch generates without needing its own spec.
+    /// </summary>
+    [TestMethod]
+    public async Task EveryCaseIsCategorizedContract()
+    {
+        var spec = await SpecLoader.LoadFromFileAsync(SpecPath);
+        var plan = TestPlanBuilder.Build(spec.Document);
+        var cases = plan.Classes.SelectMany(c => c.Cases).ToList();
+
+        cases.Select(c => c.Role).Distinct().Count().ShouldBeGreaterThan(1,
+            "this spec no longer exercises multiple CaseRole values — the point of asserting " +
+            "against it rather than a synthetic single-role plan.");
+        cases.ShouldAllBe(c => c.Category == "Contract");
+    }
 }

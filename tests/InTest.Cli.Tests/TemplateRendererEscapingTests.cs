@@ -11,18 +11,17 @@ namespace InTest.Cli.Tests;
 /// rather than wedged between that file's plan factories and its shared <see cref="Render"/>
 /// helper.
 /// <para>
-/// TestPlanBuilder.cs's fixture-filename check (FixtureDocument.TryValidateOperationKey) only
-/// runs when NeedsFixture is true, because only then does the operationId become a fixture file
-/// name. A parameterless, body-free operation never needs a fixture, so a `"`, `\`, or embedded
-/// newline in its operationId reaches TemplateRenderer completely unvalidated — the live bug
-/// this escaping fixes. The plans below all default NeedsFixture to true (the record's default),
-/// which is irrelevant to TemplateRenderer: rendering never consults NeedsFixture itself, only
-/// the case Role — so hostile text is exercised directly here without needing to fake the
-/// fixture-need computation the real bug depends on. The actual "does this reach the renderer
-/// through the real fixture-need gate" proof lives in
-/// CompileVerificationTests.GeneratedProjectWithHostileSpecTextCompiles, which compiles a real
-/// generated project from a real spec and asserts on the generated file's content — a string
-/// assertion here can only prove escaping happened, not that the result is valid C#.
+/// Why a hostile operationId ever reaches TemplateRenderer unvalidated — the needsFixture gate,
+/// and why it stays that narrow — is explained once, canonically, at TestPlanBuilder.cs's
+/// <c>if (needsFixture &amp;&amp; !FixtureDocument.TryValidateOperationKey(...))</c> check; this
+/// file does not re-derive that reasoning. What is locally relevant here: the plans below all
+/// default NeedsFixture to true (TestCasePlan's own record default), which TemplateRenderer
+/// never actually consults — rendering only ever looks at Role — so hostile text is exercised
+/// directly against <see cref="Render"/> without needing to fake the real gate at all. That a
+/// hostile operation actually reaches the renderer *through* the real gate is proven separately
+/// by <c>CompileVerificationTests.GeneratedProjectWithHostileSpecTextCompiles</c>, which compiles
+/// a real generated project from a real spec and asserts on the generated file's content — a
+/// string assertion here can only prove escaping happened, not that the result is valid C#.
 /// </para>
 /// </summary>
 [TestClass]

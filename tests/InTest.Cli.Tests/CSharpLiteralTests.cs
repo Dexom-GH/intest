@@ -42,15 +42,14 @@ public class CSharpLiteralTests
 
     // --- New_Line_Characters (the C# grammar's forbidden set beyond '\' and '"') ---
     //
-    // A regular_string_literal_character excludes exactly seven characters: '\', '"', and the
-    // five New_Line_Characters CR, LF, NEL (U+0085), LS (U+2028) and PS (U+2029). Left raw in a
-    // generated string literal, any of the five ends the line the literal is on mid-string and
-    // the compiler reports CS1010 "Newline in constant" — confirmed by direct experiment against
-    // csc for all five, not assumed from the grammar text alone. Every DataRow below builds its
-    // character from a numeric code point rather than pasting the literal glyph, for the same
-    // reason CSharpLiteral.cs itself does: NEL, LS and PS are themselves line-terminator-like
-    // characters, so writing them as raw source text risks a tool silently reinterpreting lines
-    // around them (this file must stay plain ASCII to avoid that).
+    // The full seven-character forbidden set, and why any of the five New_Line_Characters left
+    // raw produces CS1010 "Newline in constant", is explained once, canonically, on
+    // CSharpLiteral.Escape's own doc comment — not restated here. Locally relevant: every
+    // DataRow below builds its character from a numeric code point rather than pasting the
+    // literal glyph, for the same reason CSharpLiteral.cs itself does — NEL, LS and PS are
+    // themselves line-terminator-like characters, so writing them as raw source text risks a
+    // tool silently reinterpreting lines around them (this file must stay plain ASCII to avoid
+    // that).
     [TestMethod]
     [DataRow(0x000D, "\\r", DisplayName = "CR")]
     [DataRow(0x000A, "\\n", DisplayName = "LF")]
