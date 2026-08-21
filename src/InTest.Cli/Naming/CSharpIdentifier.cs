@@ -84,6 +84,29 @@ public static class CSharpIdentifier
         => Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(key)))[..6];
 
     /// <summary>
+    /// The one sentence anything in this tool uses to refuse a value the adopter left blank:
+    /// name the setting, say it is empty, state the rule that governs it. The caller supplies
+    /// <paramref name="rule"/> because the rule differs per setting; the shape does not.
+    /// <para>
+    /// It is a method here rather than a convention repeated at each refusal site because two
+    /// producers need it and they must not be able to drift: <see cref="TryValidateDottedName"/>
+    /// owns the blank case for <c>--name</c>, <c>project.rootNamespace</c> and
+    /// <c>project.testBaseClass</c>, while <c>Commands.CommandArguments</c> owns it for every
+    /// other command argument. Same object in memory, not two copies that agree today — the same
+    /// reason <c>CoverageReport</c> matches <c>TestPlanBuilder.NoPathParameterNoteReason</c>
+    /// rather than a hand-copied literal. It lives in this layer, not in <c>Commands</c>, because
+    /// <c>Commands</c> already depends on <c>Naming</c> and the reverse dependency would be new.
+    /// </para>
+    /// <para>
+    /// This fixes the shape, not the whole message. What leads it (the setting) and what closes
+    /// it (a copyable example) are supplied per call site, so a new refusal can still share this
+    /// and get the shape wrong — <c>InitCommandTests.RefusesEveryBlankArgumentInTheSameShape</c>
+    /// asserts the assembled message for that reason.
+    /// </para>
+    /// </summary>
+    public static string EmptyValueReason(string setting, string rule) => $"{setting} is empty. {rule}";
+
+    /// <summary>
     /// Validates a dotted C# name — a namespace or a base class name — before it is emitted as
     /// declaration syntax. <c>mstest-class.scriban</c> writes <c>project.rootNamespace</c> and
     /// <c>project.testBaseClass</c> as <c>namespace {{ namespace }};</c> and
@@ -110,7 +133,7 @@ public static class CSharpIdentifier
 
         if (string.IsNullOrWhiteSpace(value))
         {
-            reason = $"{setting} is empty. {rule}";
+            reason = EmptyValueReason(setting, rule);
             return false;
         }
 

@@ -57,6 +57,19 @@ public static class GenerateCommand
 
         try
         {
+            // --project is an argument the adopter typed, so it is refused, not reported as a
+            // crash. Without this it reached ConfigLoader.Load's ThrowIfNullOrWhiteSpace and came
+            // back through the catch-all below as "intest: unexpected failure: ArgumentException:
+            // ... (Parameter 'projectRoot')" — the right exit code attached to the wrong sentence,
+            // naming a C# parameter the adopter never wrote. Same rule and same shape as `init`
+            // uses; see CommandArguments.
+            if (!CommandArguments.TryRequireValue(
+                    projectRoot, "--project", CommandArguments.ProjectRule, out var projectReason))
+            {
+                Console.Error.WriteLine(projectReason);
+                return ExitToolError;
+            }
+
             // Every intest.json setting this command reads is validated here, before anything is
             // written — including the two that reach generated code as declaration syntax. See
             // ConfigLoader for why that lives in one loader rather than at each read site.

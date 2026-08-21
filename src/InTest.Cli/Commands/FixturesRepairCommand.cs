@@ -26,6 +26,19 @@ public static class FixturesRepairCommand
 
         try
         {
+            // --project is an argument the adopter typed, so it is refused, not reported as a
+            // crash. Without this it reached ConfigLoader.Load's ThrowIfNullOrWhiteSpace and came
+            // back through the catch-all below as "intest: unexpected failure: ArgumentException:
+            // ... (Parameter 'projectRoot')" — the right exit code attached to the wrong sentence,
+            // naming a C# parameter the adopter never wrote. Same rule and same shape as `init`
+            // uses; see CommandArguments.
+            if (!CommandArguments.TryRequireValue(
+                    projectRoot, "--project", CommandArguments.ProjectRule, out var projectReason))
+            {
+                Console.Error.WriteLine(projectReason);
+                return ExitToolError;
+            }
+
             // The whole of intest.json, through the same loader `generate` uses — not just the
             // spec.source this command reads. A config that is valid for repair but not for
             // generate is a state nobody can reason about: repair succeeds, the adopter concludes

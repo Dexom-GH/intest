@@ -60,14 +60,15 @@ public class GenerateCommandTests
     private async Task<int> RunAsync() => await GenerateCommand.RunAsync(_root, CancellationToken.None);
 
     /// <summary>Runs `generate` with stderr captured, so a test can assert what the adopter is told.</summary>
-    private async Task<(int ExitCode, string Error)> RunCapturingErrorAsync()
+    private async Task<(int ExitCode, string Error)> RunCapturingErrorAsync(string? projectRoot = null)
     {
         var originalError = Console.Error;
         var capturedError = new StringWriter();
         Console.SetError(capturedError);
         try
         {
-            return (await RunAsync(), capturedError.ToString());
+            return (await GenerateCommand.RunAsync(projectRoot ?? _root, CancellationToken.None),
+                    capturedError.ToString());
         }
         finally
         {
@@ -297,4 +298,27 @@ public class GenerateCommandTests
 
         error.ShouldContain("project.rootNamespace");
     }
+
+    /// <summary>
+    /// `--project` is an argument the adopter typed, not a crash. It reached ConfigLoader.Load's
+    /// ArgumentException.ThrowIfNullOrWhiteSpace and came back as
+    /// "intest: unexpected failure: ArgumentException: ... (Parameter 'projectRoot')" — the right
+    /// exit code attached to the wrong sentence, naming a C# parameter the adopter never wrote
+    /// instead of the flag they did. `init` had the same rule stated a third way; there is one
+    /// now, in CommandArguments, and this is generate's call site of it.
+    /// </summary>
+    [TestMethod]
+    public async Task RefusesABlankProjectRatherThanReportingItAsACrash()
+    {
+        var (exitCode, error) = await RunCapturingErrorAsync(projectRoot: "");
+
+        exitCode.ShouldBe(GenerateCommand.ExitToolError);
+        error.ShouldNotContain("unexpected failure",
+            customMessage: "an argument the adopter got wrong is refused, not reported as a crash");
+        error.ShouldStartWith("--project",
+            customMessage: "a refusal names the flag the adopter typed, not the parameter it bound to");
+        error.ShouldContain("is empty");
+        error.ShouldContain("for example");
+    }
+
 }

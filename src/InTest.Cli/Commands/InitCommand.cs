@@ -17,11 +17,50 @@ public static class InitCommand
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
     };
 
+    /// <summary>
+    /// The one remedy sentence for <c>--spec</c>, appended to whichever rule rejected the value.
+    /// Two rules can reject it and they are deliberately different questions — is there a value
+    /// at all (<see cref="CommandArguments"/>), and can XML 1.0 represent the value there is
+    /// (<see cref="Naming.MSBuildPropertyValue"/>) — but the adopter's next move is the same
+    /// either way, so they must not answer it in two voices. One constant, not two literals that
+    /// agree today.
+    /// </summary>
+    private const string SpecRemedy =
+        "Pass the path to the OpenAPI document to `intest init --spec` — for example " +
+        "\"../Orders/bin/Debug/net10.0/orders.json\".";
+
     public static int Run(string projectRoot, string projectName, string specSource)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(projectRoot);
-        ArgumentException.ThrowIfNullOrWhiteSpace(projectName);
-        ArgumentException.ThrowIfNullOrWhiteSpace(specSource);
+        try
+        {
+            return Scaffold(projectRoot, projectName, specSource);
+        }
+        catch (Exception ex)
+        {
+            // The floor `generate` and `fixtures repair` already had and this command did not.
+            // Without it `init` was the only command that could reach an adopter as an unhandled
+            // exception — and System.CommandLine reports one as exit 1, the code §5 gives to
+            // outstanding work. Deliberately not phrased as a refusal: nothing here says the
+            // adopter broke a stated rule, and unlike the refusals in Scaffold it cannot promise
+            // that nothing was written, since a scaffold that fails on its sixth file has already
+            // written five. That is exactly why every rule `init` can state is checked up front.
+            Console.Error.WriteLine($"intest: unexpected failure: {ex.GetType().Name}: {ex.Message}");
+            return ExitToolError;
+        }
+    }
+
+    private static int Scaffold(string projectRoot, string projectName, string specSource)
+    {
+        // Every argument, refused the same way, before the first write — §5's exit 2 is "Nothing
+        // was written", and an argument is the one thing that can be judged with nothing on disk
+        // yet. First failure wins, matching ConfigLoader: a second reporting model is the split
+        // ConfigLoader was built to remove, one layer up. See CommandArguments for the shape and
+        // for what these three refusals replaced.
+        if (!CommandArguments.TryRequireValue(projectRoot, "--project", CommandArguments.ProjectRule, out var projectReason))
+        {
+            Console.Error.WriteLine(projectReason);
+            return ExitToolError;
+        }
 
         // Normalised once, before either escaping step, and reused at both sites below — the
         // intest.json JSON string and the csproj's <InTestSpecSource> element must agree on the
@@ -33,10 +72,26 @@ public static class InitCommand
         // `namespace` declaration of two scaffolded files (TestStartup.cs and
         // <Name>TestBase.cs) — refusing an invalid --name here is what stops a scaffold that
         // cannot compile from ever being written. Checked before the intest.json-already-exists
-        // check below: an invalid name is invalid regardless of what is already on disk.
+        // check below: an invalid name is invalid regardless of what is already on disk. No blank
+        // check precedes this one: TryValidateDottedName already refuses a blank value, and the
+        // ThrowIfNullOrWhiteSpace that used to sit here pre-empted it — a worse guard in front of
+        // a better one, turning the message below into a stack trace for the one input that
+        // needed it most.
         if (!CSharpIdentifier.TryValidateDottedName(projectName, "--name", out var nameReason))
         {
             Console.Error.WriteLine($"{nameReason} Pass a valid C# name to `intest init --name` — for example \"Orders.ApiTests\".");
+            return ExitToolError;
+        }
+
+        // Two questions about --spec, asked in the order that makes the second one meaningful:
+        // is there a value at all, and can XML 1.0 represent the value there is. A blank --spec
+        // is not an escaping problem — MSBuildPropertyValue would escape "" perfectly happily and
+        // hand back "", which then reaches ConfigLoader.Load as an empty spec.source: a state
+        // that command already has to refuse separately. Refusing it here means `init` never
+        // writes a config it knows `generate` will reject.
+        if (!CommandArguments.TryRequireValue(specSource, "--spec", SpecRemedy, out var blankSpecReason))
+        {
+            Console.Error.WriteLine(blankSpecReason);
             return ExitToolError;
         }
 
@@ -56,7 +111,7 @@ public static class InitCommand
         // no error at all.
         if (!MSBuildPropertyValue.TryEscape(normalizedSpecSource, "--spec", out var specSourceEscaped, out var specReason))
         {
-            Console.Error.WriteLine($"{specReason} Pass the path to the OpenAPI document to `intest init --spec` — for example \"../Orders/bin/Debug/net10.0/orders.json\".");
+            Console.Error.WriteLine($"{specReason} {SpecRemedy}");
             return ExitToolError;
         }
 

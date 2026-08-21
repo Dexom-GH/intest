@@ -305,6 +305,112 @@ public class InitCommandTests
         message.ShouldContain("U+0001");
     }
 
+    // ---- One refusal surface -----------------------------------------------------------------
+    // `init` rejects three arguments, and used to reject them two different ways. --name went
+    // through CSharpIdentifier.TryValidateDottedName and came back as one sentence at exit 2;
+    // --project and --spec went through ArgumentException.ThrowIfNullOrWhiteSpace and escaped
+    // unhandled, which System.CommandLine turns into exit **1**. That is not a cosmetic
+    // difference: §5 reserves 1 for "real work is outstanding that a human must do" — fixture
+    // drift, validation failures — and separates it from 2 precisely so "CI can tell a crash from
+    // fixture drift". A mistyped --spec therefore reported itself to a pipeline as fixture drift.
+    // Two spellings of one mistake, `--name "My Project"` and `--name ""`, returned two different
+    // exit codes. These tests pin the single surface that replaced it.
+
+    /// <summary>Runs `init` with stderr captured, so a test can assert what the adopter is told.</summary>
+    private static (int ExitCode, string Error) RunCapturingError(string projectRoot, string name, string spec)
+    {
+        var originalError = Console.Error;
+        var capturedError = new StringWriter();
+        Console.SetError(capturedError);
+        try
+        {
+            return (InitCommand.Run(projectRoot, name, spec), capturedError.ToString());
+        }
+        finally
+        {
+            Console.SetError(originalError);
+        }
+    }
+
+    /// <summary>
+    /// The shape, asserted on the assembled message rather than on the template that produces it.
+    /// CSharpIdentifier.EmptyValueReason makes the middle of every refusal one object, but the
+    /// setting that leads it and the example it carries are supplied per call site — so a
+    /// fourth refusal written freehand would still share the template and still break the shape.
+    /// This is the test that would catch that.
+    /// </summary>
+    [TestMethod]
+    [DataRow("--project", "", "Orders.ApiTests", "orders.json", DisplayName = "--project empty")]
+    [DataRow("--name", null, "", "orders.json", DisplayName = "--name empty")]
+    [DataRow("--name", null, "   ", "orders.json", DisplayName = "--name whitespace")]
+    [DataRow("--spec", null, "Orders.ApiTests", "", DisplayName = "--spec empty")]
+    [DataRow("--spec", null, "Orders.ApiTests", "  \t ", DisplayName = "--spec whitespace")]
+    public void RefusesEveryBlankArgumentInTheSameShape(
+        string setting, string? projectRoot, string name, string spec)
+    {
+        var (exitCode, error) = RunCapturingError(projectRoot ?? _root, name, spec);
+
+        exitCode.ShouldBe(InitCommand.ExitToolError,
+            "§5 gives 2 for a tool error and 1 for outstanding work — an argument the adopter " +
+            "mistyped is a tool error, and reporting it as 1 makes it indistinguishable from drift");
+        error.ShouldStartWith(setting,
+            customMessage: "a refusal leads with the setting the adopter got wrong");
+        error.ShouldContain("is empty",
+            customMessage: "a refusal says what is wrong with the value, not just that something is");
+        // Not ShouldContain("for example"): that phrase is discriminating only if an actual
+        // quoted value follows it, and a rule that said "for example" and then trailed off would
+        // have satisfied it. "Carries", not "ends with" — --project's example sits mid-sentence,
+        // ahead of the sentence telling the adopter they can omit the flag entirely.
+        Regex.IsMatch(error, "for example \"[^\"]+\"").ShouldBeTrue(
+            "a refusal carries a value the adopter can copy");
+    }
+
+    /// <summary>
+    /// Separate from the shape test because the shape test cannot prove this row: with --project
+    /// blank, `_root` is not where a broken build would write. Path.Combine("", "intest.json") is
+    /// "intest.json", so a blank --project does not fail — it silently retargets every write at
+    /// the process's current directory. Refusing it is what stops `init` scaffolding nine files
+    /// into whatever directory the adopter happened to be standing in.
+    /// </summary>
+    [TestMethod]
+    public void RefusesABlankProjectRatherThanScaffoldingIntoTheCurrentDirectory()
+    {
+        var originalDirectory = Directory.GetCurrentDirectory();
+        Directory.SetCurrentDirectory(_root);
+        try
+        {
+            var (exitCode, error) = RunCapturingError("", "Orders.ApiTests", "orders.json");
+
+            exitCode.ShouldBe(InitCommand.ExitToolError);
+            error.ShouldStartWith("--project");
+            Directory.GetFileSystemEntries(_root).ShouldBeEmpty(
+                "a blank --project must be refused, not resolved to the current directory");
+        }
+        finally
+        {
+            Directory.SetCurrentDirectory(originalDirectory);
+        }
+    }
+
+    /// <summary>
+    /// The floor `generate` and `fixtures repair` already had and `init` did not. `init` was the
+    /// only command with no catch-all, so anything it failed to anticipate reached the adopter as
+    /// an unhandled exception at exit 1. This is deliberately not phrased as a refusal: the path
+    /// is well-formed as far as this command can tell, so the adopter broke no stated rule. It
+    /// also makes no claim that nothing was written — a scaffold that fails on its sixth file has
+    /// already written five, which is why the refusals above run before the first write rather
+    /// than relying on this.
+    /// </summary>
+    [TestMethod]
+    public void ReportsAnUnanticipatedScaffoldFailureAsAToolErrorRatherThanAStackTrace()
+    {
+        var (exitCode, error) = RunCapturingError(_root + "\0nul", "Orders.ApiTests", "orders.json");
+
+        exitCode.ShouldBe(InitCommand.ExitToolError);
+        error.ShouldStartWith("intest: unexpected failure:",
+            customMessage: "the sentence generate and fixtures repair already use for this situation");
+    }
+
     // ScaffoldStillBuildsWithNoTokenProviderRegistered moved to InTest.Golden.Tests, next to
     // CompileVerificationTests (Task 10 item 7): it is the only out-of-process build that lived
     // in this assembly, and under a solution-level `dotnet test` this assembly's ~6s run fully

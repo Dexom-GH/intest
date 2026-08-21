@@ -236,14 +236,15 @@ public class FixturesRepairCommandTests
     // document, not of a command's read set.
 
     /// <summary>Runs repair with stderr captured, so a test can assert what the adopter is told.</summary>
-    private async Task<(int ExitCode, string Error)> RunCapturingErrorAsync()
+    private async Task<(int ExitCode, string Error)> RunCapturingErrorAsync(string? projectRoot = null)
     {
         var originalError = Console.Error;
         var capturedError = new StringWriter();
         Console.SetError(capturedError);
         try
         {
-            return (await FixturesRepairCommand.RunAsync(_root, CancellationToken.None), capturedError.ToString());
+            return (await FixturesRepairCommand.RunAsync(projectRoot ?? _root, CancellationToken.None),
+                    capturedError.ToString());
         }
         finally
         {
@@ -335,4 +336,27 @@ public class FixturesRepairCommandTests
         // CreateProject already ran `init`; nothing here edits intest.json.
         (await FixturesRepairCommand.RunAsync(_root, CancellationToken.None)).ShouldBe(0);
     }
+
+    /// <summary>
+    /// `--project` is an argument the adopter typed, not a crash. It reached ConfigLoader.Load's
+    /// ArgumentException.ThrowIfNullOrWhiteSpace and came back as
+    /// "intest: unexpected failure: ArgumentException: ... (Parameter 'projectRoot')" — the right
+    /// exit code attached to the wrong sentence, naming a C# parameter the adopter never wrote
+    /// instead of the flag they did. `init` had the same rule stated a third way; there is one
+    /// now, in CommandArguments, and this is fixtures repair's call site of it.
+    /// </summary>
+    [TestMethod]
+    public async Task RefusesABlankProjectRatherThanReportingItAsACrash()
+    {
+        var (exitCode, error) = await RunCapturingErrorAsync(projectRoot: "");
+
+        exitCode.ShouldBe(FixturesRepairCommand.ExitToolError);
+        error.ShouldNotContain("unexpected failure",
+            customMessage: "an argument the adopter got wrong is refused, not reported as a crash");
+        error.ShouldStartWith("--project",
+            customMessage: "a refusal names the flag the adopter typed, not the parameter it bound to");
+        error.ShouldContain("is empty");
+        error.ShouldContain("for example");
+    }
+
 }
