@@ -2477,6 +2477,27 @@ Apache-2.0 · .NET 8 and 9 EOL 10 November 2026 · `WithOpenApi` deprecated in .
 | **`TestContext.DisplayMessage` escapes that buffering**: `MessageLevel.Warning` reaches real stdout and the `.trx` without failing the run; `Informational` reaches the `.trx` only; `Error` fails the run | *Measured* |
 | **`[AssemblyCleanup]` does not share `[AssemblyInitialize]`'s buffering** — its output reaches the `.trx` (attached to the last test result) and the console with `--logger "console;verbosity=detailed"` | *Measured* |
 
+### Test-suite timing
+
+**Earlier readings of ~1m30 total and a ~12.5s per-test floor for `GeneratedSuiteExecutionTests` are not reproducible and must not be used as a baseline.** Four repeated runs (n=11 each, `dotnet test --logger trx`, durations read from the `.trx`, not console wall-clock) on an idle machine:
+
+| Run | Commit | Sum | min | median | max |
+|---|---|---|---|---|---|
+| 2 | `b833ab2` | 179.8s | 6.8s | 16.5s | 24.6s |
+| 3 | `b833ab2` | 181.4s | 7.2s | 16.6s | 24.5s |
+| 4 | `b833ab2` | 184.8s | 6.9s | 16.8s | 25.0s |
+| 5 | `4814071` | 182.1s | 6.8s | 16.5s | 25.6s |
+
+Range 179.8–184.8s, ±1.4%. Run 5 is at the earlier commit `4814071`; it sits mid-range, so no regression is evidenced between `4814071` and `b833ab2`. The distribution is stable and not flat, same shape in all four runs: nine tests cluster at 16.1–17.1s, one at ~6.9s, one at ~25s.
+
+`GeneratedSuiteExecutionTests` is ~180s of Golden's ~206s of test time — 87% of the cost in 11 of 28 tests. Per-class breakdown at `b833ab2` (run 2): `GeneratedSuiteExecutionTests` n=11 sum 179.8s · `CompileVerificationTests` n=3 sum 13.9s · `ScaffoldCompileVerificationTests` n=1 sum 6.6s · `MSBuildEvaluationTests` n=2 sum 3.3s · `CliExitCodeTests` n=8 sum 2.5s · `GoldenFileTests` n=3 sum 0.1s. Golden's wall clock is 3m26–3m32 whether the assembly holds 20 tests or 28 — the `CliExitCodeTests` added by the parse-exit chip cost 2.5s in total.
+
+Idle was established by measurement, not assumption: CPU-time deltas sampled across every `dotnet`/`MSBuild`/`VBCSCompiler`/`testhost` process over a 5-second window totalled 0.15 CPU-seconds (an earlier check: 0.02), on 22 logical processors.
+
+*Measured on .NET SDK 10.0.400*, not the 10.0.303 named above.
+
+A wall-clock total is not comparable to another without both a per-class breakdown **and repetition**. A per-class breakdown alone is not sufficient — one was available and a wrong conclusion was still drawn from a single run. Repetition is the part that would have caught it: four runs, not one, is what turns "±1.4%, no regression" from an assumption into a measurement.
+
 ---
 
 ## 19. Deliberately not built
