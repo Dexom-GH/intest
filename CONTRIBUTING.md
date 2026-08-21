@@ -83,6 +83,22 @@ elsewhere without the fix — a doc comment on `RequireSecondaryIdentityLacks` o
 itself two paragraphs apart about what runs before it, because the two paragraphs stated the same
 fact independently instead of one deferring to the other.
 
+## Where validation lives
+
+**A guard placed at a read site is bounded by what that read site can observe.** If validation
+sits downstream of parsing, a parse failure pre-empts it before it ever runs — so it looks
+complete while covering only the cases parsing lets through. Validate a document where the whole
+document is available, not at each point a value is read. This does not ban local checks; it
+applies specifically when validation is positioned after a step that can itself throw or bail out
+on the same input.
+
+`intest.json`'s `project.rootNamespace` was validated by `CSharpIdentifier.TryValidateDottedName`
+at the point `GenerateCommand` read it. That guard could only ever see a string or null, because
+`GetProperty` and `GetString` throw on a missing key or a non-string value first — so it closed
+one of three cases and looked complete from where it stood. The fix moved validation to
+`ConfigLoader.Load`, which both `GenerateCommand` and `FixturesRepairCommand` now call against the
+whole document before either command writes anything.
+
 ## Dependency policy
 
 New dependencies are held to a hard line, because adopters inherit whatever we take on.
