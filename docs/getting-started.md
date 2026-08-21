@@ -3,8 +3,8 @@
 End-to-end walkthrough: from an existing .NET API with an OpenAPI document, to a committed
 integration test suite running as a post-deployment gate.
 
-> **Phase 0 (`survey`) does not exist yet, nor does `--check` within Phase 8. Everything else
-> below, including fixtures (Phase 5), does.**
+> **Phase 0 (`survey`) does not exist yet, nor does `--check` within Phase 8, nor
+> `fixtures promote` within Phase 5. Everything else below does.**
 >
 > `init`, `generate`, and `fixtures repair` (Phase 5) all work: together they produce a
 > compiling MSTest project, complete with the fixture files every operation needs. All three
@@ -17,10 +17,10 @@ integration test suite running as a post-deployment gate.
 > (**F11, closed**; see [`v0-acceptance.md`](v0-acceptance.md), which records the run this closed
 > on). The 3 write-scope 403s — the cases the sample's identity pair can actually prove — ran and
 > passed. Not yet built: `survey`
-> (Phase 0), `generate --check` and `intest upgrade` (Phase 8), variation tests, YAML
-> input, and a URL `spec.source` (Phase 1 — `init` and `generate` both refuse one; the
-> `spec.json` snapshot that would make it work is designed and not written). Nothing is
-> published to NuGet, so build from source for now.
+> (Phase 0), `generate --check` and `intest upgrade` (Phase 8), `fixtures promote` (Phase 5),
+> variation tests, YAML input, and a URL `spec.source` (Phase 1 — `init` and `generate` both
+> refuse one; the `spec.json` snapshot that would make it work is designed and not written).
+> Nothing is published to NuGet, so build from source for now.
 >
 > The walkthrough is kept whole rather than trimmed to what ships, because tracing it end to end
 > is what finds gaps — it is how the unowned creation of the first fixture files was caught, and
@@ -422,6 +422,9 @@ layer (§11). What this buys is sequential repeatability: run, then run again, w
 hand-editing fixtures or resetting the environment in between.
 
 ### Reducing this work permanently
+
+> **`fixtures promote` is not built yet** (see the banner above) — there is no command to run
+> here today. The snippet below describes what it will produce once it exists.
 
 ```bash
 intest fixtures promote
