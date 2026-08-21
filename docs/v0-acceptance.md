@@ -485,7 +485,7 @@ from pointing adopters at it.
 | 3 | F8 — actually consume `ITestTokenProvider` from the generated template, so the documented extension point stops being a dead end | v1-c | Open |
 | 4 | F7 — document that a generated suite assumes a reset environment, and that `{{runId}}` is the v1-a tool for free-form uniqueness | v1-a docs | **Closed** — getting-started Phase 5 |
 | 5 | F7 — `{{fixture:…}}` / `IAssemblyFixture`, so create-then-delete and constrained-unique values stop depending on a reset database | v1-b | **Closed** — see the v1-b acceptance run below |
-| 6 | `intest survey` should predict from **total request-body leaf properties + path parameters**, not operation count and not `required` count | v1-f | Open, input recorded above |
+| 6 | `intest survey` should predict from **total request-body leaf properties + path parameters**, not operation count and not `required` count | v1-d | Open, input recorded above |
 | 7 | Merge `allOf` composition (`[{$ref: Base}, {…}]`) rather than treating it as an ambiguous union | when a real spec needs it | Open, recorded under F6 |
 
 ---
@@ -1164,9 +1164,9 @@ time they stand up `Identity.Server` locally, and nothing currently warns about 
 | 2 | F9 — add the missing `ASPNETCORE_URLS` (or a `launchSettings.json` per project) to `samples/README.md`'s run commands | next phase touching `samples/` | **Closed** — v1-c, see F9's closure note above |
 | 3 | F10 — note in getting-started Phase 3, next to the `DelegatingHandler` example, that it shares the readiness client and a token failure there reads as a plain readiness timeout | next phase touching getting-started Phase 3 | **Closed** — v1-c, superseded: the stand-in example is gone, not annotated (see F10's closure note above and getting-started's Auth section) |
 | 4 | F10 — give the readiness probe its own client, decoupled from any team-registered auth handler | next phase touching `TestHost`'s readiness wiring | **Closed** — v1-c, `InTestClients.Readiness` (see F10's closure note above) |
-| 5 | The product-row leak (`CatalogSeedFixture` creates a product every run with no way to delete it) is a case §14's sweeper needs to cover explicitly, and getting-started's `IAssemblyFixture` section should say so | getting-started docs / v1-f | Open |
+| 5 | The product-row leak (`CatalogSeedFixture` creates a product every run with no way to delete it) is a case §14's sweeper needs to cover explicitly, and getting-started's `IAssemblyFixture` section should say so | next phase touching getting-started's `IAssemblyFixture` section | Open |
 | 6 | F8 — actually consume `ITestTokenProvider` from the generated template | v1-c | **Closed** — v1-c, see F8's closure note above |
-| 7 | `intest survey` should predict from **total request-body leaf properties + path parameters** | v1-f | Open, carried from v1-a action 6, unchanged by this run |
+| 7 | `intest survey` should predict from **total request-body leaf properties + path parameters** | v1-d | Open, carried from v1-a action 6, unchanged by this run |
 | 8 | Merge `allOf` composition (`[{$ref: Base}, {…}]`) rather than treating it as an ambiguous union | when a real spec needs it | Open, carried from v1-a action 7, unchanged by this run |
 
 ---
