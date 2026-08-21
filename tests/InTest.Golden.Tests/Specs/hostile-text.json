@@ -5,6 +5,7 @@
     "/widgets": {
       "get": {
         "operationId": "list\"Widgets\\Escaped",
+        "description": "Hostile operationId (quote + backslash). Deliberately parameterless with no request body, so NeedsFixture is false and the operationId reaches the renderer without the fixture-filename validation gate. Exercises RequireFixture(...), [Description(...)] and the synthesized schema key.",
         "tags": ["Widgets"],
         "responses": {
           "200": {
@@ -21,6 +22,7 @@
     "/widgets/say\"hi\\there": {
       "get": {
         "operationId": "getWeirdPath",
+        "description": "Hostile literal path text (quote + backslash), clean operationId. Deliberately parameterless with no request body, so NeedsFixture is false and does not gate on this operation's operationId at all. Exercises InTestUrl.Build(\"...\").",
         "tags": ["Widgets"],
         "responses": {
           "200": { "description": "ok" }
@@ -30,6 +32,7 @@
     "/widgets/search": {
       "get": {
         "operationId": "searchWidgets",
+        "description": "Hostile optional query parameter name (quote + backslash), clean operationId. The query parameter is optional with no example or default, so it never gets a fixture-sentinelled value and NeedsFixture stays false even though the parameter name itself is hostile. Exercises FixtureQueryParameters(...).",
         "tags": ["Widgets"],
         "parameters": [
           { "name": "so\"rt\\key", "in": "query", "required": false, "schema": { "type": "string" } }
@@ -42,6 +45,7 @@
     "/widgets/newline": {
       "get": {
         "operationId": "list\nThings\rMore",
+        "description": "Hostile operationId (embedded LF + CR). Deliberately parameterless with no request body, so NeedsFixture is false. Proves CSharpLiteral.Escape's full C# grammar set — not just quote and backslash — through a real compile.",
         "tags": ["Widgets"],
         "responses": {
           "200": { "description": "ok" }

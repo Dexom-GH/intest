@@ -17,9 +17,15 @@ public class CompileVerificationTests
     /// info — is identical regardless of which spec is under test, so only the one thing that
     /// actually varies between <see cref="GeneratedProjectCompiles"/> and
     /// <see cref="GeneratedProjectWithHostileSpecTextCompiles"/> is a parameter rather than a
-    /// second hand-copied method.
+    /// second hand-copied method. Returns the project root rather than only setting
+    /// <see cref="_root"/>, so a test that calls this must capture the result into a local and
+    /// use that local from then on — a future test method that forgets to call
+    /// <see cref="CreateProject"/> then fails at compile time (its local <c>root</c> simply
+    /// doesn't exist) rather than at runtime against an obscure <c>_root == null!</c>.
+    /// <see cref="_root"/> itself is still set here, purely so <see cref="RemoveProject"/> has
+    /// something to clean up regardless of whether the caller kept its own reference.
     /// </summary>
-    private void CreateProject(string specFileName)
+    private string CreateProject(string specFileName)
     {
         _root = Path.Combine(Path.GetTempPath(), "intest-compile-" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(_root);
@@ -56,6 +62,8 @@ public class CompileVerificationTests
 
         [assembly: DoNotParallelize]
         """);
+
+        return _root;
     }
 
     [TestCleanup]
@@ -70,18 +78,18 @@ public class CompileVerificationTests
     [TestMethod]
     public async Task GeneratedProjectCompiles()
     {
-        CreateProject("orders.json");
+        var root = CreateProject("hostile-text.json");
 
         // Specs/orders.json's GET /orders/{id} has a required path parameter, so under decision
         // 1 that operation needs a fixture. This test never calls `init` — it hand-writes
         // intest.json above — but repair needs only intest.json plus the spec, so it works
         // directly here too. Without this, generate now reports drift instead of compiling
         // anything (Task 4).
-        (await FixturesRepairCommand.RunAsync(_root, CancellationToken.None)).ShouldBe(0);
+        (await FixturesRepairCommand.RunAsync(root, CancellationToken.None)).ShouldBe(0);
 
-        (await GenerateCommand.RunAsync(_root, CancellationToken.None)).ShouldBe(0);
+        (await GenerateCommand.RunAsync(root, CancellationToken.None)).ShouldBe(0);
 
-        var (exitCode, output) = await ProcessRunner.RunAsync("dotnet", $"build \"{_root}\" --nologo -v q");
+        var (exitCode, output) = await ProcessRunner.RunAsync("dotnet", $"build \"{root}\" --nologo -v q");
 
         exitCode.ShouldBe(0, $"Generated project failed to compile:{Environment.NewLine}{output}");
     }
@@ -118,17 +126,48 @@ public class CompileVerificationTests
     /// unconditionally sentinelled (decision 1), so it unconditionally sets NeedsFixture — that
     /// site's escaping is covered instead by TemplateRendererTests, which does not need a real
     /// spec to reach it.
+    /// <para>
+    /// No <c>FixturesRepairCommand.RunAsync</c> call here, unlike <see cref="GeneratedProjectCompiles"/>:
+    /// every operation in hostile-text.json is deliberately fixture-free (that's the whole
+    /// premise), so <c>GenerateCommand</c>'s drift check — which only ever looks at cases where
+    /// <c>NeedsFixture</c> is true — has nothing to compare and repair would report "Nothing to
+    /// repair." Confirmed, not assumed: this test passes identically without the call.
+    /// </para>
+    /// <para>
+    /// This test's real hazard, and the reason it asserts on the generated file's content before
+    /// building it: it can pass while proving nothing. If a future change ever made a
+    /// parameterless operation need a fixture, <c>TestPlanBuilder.cs</c>'s <c>needsFixture &amp;&amp;</c>
+    /// gate would then skip all four hostile operations, <c>GenerateCommand</c> would report
+    /// them skipped and still return 0, the generated class would be empty, <c>dotnet build</c>
+    /// would succeed trivially, and this test would stay green having exercised none of the
+    /// escaping it claims to. The <c>ShouldContain</c> calls below pin the premise directly —
+    /// each hostile operation's escaped form must actually appear in the generated source —
+    /// before the compile assertion is allowed to mean anything.
+    /// </para>
     /// </summary>
     [TestMethod]
     public async Task GeneratedProjectWithHostileSpecTextCompiles()
     {
-        CreateProject("hostile-text.json");
+        var root = CreateProject("hostile-text.json");
 
-        (await FixturesRepairCommand.RunAsync(_root, CancellationToken.None)).ShouldBe(0);
+        (await GenerateCommand.RunAsync(root, CancellationToken.None)).ShouldBe(0);
 
-        (await GenerateCommand.RunAsync(_root, CancellationToken.None)).ShouldBe(0);
+        var generated = await File.ReadAllTextAsync(Path.Combine(root, "Generated", "WidgetsTests.g.cs"));
 
-        var (exitCode, output) = await ProcessRunner.RunAsync("dotnet", $"build \"{_root}\" --nologo -v q");
+        // One assertion per hostile operation in the spec, each pinned to the exact escaped
+        // text TemplateRenderer must have produced — not merely "a backslash appears somewhere".
+        // A vacuous pass (operations skipped, class empty) fails every one of these before the
+        // build assertion below is even reached.
+        generated.ShouldContain("""RequireFixture("list\"Widgets\\Escaped");""",
+            customMessage: "the quote+backslash operationId case did not reach the renderer escaped");
+        generated.ShouldContain("""InTestUrl.Build("/widgets/say\"hi\\there")""",
+            customMessage: "the hostile path template case did not reach the renderer escaped");
+        generated.ShouldContain("""FixtureQueryParameters("searchWidgets", "so\"rt\\key")""",
+            customMessage: "the hostile query parameter name case did not reach the renderer escaped");
+        generated.ShouldContain("""RequireFixture("list\nThings\rMore");""",
+            customMessage: "the embedded LF/CR operationId case did not reach the renderer escaped");
+
+        var (exitCode, output) = await ProcessRunner.RunAsync("dotnet", $"build \"{root}\" --nologo -v q");
 
         exitCode.ShouldBe(0, $"Generated project failed to compile:{Environment.NewLine}{output}");
     }

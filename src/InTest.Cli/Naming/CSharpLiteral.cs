@@ -9,13 +9,12 @@ namespace InTest.Cli.Naming;
 /// <c>New_Line_Character</c>s — CR (U+000D), LF (U+000A), NEL (U+0085), LS (U+2028) and PS
 /// (U+2029). Any of the five, left raw, ends the line the literal is on mid-string and the
 /// compiler reports it as <c>CS1010: Newline in constant</c> — confirmed by direct experiment
-/// for all five, not assumed from the grammar alone. This set is the language rule, not an
-/// enumeration of characters some particular input happened to contain: an operationId can
-/// carry an embedded LF and reach here unescaped by the identical path proven for <c>"</c> —
-/// <c>OperationKey.Resolve</c> only trims leading/trailing whitespace, and the fixture-filename
-/// validation that would otherwise reject a hostile operationId never runs for a parameterless
-/// operation (see <c>TestPlanBuilder.cs</c>'s <c>needsFixture &amp;&amp;</c> gate) — so escaping
-/// only the two characters a first bug report happened to name was never actually complete.
+/// for all five, not assumed from the grammar alone. This is the language's rule, not an
+/// enumeration of characters some particular caller's input happened to contain, which is what
+/// makes the set defensible on its own rather than by how likely each character seemed. (For
+/// how a hostile value actually reaches this method from a real spec, see
+/// CompileVerificationTests, which proves it against a real compile rather than narrating it
+/// here — that story belongs to the caller, not to a domain-free string primitive.)
 /// </para>
 /// <para>
 /// The returned text is valid <b>only</b> in literal position: pasted directly between a pair of
@@ -42,6 +41,16 @@ public static class CSharpLiteral
     /// backslash any later step introduces (the <c>\</c> in <c>\r</c>, <c>\n</c>, or a
     /// <c>\uXXXX</c> sequence). The relative order of the remaining six replacements does not
     /// matter — none of them can introduce a character another one of them targets.
+    /// <para>
+    /// NEL, LS and PS are emitted as <c>\uXXXX</c>, not the shorter <c>\x</c>. Confirmed by
+    /// direct experiment: <c>\x</c> is a variable-width hex escape (one to four digits) that
+    /// greedily consumes as many following hex characters as it can, so NEL's two-digit value
+    /// written as <c>\x85</c> followed by a literal hex digit — <c>"\x85A"</c> for "NEL then
+    /// 'A'" — silently becomes the single character U+085A instead of NEL followed by 'A'. No
+    /// compile error, no warning, just a corrupted string. <c>\uXXXX</c> is always exactly four
+    /// digits by grammar, so it cannot absorb a following character regardless of what it is or
+    /// how the escape was written.
+    /// </para>
     /// </summary>
     public static string Escape(string value)
     {

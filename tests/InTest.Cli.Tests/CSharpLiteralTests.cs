@@ -25,12 +25,15 @@ public class CSharpLiteralTests
     }
 
     [TestMethod]
-    public void Escape_EscapesBackslashBeforeQuoteSoTheResultRoundTripsThroughAStringLiteral()
+    public void Escape_EscapesTheBackslashBeforeAnAdjacentQuoteRatherThanAfter()
     {
         // Order matters: escaping the quote before the backslash would double-escape the
-        // backslash the quote step introduces. Built from char arrays rather than string
-        // escape sequences so the raw input and expected output are unambiguous to read,
-        // rather than relying on correctly hand-deriving nested C# escaping by eye.
+        // backslash the quote step introduces, producing the wrong character sequence (this
+        // test asserts the sequence directly — it does not parse the result back through a
+        // compiler, so "correct" here means "matches the sequence the correct order produces",
+        // not "round-trips"). Built from char arrays rather than string escape sequences so the
+        // raw input and expected output are unambiguous to read, rather than relying on
+        // correctly hand-deriving nested C# escaping by eye.
         var input = new string(['\\', '"']); // one backslash followed by one quote
         var expected = new string(['\\', '\\', '\\', '"']); // \\  then \"  when read back as C#
 
@@ -63,10 +66,11 @@ public class CSharpLiteralTests
     }
 
     [TestMethod]
-    public void Escape_EscapesBackslashBeforeALineFeedSoTheResultRoundTripsThroughAStringLiteral()
+    public void Escape_EscapesTheBackslashBeforeAnAdjacentLineFeedRatherThanAfter()
     {
         // Same ordering hazard as the quote case above, now for a character whose escape
-        // sequence itself introduces a backslash.
+        // sequence itself introduces a backslash. Same caveat too: this asserts the exact
+        // character sequence the correct order produces, not a round trip through a compiler.
         var input = new string(['\\', (char)0x000A]); // one backslash followed by one LF
         var expected = new string(['\\', '\\', '\\', 'n']); // \\  then \n  when read back as C#
 

@@ -24,9 +24,20 @@ public sealed class TemplateRenderer
                 // '_literal' names every field below whose value is only valid pasted directly
                 // between a pair of '"' in the emitted source — CSharpLiteral.Escape's own doc
                 // comment says the same thing, but a model field is the use site a future
-                // template edit will actually look at. There is no check enforcing this; the
-                // name is the whole guard (see CSharpLiteral's doc comment).
+                // template edit will actually look at. Two different misuses, two different
+                // guards: TemplateEscapingGuardTests enforces the direction the original defect
+                // actually took — every field mstest-class.scriban quotes must be named
+                // '_literal' (or be on that test's small explicit allow-list, e.g. 'category'
+                // below). Nothing enforces the opposite direction — an already-escaped
+                // '_literal' value read back out of literal position and recomposed into
+                // something else — beyond the name itself.
                 display_name_literal = CSharpLiteral.Escape(c.DisplayName),
+                // NOT escaped, and deliberately not named '_literal': always the constant
+                // TestPlanBuilder.ContractCategory = "Contract" (TestPlanBuilder.cs:12), never
+                // spec-derived, so there is nothing here for CSharpLiteral.Escape to do. Allow-
+                // listed by name in TemplateEscapingGuardTests rather than escaped, so a reader
+                // of that test (or of this comment) sees why it's the one exception rather than
+                // having to infer it from an absent suffix.
                 category = c.Category,
                 operation_key_literal = CSharpLiteral.Escape(c.OperationKey),
                 http_method_pascal = ToPascalMethod(c.HttpMethod),
@@ -62,6 +73,18 @@ public sealed class TemplateRenderer
                 // "there is nothing to check here". TestCasePlan.RequiredScopes is empty-never-
                 // null and already ordered with StringComparer.Ordinal (Task 3), so this only
                 // joins and quotes — it does not resort.
+                //
+                // Escaped despite RFC 6749 §3.3 defining scope-token as
+                // 1*( %x21 / %x23-5B / %x5D-7E ) — a grammar that already excludes space, '"',
+                // '\' and every control character, which would make a hostile scope name
+                // unreachable if every string here had to be a compliant token. It does not:
+                // that grammar bounds what a real OAuth2 exchange treats as a valid scope, not
+                // what an OpenAPI document is allowed to declare. The OpenAPI Specification's
+                // OAuthFlow.scopes is Map[string, string] with no format constraint on the key,
+                // and RequiredScopes (TestPlanBuilder.RequiredScopes) reads those keys straight
+                // out of the document's `security` requirement — an invalid-but-parseable spec
+                // can put any text there, so this runs unconditionally rather than trusting the
+                // RFC to have already ruled the hostile case out.
                 required_scopes_args = c.RequiredScopes.Count == 0
                     ? null
                     : string.Join(", ", c.RequiredScopes.Select(s => $"\"{CSharpLiteral.Escape(s)}\"")),
