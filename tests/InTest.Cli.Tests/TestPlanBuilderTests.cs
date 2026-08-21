@@ -1100,10 +1100,11 @@ public class TestPlanBuilderTests
         var forbidden = plan.Classes.SelectMany(c => c.Cases)
             .Single(c => c.OperationKey == "deleteOrder" && c.ExpectedStatus == 403);
 
-        forbidden.RequiredScopes.Count.ShouldBe(3);
-        forbidden.RequiredScopes.ShouldContain("orders.read");
-        forbidden.RequiredScopes.ShouldContain("orders.write");
-        forbidden.RequiredScopes.ShouldContain("orders.admin");
+        // Order-sensitive on purpose: the scope union is sorted (StringComparer.Ordinal) as a
+        // determinism guard, because OpenApiSecurityRequirement is a Dictionary whose enumeration
+        // order is unspecified, and Task 4 renders this union into a golden file compared
+        // byte-exact. A test that accepted any order would let that ordering regress silently.
+        forbidden.RequiredScopes.ShouldBe(["orders.admin", "orders.read", "orders.write"]);
     }
 
     // Same shape as the requirement-spanning union spec above, but the two requirements name

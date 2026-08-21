@@ -321,8 +321,7 @@ public static class TestPlanBuilder
         // inside `if (operation.Security is { Count: > 0 })`, so the null/empty branch below
         // never actually executes today. Kept anyway — defensively, and so this method stays
         // correct on its own terms for any future caller that doesn't already guard the same
-        // way. A guard being redundant for its current caller doesn't make every guard in this
-        // file meaningless; each one is evaluated against its own call site.
+        // way.
         operation.Security is not { Count: > 0 } securityRequirements
             ? []
             : securityRequirements
