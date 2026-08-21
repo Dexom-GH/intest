@@ -32,7 +32,19 @@ Same convention F11 used, and Task 3 is about making it the house rule.
 
 **`.trx` `<Counters>` under-reporting skips.** A fact about VSTest's output format, not our code. Already documented. Nothing to do.
 
-**`samples/Inventory.Api/Inventory.Api.json` churn.** **Measured on 2026-08-21: it no longer reproduces.** From a clean tree, `dotnet build InTest.sln` leaves `git status --porcelain` empty, and `git diff --numstat` on that file returns nothing. `.gitattributes` already carries `* text=auto`, and no committed file under `samples/`, `src/`, `tests/` or `docs/` contains CR. The most likely cause was the stale zero-byte `.git/index.lock` (dated 2026-08-20 16:44, removed when F11 merged) preventing git from refreshing stat info after a build rewrote the file with identical normalized content — plus the F11 worktree carrying its own index, which is where the flap was actually observed. **Do not open work for this.** If it returns, that is new information and worth a fresh look.
+**`samples/Inventory.Api/Inventory.Api.json` churn.** **Measured on 2026-08-21: it no longer reproduces.** From a clean tree, `dotnet build InTest.sln` leaves `git status --porcelain` empty, and `git diff --numstat` on that file returns nothing. `.gitattributes` already carries `* text=auto`, and no committed file under `samples/`, `src/`, `tests/` or `docs/` contains CR. The most likely cause was the stale zero-byte `.git/index.lock` (dated 2026-08-20 16:44, removed when F11 merged) preventing git from refreshing stat info after a build rewrote the file with identical normalized content — plus the F11 worktree carrying its own index, which is where the flap was actually observed. **Correction, later the same day: it returned, and my measurement was narrower than my claim.**
+
+The session executing Task 1 hit it after a full `dotnet test` in a **fresh worktree**: file shown as modified, `git diff --numstat` reporting zero changed lines, git warning *"CRLF will be replaced by LF the next time Git touches it"*. `git checkout --` restored it losslessly. Re-measured in the main worktree afterwards — still does not reproduce there, 0 dirty before a full build and 0 after.
+
+So the honest statement is **"does not reproduce in a long-lived worktree"**, which is not what I wrote. I measured one worktree and generalised to the repository.
+
+What the two observations together support, for whoever picks this up:
+
+- `core.autocrlf` is `input` — normalize on commit, no conversion on checkout — so the working copy holds LF and the blob holds LF.
+- The build's NSwag target rewrites the file with CRLF. Content normalizes equal, which is why `numstat` is always empty, but the bytes on disk differ from what was checked out.
+- Every observation has been in a **fresh** worktree, whose index has no stat cache for that file yet. The main worktree, whose index has seen it many times, stays clean.
+
+That is a hypothesis with evidence, not a diagnosis. **The existing task chip still owns the fix** — this entry exists so it starts from the evidence rather than from zero, and so the earlier "does not reproduce" is not left standing as though it were repository-wide.
 
 ---
 
