@@ -1180,12 +1180,19 @@ into the `.trx`'s `<Message>`, spelled `NotExecuted` there, not the console summ
 identity — always after `RequireMultipleIdentities`, but not because that guard is what makes
 `Identities[1]` safe to index; `RequireSecondaryIdentityLacks` re-checks `Identities` itself and
 falls through safely even when called on its own (`ApiTestBase`'s doc comment on the member says
-so).
-The ordering is for message precedence: when a provider has fewer than two identities, both
-guards would otherwise have grounds to fire, and the reader should see "needs at least two
-identities" as the reason, not a scope message from a guard whose own precondition never held.
-Its arguments are the operation's declared scopes: the
-distinct union of every OAuth scope named across every `security` requirement and every scheme
+so). The two guards' firing conditions are mutually exclusive, not a matter of precedence:
+`RequireMultipleIdentities` (`ApiTestBase.cs:114-118`) falls through to `Assert.Inconclusive`
+iff the provider advertises fewer than two identities, and `RequireSecondaryIdentityLacks`
+(`ApiTestBase.cs:173-176`) returns immediately on that exact condition — `provider?.Identities
+is not { Count: >= 2 } identities || identities[1] is not { } secondary` — before it ever
+reaches a scope comparison. So the scope guard can only fire in a state the identity-count guard
+has already passed; swapping the two would change neither behavior nor the surfaced message. The
+ordering is a readability convention — coarse precondition before fine — not a correctness or
+messaging requirement: `ApiTestBaseAuthTests.OnlyOneRegisteredIdentityRuns` and
+`NoRegisteredProviderRunsRatherThanSkippingASecondTime` already say so, in as many words —
+"`RequireMultipleIdentities` owns the 'fewer than two identities' skip" and "never skip twice
+for one reason." Its arguments are the operation's declared scopes: the distinct union of every
+OAuth scope named across every `security` requirement and every scheme
 within it, in sorted order (`TestPlanBuilder.RequiredScopes`). It `Assert.Inconclusive`s, with the
 secondary identity's name and held scopes in the message, only when that identity's own
 `TestIdentity.Scopes` already contains every scope listed here — otherwise the 403 is still real,
