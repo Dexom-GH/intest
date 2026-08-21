@@ -1028,7 +1028,7 @@ asked it.
 > "holds nothing", so the test runs — deliberately, so auth testing can never be switched off
 > silently by an adopter who has not populated it. `coverage-report.json` reports
 > `authTestsRequiringAnUnderScopedSecondIdentity`, counting how many generated cases have a
-> provability that depends on the second identity's scopes; like its siblings, it is **not** a
+> provability that depends on the second identity's scopes; like its sibling, it is **not** a
 > skip count (§12) — the CLI still cannot know at generation time which of them a project's
 > registered provider will actually skip. The row above records the defect that motivated the
 > fix, not current behaviour.
@@ -1151,7 +1151,6 @@ The wrong-scope case therefore calls a plain method, in the test body, after
 public async Task GetOrderById_Forbidden()
 {
     RequireMultipleIdentities();
-    RequireSecondaryIdentityLacks("orders.read");
     using var _ = UseIdentity(IdentitySlot.Secondary);
 
     using var request = new HttpRequestMessage(
@@ -1167,13 +1166,25 @@ public async Task GetOrderById_Forbidden()
 }
 ```
 
+`getOrderById` above declares `security: [{"bearerAuth": []}]` with no scopes at all — it is
+secured but scope-free — so this `_Forbidden` case carries only the multiple-identities guard.
+An operation whose `security` does name scopes gets both guards, in this same order; `listOrders`
+in the same spec (`orders.read`) is the one that does — see its own `ListOrders_Forbidden` in
+`OrdersTests.g.cs`.
+
 `RequireMultipleIdentities` (`ApiTestBase`) reads the registered provider's `Identities.Count`
 and calls `Assert.Inconclusive` with a stated reason below two — confirmed to survive verbatim
 into the `.trx`'s `<Message>`, spelled `NotExecuted` there, not the console summary's "Skipped".
 
 `RequireSecondaryIdentityLacks` (F11) runs next, before `UseIdentity` selects the secondary
-identity — never before `RequireMultipleIdentities`, since it indexes `Identities[1]` and that
-guard is what makes the index safe. Its arguments are the operation's declared scopes: the
+identity — always after `RequireMultipleIdentities`, but not because that guard is what makes
+`Identities[1]` safe to index; `RequireSecondaryIdentityLacks` re-checks `Identities` itself and
+falls through safely even when called on its own (`ApiTestBase`'s doc comment on the member says
+so).
+The ordering is for message precedence: when a provider has fewer than two identities, both
+guards would otherwise have grounds to fire, and the reader should see "needs at least two
+identities" as the reason, not a scope message from a guard whose own precondition never held.
+Its arguments are the operation's declared scopes: the
 distinct union of every OAuth scope named across every `security` requirement and every scheme
 within it, in sorted order (`TestPlanBuilder.RequiredScopes`). It `Assert.Inconclusive`s, with the
 secondary identity's name and held scopes in the message, only when that identity's own
@@ -1676,6 +1687,7 @@ Notes:
   status-only contract tests   6   (no response schema declared — see §9)
   bodiless statuses           11   (204/205/304 — status-only by design, not a gap)
   auth tests gated on a second identity  12   (wrong-scope 403 cases; whether they skip is decided at run time)
+  auth tests requiring an under-scoped second identity  9   (subset of the above; skip also needs the identity's declared Scopes — see §9)
   multiple version prefixes        /v1 (49 operations), /v2 (64 operations)
   unevaluatable keywords       2   (const ×1, if/then ×1 — see §9)
 ```
@@ -1701,6 +1713,11 @@ Each note closes a silent-omission path:
   `RequireMultipleIdentities`, against whatever `ITestTokenProvider` a project registers — the
   CLI writes this report long before that provider exists and cannot know that number. Without
   this line, gated tests would be indistinguishable from tests that were never generated.
+- **`auth tests requiring an under-scoped second identity`** (F11) — §9. Narrower than the note
+  above: of the generated wrong-scope 403 cases, how many belong to an operation that declares
+  required scopes at all — the ones whose skip depends on the second identity's own declared
+  `Scopes`, not just its presence. Like its sibling, not a skip count, for the same reason: the
+  CLI cannot know at generation time what any project's provider will advertise.
 - **`unevaluatable keywords`** — §9. The only remaining route to a false green, made visible.
 
 The JSON form lets CI assert coverage has not silently dropped. It is also the v2 backlog,

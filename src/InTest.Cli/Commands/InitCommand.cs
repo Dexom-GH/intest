@@ -137,18 +137,6 @@ public static class InitCommand
                 // live registration here would reference a type that does not exist yet, breaking
                 // every fresh scaffold's build before a team has written one. See "Auth" in Phase
                 // 3 of getting-started.md for a worked example.
-                //
-                // public sealed class YourTokenProvider : ITestTokenProvider
-                // {
-                //     public IReadOnlyList<TestIdentity> Identities { get; } =
-                //     [
-                //         new TestIdentity("default", ["orders.read", "orders.write"]),
-                //         new TestIdentity("read-only", ["orders.read"])
-                //     ];
-                //
-                //     public Task<string> GetTokenAsync(string audience, string? identity = null,
-                //         CancellationToken cancellationToken = default) => throw new NotImplementedException();
-                // }
                 // services.AddSingleton<ITestTokenProvider, YourTokenProvider>();
 
                 // Per-request fixtures: path and query parameter values live in fixtures/, not
