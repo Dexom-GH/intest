@@ -56,8 +56,9 @@ public static class MSBuildPropertyValue
     /// gives them a second, unrelated meaning wherever a property value is consumed as a file
     /// path — <c>Include="$(InTestSpecSource)"</c> globs it, so an unescaped <c>?</c> or <c>*</c>
     /// there does not fail to resolve, it silently resolves to a <i>different file</i>. This is
-    /// not theoretical for this call site: <c>--spec</c> accepts a path <i>or URL</i>, and a URL
-    /// query string contains <c>?</c> by construction. Confirmed against a real
+    /// not theoretical for this call site: <c>?</c> and <c>*</c> are legal characters in a POSIX
+    /// filename, and <c>--spec</c> names a file the adopter frequently cannot rename — the same
+    /// premise that makes this an escape rule rather than a refuse rule. Confirmed against a real
     /// <c>dotnet build</c>: with <c>specs/orders.json</c> and <c>specs/ordersX.json</c> both on
     /// disk and the property set to <c>specs/orders?.json</c>, an unescaped <c>Include</c> glob
     /// resolved to <c>ordersX.json</c> — the wrong file, silently — while <c>%3F</c> kept it

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using InTest.Cli.Naming;
+using InTest.Cli.Spec;
 
 namespace InTest.Cli.Configuration;
 
@@ -110,6 +111,23 @@ public static class ConfigLoader
         if (string.IsNullOrWhiteSpace(specSource))
         {
             throw new ConfigLoadException($"spec.source in {FileName} is empty. {SpecSourceRule}");
+        }
+
+        // The empty source's twin, and it needed the same treatment for the same reason: it does
+        // not fail on its own terms either. Path.Combine(projectRoot, "https://example.com/x.json")
+        // appends the URL as a relative segment, so SpecLoader reported "Spec file not found:"
+        // against a path spliced out of a Windows separator and a URL — a path the adopter never
+        // wrote, phrased as a file that is merely missing rather than as a kind of source InTest
+        // cannot read. Measured, not inferred: the message was
+        // "Spec file not found: <projectRoot>\https://example.com/openapi.json" at exit 2.
+        //
+        // Refused here rather than only at `init` because `init` is not how most URLs get here.
+        // The help text said "Path or URL" and getting started's Phase 1 instructed adopters to
+        // "Point spec.source at the URL" — a hand edit, which no argument guard sees. One loader
+        // covers generate and fixtures repair both, which is this type's whole reason for being.
+        if (SpecLoader.IsUrl(specSource))
+        {
+            throw new ConfigLoadException(SpecLoader.UrlReason("spec.source", specSource, SpecSourceRule));
         }
 
         var project = RequireSection(root, "project", ProjectSectionRule);

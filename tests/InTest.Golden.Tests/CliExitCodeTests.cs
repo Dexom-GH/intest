@@ -117,4 +117,73 @@ public class CliExitCodeTests
             Directory.Delete(root, recursive: true);
         }
     }
+
+    /// <summary>
+    /// The help text is a promise the tool makes in its own voice, and it was the one the tool
+    /// could not keep: <c>--spec</c> read "Path or URL of the OpenAPI document", while both
+    /// commands that consume the value hand <c>Path.Combine(projectRoot, source)</c> to
+    /// <c>SpecLoader.LoadFromFileAsync</c>, which opens files. Pinned here for the same reason
+    /// every other test in this class is: <c>Program</c>'s option definitions are above every
+    /// command, so <c>InTest.Cli.Tests</c> — which calls <c>Command.Run</c> methods directly —
+    /// never executes them and could not observe this.
+    /// <para>
+    /// Asserted on the <c>--spec</c> line alone rather than on the whole help output, because
+    /// <c>--project</c>'s line carries the current directory as its default and a checkout path
+    /// is not something a test gets to make claims about.
+    /// </para>
+    /// </summary>
+    [TestMethod]
+    public async Task SpecHelpPromisesAPathAndNotAUrl()
+    {
+        var (_, output) = await RunCliAsync("init --help");
+
+        var specLine = output.Split('\n').SingleOrDefault(line => line.Contains("--spec <spec>"));
+        specLine.ShouldNotBeNull($"init --help must document --spec:{Environment.NewLine}{output}");
+
+        specLine.ShouldContain("Path of the OpenAPI document");
+        specLine.ShouldNotContain("URL",
+            customMessage: "the help text must not promise an input the tool cannot accept — " +
+                           "URL support is designed (the spec.json snapshot) and not built");
+    }
+
+    /// <summary>
+    /// The refusal that replaced a success. Measured before it existed: this exact command line
+    /// printed "Initialised Orders.ApiTests. Next: `intest generate`." and exited <b>0</b>,
+    /// writing the whole scaffold; `generate` then failed with
+    /// <c>Spec file not found: &lt;projectRoot&gt;\https://example.com/openapi.json</c>, exit 2.
+    /// So the tool accepted the value its help had promised, and contradicted itself one command
+    /// later in the vocabulary of a missing file.
+    /// <para>
+    /// Out of process rather than in <c>InitCommandTests</c>, which pins the same refusal:
+    /// <c>init</c> is the command that <i>takes</i> <c>--spec</c>, so its exit code is what a
+    /// pipeline sees, and §5 separates 2 from 1 precisely so a mistyped argument cannot report
+    /// itself as fixture drift. Exit 0 was worse than either.
+    /// </para>
+    /// </summary>
+    [TestMethod]
+    public async Task AUrlSpecExitsToolErrorAndScaffoldsNothing()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "intest-urlspec-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(root);
+        try
+        {
+            var (exitCode, output) = await RunCliAsync(
+                $"init --project \"{root}\" --name Orders.ApiTests --spec https://example.com/openapi.json");
+
+            exitCode.ShouldBe(InitCommand.ExitToolError, output);
+            output.ShouldContain("--spec",
+                customMessage: "a refusal leads with the setting the adopter got wrong");
+            output.ShouldContain("URL",
+                customMessage: "a refusal names the kind of value it is refusing, so the adopter " +
+                               "is not sent looking for a file");
+            output.ShouldNotContain("Initialised",
+                customMessage: "the defect was `init` confirming the belief the help text created");
+            Directory.GetFileSystemEntries(root).ShouldBeEmpty(
+                "§5's exit 2 is \"nothing was written\"");
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
 }

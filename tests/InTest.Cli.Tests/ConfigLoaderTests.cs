@@ -208,6 +208,61 @@ public class ConfigLoaderTests
         reason.ShouldNotContain("Spec file not found");
     }
 
+    /// <summary>
+    /// A URL <c>spec.source</c> is the empty source's twin, and it fails the same way: not on its
+    /// own terms. <c>Path.Combine(projectRoot, "https://example.com/openapi.json")</c> treats the
+    /// URL as a relative segment, so <c>SpecLoader</c> reported
+    /// <c>Spec file not found: &lt;projectRoot&gt;\https://example.com/openapi.json</c> — a path
+    /// the adopter never wrote, a Windows separator spliced onto a URL, phrased as though the
+    /// file were merely missing rather than as though the kind of source were unsupported.
+    /// <para>
+    /// This is the documented path, not a typo: the <c>--spec</c> help text promised "Path or
+    /// URL" and getting started's Phase 1 instructed adopters to "Point <c>spec.source</c> at the
+    /// URL". Refusing here rather than at <c>init</c> alone is what reaches an adopter who
+    /// followed that instruction by hand-editing the config, and it covers <c>fixtures repair</c>
+    /// as well as <c>generate</c> — one loader, one answer.
+    /// </para>
+    /// </summary>
+    [TestMethod]
+    public void ExplainsAUrlSpecSourceRatherThanReportingAMangledPathAsAMissingSpec()
+    {
+        var reason = ReasonFor("""
+        { "schemaVersion": 1, "spec": { "source": "https://example.com/openapi.json" },
+          "project": { "rootNamespace": "Orders.ApiTests", "testBaseClass": "Orders.ApiTests.OrdersTestBase" } }
+        """);
+
+        reason.ShouldContain("spec.source");
+        reason.ShouldContain("https://example.com/openapi.json",
+            customMessage: "a refusal quotes what the adopter actually wrote");
+        reason.ShouldContain("URL",
+            customMessage: "a refusal names the kind of value it is refusing, not just that it failed");
+        reason.ShouldNotContain("Spec file not found",
+            customMessage: "the defect was an accurate sentence about the wrong thing — the spec " +
+                           "is not a file that is missing, it is a kind of source InTest cannot read");
+    }
+
+    /// <summary>
+    /// The false positive the narrow predicate exists to avoid. <c>Uri.TryCreate</c> parses
+    /// <c>C:/specs/orders.json</c> as an <i>absolute</i> URI with scheme <c>file</c>, so a
+    /// general "is this an absolute URI" check would refuse ordinary Windows paths — the single
+    /// most common shape of <c>spec.source</c> on the platform this is developed on. The rule is
+    /// therefore an <c>http://</c>/<c>https://</c> prefix and nothing broader.
+    /// </summary>
+    [TestMethod]
+    [DataRow("C:/specs/orders.json", DisplayName = "rooted Windows path — an absolute file: URI to Uri.TryCreate")]
+    [DataRow("//fileserver/specs/orders.json", DisplayName = "UNC path")]
+    [DataRow("specs/http/orders.json", DisplayName = "path with a url-ish segment")]
+    [DataRow("../Orders/bin/Debug/net10.0/orders.json", DisplayName = "the documented relative path")]
+    public void LoadsASpecSourceThatIsNotAUrl(string source)
+    {
+        WriteConfig($$"""
+        { "schemaVersion": 1, "spec": { "source": "{{source}}" },
+          "project": { "rootNamespace": "Orders.ApiTests", "testBaseClass": "Orders.ApiTests.OrdersTestBase" } }
+        """);
+
+        ConfigLoader.Load(_root).SpecSource.ShouldBe(source);
+    }
+
     // ---- project -------------------------------------------------------------------------
 
     /// <summary>The brief's second named defect: <c>KeyNotFoundException</c> through the catch-all.</summary>

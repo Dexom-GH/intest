@@ -23,8 +23,11 @@ or in a pull request, never as part of the deployment pipeline.
 > operations with a request body no longer generate a test that cannot send one — see "What day
 > one actually looks like" below.
 >
-> **Not yet built:** variation tests, `intest survey`, `generate --check`, and YAML
-> input. Packages are unpublished and the IDs are not reserved, so you cannot install this yet —
+> **Not yet built:** variation tests, `intest survey`, `generate --check`, YAML input, and
+> **a URL `spec.source`** — the OpenAPI document must be a local path today. `init` and
+> `generate` both refuse a URL outright rather than letting it fail as a mangled path; the
+> `spec.json` snapshot that would make a URL source work is designed (§9) and not written.
+> Packages are unpublished and the IDs are not reserved, so you cannot install this yet —
 > build from source.
 >
 > The design spec is still the source of truth and is worth reading before the code:
@@ -56,7 +59,7 @@ Read these before evaluating — they are firm for v1, and they rule InTest out 
 |---|---|
 | Test project TFM | `net10.0`. Independent of your API's TFM — an API on `net8.0` is fine |
 | Test framework | **MSTest only in v1.** xUnit and NUnit are the highest-priority v2 work, and the architecture is built to keep them additive — but today, if you are standardised on either, InTest is not for you yet |
-| Spec | OpenAPI 3.x, JSON or YAML, local file or URL |
+| Spec | OpenAPI 3.x, JSON or YAML, local file or URL. **Today: JSON, local file only** |
 | Target | A deployed, reachable API |
 
 ## What day one actually looks like

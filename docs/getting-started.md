@@ -17,8 +17,10 @@ integration test suite running as a post-deployment gate.
 > (**F11, closed**; see [`v0-acceptance.md`](v0-acceptance.md), which records the run this closed
 > on). The 3 write-scope 403s — the cases the sample's identity pair can actually prove — ran and
 > passed. Not yet built: `survey`
-> (Phase 0), `generate --check` and `intest upgrade` (Phase 8), variation tests, and
-> YAML input. Nothing is published to NuGet, so build from source for now.
+> (Phase 0), `generate --check` and `intest upgrade` (Phase 8), variation tests, YAML
+> input, and a URL `spec.source` (Phase 1 — `init` and `generate` both refuse one; the
+> `spec.json` snapshot that would make it work is designed and not written). Nothing is
+> published to NuGet, so build from source for now.
 >
 > The walkthrough is kept whole rather than trimmed to what ships, because tracing it end to end
 > is what finds gaps — it is how the unowned creation of the first fixture files was caught, and
@@ -36,7 +38,7 @@ Running example: an `Orders` API using Swashbuckle, deployed to a `staging` envi
 |---|---|
 | .NET SDK | 10.0 or later — the **test project** targets `net10.0`; your API can target anything |
 | Test framework | MSTest. xUnit and NUnit are not supported in v1 |
-| Spec | OpenAPI 3.x, JSON or YAML, local file or URL |
+| Spec | OpenAPI 3.x, JSON, as a **local file** — YAML and URL sources are not built yet |
 | API | Deployed and reachable from wherever the tests run |
 
 ---
@@ -83,8 +85,22 @@ build artifact is correct — it cannot go stale.
 
 ### Different repository, or only a URL
 
-Skip this phase. Point `spec.source` at the URL; `generate` snapshots it to a committed
-`spec.json` so you still get a reviewable diff when the spec changes (§9).
+> **Not built — do not do this yet.** `spec.source` must be a local path. `intest init --spec`
+> and `intest generate` both refuse a URL and say so; before they did, `init` accepted one,
+> exited `0`, wrote the whole scaffold, and `generate` then failed with
+> `Spec file not found: <projectRoot>\https://…` — a path you never typed.
+>
+> **What to do instead:** fetch the document yourself and commit it.
+>
+> ```bash
+> curl -o specs/orders.json https://orders-staging.example.com/swagger/v1/swagger.json
+> ```
+>
+> Then point `spec.source` at `specs/orders.json`. You get the same reviewable diff the
+> snapshot is meant to give you; you just refresh it by hand instead of `generate` doing it.
+
+Once built, this phase is skipped: you point `spec.source` at the URL and `generate` snapshots
+it to a committed `spec.json`, so a spec change still arrives as a reviewable diff (§9).
 
 ---
 
@@ -443,15 +459,16 @@ telemetry down to the individual test.
 | `fixtures/`, `intest.json` | user-secrets |
 | `appsettings*.json` (non-local), `*.runsettings` | anything with a credential in it |
 | `.config/dotnet-tools.json` | |
-| **`spec.json`** — only when `spec.source` is a URL | `spec.json` is **not** created for a local `spec.source`; the build copies that file instead |
+| **`spec.json`** — only when `spec.source` is a URL, **not built yet** (Phase 1) | `spec.json` is **not** created for a local `spec.source`; the build copies that file instead |
 
 Generated code is committed so a spec change arrives as a reviewable diff on the pull request,
 where someone can see that an endpoint's contract moved.
 
-**If you took the URL path in Phase 1, `spec.json` must be committed.** It is the snapshot
-`generate` took, it is what `--check` compares against in Phase 8, and it is the only thing
-that gives a URL-sourced spec a reviewable diff at all. Leave it uncommitted and Phase 8 fails
-against a file that is not in the repository.
+**A URL `spec.source` is not built yet (Phase 1), so `spec.json` is never created and there is
+nothing here to commit.** When it is built: `spec.json` is the snapshot `generate` took, it is
+what `--check` compares against in Phase 8, and it is the only thing that gives a URL-sourced
+spec a reviewable diff at all — leave it uncommitted and Phase 8 fails against a file that is
+not in the repository. Today, the local path you committed in Phase 1 plays that role.
 
 ---
 

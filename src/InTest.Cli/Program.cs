@@ -13,7 +13,7 @@ generate.SetAction((parseResult, cancellationToken) =>
     GenerateCommand.RunAsync(parseResult.GetValue(projectOption)!, cancellationToken));
 
 var nameOption = new Option<string>("--name") { Description = "Test project name.", Required = true };
-var specOption = new Option<string>("--spec") { Description = "Path or URL of the OpenAPI document.", Required = true };
+var specOption = new Option<string>("--spec") { Description = "Path of the OpenAPI document, relative to the test project directory.", Required = true };
 
 var init = new Command("init", "Scaffold a test project.");
 init.Options.Add(projectOption);

@@ -393,6 +393,62 @@ public class InitCommandTests
     }
 
     /// <summary>
+    /// The same reason the blank <c>--spec</c> guard gives: `init` must never write a config it
+    /// knows `generate` will reject. Measured before this guard existed —
+    /// <c>init --spec https://example.com/openapi.json</c> printed
+    /// "Initialised Orders.ApiTests. Next: `intest generate`." and exited <b>0</b>, writing the
+    /// whole scaffold, and only then did `generate` fail with
+    /// <c>Spec file not found: &lt;projectRoot&gt;\https://example.com/openapi.json</c> at exit 2.
+    /// <para>
+    /// So `init` did not merely fail to help: it actively confirmed the belief the help text had
+    /// created ("Path or URL"), and displaced the contradiction onto a different command, one
+    /// step later, phrased as a missing file. Refusing here is what makes the tool's own voice
+    /// agree with itself.
+    /// </para>
+    /// </summary>
+    [TestMethod]
+    [DataRow("https://example.com/openapi.json", DisplayName = "https")]
+    [DataRow("http://example.com/openapi.json", DisplayName = "http")]
+    [DataRow("HTTPS://EXAMPLE.COM/openapi.json", DisplayName = "uppercase scheme")]
+    public void RefusesAUrlSpecRatherThanScaffoldingAProjectGenerateWillReject(string spec)
+    {
+        var (exitCode, error) = RunCapturingError(_root, "Orders.ApiTests", spec);
+
+        exitCode.ShouldBe(InitCommand.ExitToolError);
+        Directory.GetFileSystemEntries(_root).ShouldBeEmpty(
+            "§5's exit 2 is \"nothing was written\", and an argument is judged before the first write");
+        error.ShouldStartWith("--spec",
+            customMessage: "a refusal leads with the setting the adopter got wrong");
+        error.ShouldContain(spec,
+            customMessage: "a refusal quotes what the adopter actually wrote");
+        error.ShouldContain("URL",
+            customMessage: "a refusal names the kind of value it is refusing");
+        error.ShouldContain("for example \"",
+            customMessage: "a refusal carries a value the adopter can copy");
+    }
+
+    /// <summary>
+    /// The false positive the narrow predicate exists to avoid, pinned at `init` as well as at
+    /// <see cref="Configuration.ConfigLoader"/> because the two refuse independently.
+    /// <c>Uri.TryCreate</c> calls <c>C:/specs/orders.json</c> an <i>absolute</i> URI with scheme
+    /// <c>file</c>, so a general absolute-URI check would refuse the most ordinary
+    /// <c>--spec</c> value on Windows. The rule is an <c>http://</c>/<c>https://</c> prefix and
+    /// nothing broader.
+    /// </summary>
+    [TestMethod]
+    [DataRow("C:/specs/orders.json", DisplayName = "rooted Windows path — an absolute file: URI to Uri.TryCreate")]
+    [DataRow("//fileserver/specs/orders.json", DisplayName = "UNC path")]
+    [DataRow("specs/http/orders.json", DisplayName = "path with a url-ish segment")]
+    public void ScaffoldsFromAPathThatOnlyLooksLikeAUrl(string spec)
+    {
+        var (exitCode, error) = RunCapturingError(_root, "Orders.ApiTests", spec);
+
+        exitCode.ShouldBe(InitCommand.ExitOk, error);
+        var config = JsonDocument.Parse(File.ReadAllText(Path.Combine(_root, "intest.json")));
+        config.RootElement.GetProperty("spec").GetProperty("source").GetString().ShouldBe(spec);
+    }
+
+    /// <summary>
     /// The floor `generate` and `fixtures repair` already had and `init` did not. `init` was the
     /// only command with no catch-all, so anything it failed to anticipate reached the adopter as
     /// an unhandled exception at exit 1. This is deliberately not phrased as a refusal: the path

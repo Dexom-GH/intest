@@ -2,6 +2,7 @@ using System.Text.Encodings.Web;
 using System.Text.Json;
 using InTest.Cli.Configuration;
 using InTest.Cli.Naming;
+using InTest.Cli.Spec;
 
 namespace InTest.Cli.Commands;
 
@@ -92,6 +93,31 @@ public static class InitCommand
         if (!CommandArguments.TryRequireValue(specSource, "--spec", SpecRemedy, out var blankSpecReason))
         {
             Console.Error.WriteLine(blankSpecReason);
+            return ExitToolError;
+        }
+
+        // The same rule as the blank guard above — `init` never writes a config it knows
+        // `generate` will reject — and the case that needed it most, because here `init` did not
+        // merely fail to help. Measured before this guard existed:
+        // `init --spec https://example.com/openapi.json` printed "Initialised Orders.ApiTests.
+        // Next: `intest generate`." and exited 0, writing the whole scaffold. It confirmed the
+        // belief the help text had created ("Path or URL"), and displaced the contradiction onto
+        // a different command one step later, where it surfaced as
+        // "Spec file not found: <projectRoot>\https://example.com/openapi.json" — a missing file,
+        // supposedly, rather than an unsupported kind of source.
+        //
+        // Ahead of the escaping guard below rather than after it: a URL is perfectly
+        // representable in XML, so TryEscape would pass it through and this sentence would only
+        // be reached for a URL that also carried something XML 1.0 cannot represent. "Is this a
+        // kind of source InTest can read" is the question that makes the escaping question
+        // meaningful, the same ordering the blank check above already uses.
+        //
+        // Judged on the normalised value, like the escaping guard below and unlike the blank
+        // check above: normalisation runs before both, and it is the normalised value that
+        // reaches intest.json, so this refuses exactly what would have been written.
+        if (SpecLoader.IsUrl(normalizedSpecSource))
+        {
+            Console.Error.WriteLine(SpecLoader.UrlReason("--spec", normalizedSpecSource, SpecRemedy));
             return ExitToolError;
         }
 
