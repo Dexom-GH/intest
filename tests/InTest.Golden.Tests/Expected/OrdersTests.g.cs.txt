@@ -103,4 +103,42 @@ public partial class OrdersTests : Orders.ApiTests.OrdersTestBase
             response, 200, "op:listOrders:200:application/json", Schemas, TestId, stopwatch.Elapsed,
             TestContext.CancellationToken);
     }
+
+    [TestMethod, TestCategory("Contract")]
+    [Description("Given Orders, when listOrders, then 403")]
+    public async Task ListOrders_Forbidden()
+    {
+        RequireMultipleIdentities();
+        RequireSecondaryIdentityLacks("orders.read");
+        using var _ = UseIdentity(IdentitySlot.Secondary);
+
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            InTestUrl.Build("/orders"));
+
+        var stopwatch = Stopwatch.StartNew();
+        using var response = await Client.SendAsync(request, TestContext.CancellationToken);
+        stopwatch.Stop();
+
+        await ApiResponseAssertions.ShouldMatchStatusAsync(
+            response, 403, TestId, stopwatch.Elapsed, TestContext.CancellationToken);
+    }
+
+    [TestMethod, TestCategory("Contract")]
+    [Description("Given Orders, when listOrders, then 401")]
+    public async Task ListOrders_Unauthorized()
+    {
+        using var _ = UseIdentity(IdentitySlot.None);
+
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            InTestUrl.Build("/orders"));
+
+        var stopwatch = Stopwatch.StartNew();
+        using var response = await Client.SendAsync(request, TestContext.CancellationToken);
+        stopwatch.Stop();
+
+        await ApiResponseAssertions.ShouldMatchStatusAsync(
+            response, 401, TestId, stopwatch.Elapsed, TestContext.CancellationToken);
+    }
 }

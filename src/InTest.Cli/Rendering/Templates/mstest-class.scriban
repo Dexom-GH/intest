@@ -24,6 +24,9 @@ public partial class {{ class_name }} : {{ base_class }}
 {{~ if tc.identity_override ~}}
 {{~ if tc.identity_needs_guard ~}}
         RequireMultipleIdentities();
+{{~ if tc.required_scopes_args ~}}
+        RequireSecondaryIdentityLacks({{ tc.required_scopes_args }});
+{{~ end ~}}
 {{~ end ~}}
         using var _ = UseIdentity({{ tc.identity_override }});
 

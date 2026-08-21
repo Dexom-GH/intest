@@ -121,6 +121,16 @@ internal sealed class GoldenApiStub : IDisposable
                     // Task 5 Step 2's live wire proof — the one path in this stub that actually
                     // inspects Authorization, everything else here trusts the request unconditionally.
                     "/api/secure" => HandleSecureResource(context.Request),
+                    // Task 4 / F11's live wire proof. Unlike "/api/secure" above, this path never
+                    // needs to distinguish default from secondary: the whole point of
+                    // AForbiddenCaseTheSecondaryIdentityIsAuthorizedForSkipsRatherThanFails is that
+                    // the secondary identity genuinely holds the scope this operation requires, so
+                    // a real API would let it through too — any authenticated caller gets 200, and
+                    // only a missing Authorization header gets 401. That is what makes the
+                    // generated 403 case unwinnable on the wire (it would see 200, not 403) unless
+                    // RequireSecondaryIdentityLacks skips it first, which is exactly what this test
+                    // exists to prove — see HandleScopedSecureResource's own doc.
+                    "/api/secure-scoped" => HandleScopedSecureResource(context.Request),
                     // Belt-and-braces, not the primary catch: RequireFixture already throws before a
                     // request carrying an unresolved sentinel is ever built (confirmed by sabotaging
                     // the replace step in FixtureParameterReachesALiveRequestEndToEnd — the failure
@@ -168,6 +178,24 @@ internal sealed class GoldenApiStub : IDisposable
         return authorization == "Bearer token-for-default"
             ? (200, """{"state":"ok"}""")
             : (403, """{"error":"forbidden"}""");
+    }
+
+    /// <summary>
+    /// Task 4 / F11's live wire proof. Deliberately does not discriminate default from secondary
+    /// the way <see cref="HandleSecureResource"/> does — this operation's whole point (in the test
+    /// that uses it) is that the secondary identity actually holds the scope it declares, so a
+    /// real, correctly-implemented API would authorize it too. Any request carrying a bearer token
+    /// at all gets 200; only a missing <c>Authorization</c> header gets 401. If the generated
+    /// wrong-scope 403 case ever reached this over the wire, it would see 200 and fail its own
+    /// assertion of 403 — proving <c>RequireSecondaryIdentityLacks</c> must skip it before the
+    /// request is ever built, not merely that the case happens to still pass.
+    /// </summary>
+    private static (int, string) HandleScopedSecureResource(HttpListenerRequest request)
+    {
+        var authorization = request.Headers["Authorization"];
+        return string.IsNullOrEmpty(authorization)
+            ? (401, """{"error":"unauthorized"}""")
+            : (200, """{"state":"ok"}""");
     }
 
     private (int, string) HandleHealthCheck()

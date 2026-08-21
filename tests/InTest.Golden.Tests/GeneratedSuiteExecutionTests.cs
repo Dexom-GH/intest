@@ -272,6 +272,55 @@ public class GeneratedSuiteExecutionTests
     }
     """;
 
+    /// <summary>
+    /// Task 4 / F11's live wire proof. Unlike <see cref="SpecWithSecuredOperation"/> above
+    /// (<c>bearerAuth: []</c>, scope-free), this operation declares a scope — so its generated
+    /// wrong-scope 403 case carries a non-empty <c>RequiredScopes</c> and the template emits both
+    /// guards, not just <c>RequireMultipleIdentities</c>. Paired with
+    /// <see cref="GoldenTokenProviderSources.TwoIdentityTokenProvider"/>'s secondary identity,
+    /// which now declares this exact scope: the secondary identity is authorized for this
+    /// operation, so <c>RequireSecondaryIdentityLacks</c> must skip the case rather than let it run
+    /// and fail against <see cref="GoldenApiStub.HandleScopedSecureResource"/>, which — unlike
+    /// <c>HandleSecureResource</c> — answers 200 to any authenticated caller. Its own path, tag,
+    /// and operationId, distinct from <see cref="SpecWithSecuredOperation"/>'s, so nothing here
+    /// touches the class or test names that test already asserts on.
+    /// </summary>
+    private const string SpecWithScopedSecuredOperation = """
+    {
+      "openapi": "3.0.3",
+      "info": { "title": "Stub", "version": "1.0" },
+      "paths": {
+        "/api/secure-scoped": {
+          "get": {
+            "operationId": "getScopedSecureResource",
+            "tags": ["ScopedSecure"],
+            "security": [{ "bearerAuth": ["orders.write"] }],
+            "responses": {
+              "200": {
+                "description": "ok",
+                "content": {
+                  "application/json": {
+                    "schema": { "$ref": "#/components/schemas/Status" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "components": {
+        "securitySchemes": { "bearerAuth": { "type": "http", "scheme": "bearer" } },
+        "schemas": {
+          "Status": {
+            "type": "object",
+            "required": ["state"],
+            "properties": { "state": { "type": "string" } }
+          }
+        }
+      }
+    }
+    """;
+
     private string _root = null!;
     private GoldenApiStub _stub = null!;
 
@@ -821,6 +870,92 @@ public class GeneratedSuiteExecutionTests
         // actually reached the stub, not merely have been built and never sent.
         _stub.ReceivedPaths.Count(p => p == "/api/secure").ShouldBe(3,
             $"expected all 3 generated cases to reach the stub over the wire. Paths served: {string.Join(", ", _stub.ReceivedPaths)}");
+    }
+
+    /// <summary>
+    /// Task 4 / F11's live wire proof — the whole of F11 in one assertion. Before this plan (the
+    /// template never emitted <c>RequireSecondaryIdentityLacks</c>, whatever
+    /// <c>TestCasePlan.RequiredScopes</c> carried), the generated suite fails here:
+    /// <c>GetScopedSecureResource_Forbidden</c> would run, send a request carrying
+    /// <c>token-for-secondary</c>, and get a real 200 back from
+    /// <see cref="GoldenApiStub.HandleScopedSecureResource"/> — the secondary identity genuinely
+    /// holds <c>"orders.write"</c> (<see cref="GoldenTokenProviderSources.TwoIdentityTokenProvider"/>),
+    /// so a correct API authorizes it, and asserting 403 against that 200 fails.
+    /// <para>
+    /// Asserts both that the run has no failures, and that the specific case is
+    /// <c>NotExecuted</c> in the .trx: "no failures" alone would also describe a suite that simply
+    /// stopped generating the case at all, which is not what this test exists to prove.
+    /// <c>NotExecuted</c>, not "Skipped" — confirmed on MSTest 4.3.3 / .NET 10 (v1-c) to be the
+    /// .trx's own spelling for an <c>Assert.Inconclusive</c> outcome; "Skipped" is only the console
+    /// summary's word for the same thing.
+    /// </para>
+    /// </summary>
+    [TestMethod]
+    public async Task AForbiddenCaseTheSecondaryIdentityIsAuthorizedForSkipsRatherThanFails()
+    {
+        File.WriteAllText(Path.Combine(_root, "spec.json"), SpecWithScopedSecuredOperation);
+
+        InitCommand.Run(_root, "Stub.ApiTests", "spec.json").ShouldBe(0);
+        UseProjectReferenceInsteadOfPackage();
+        PointAtStub();
+        RegisterTokenProvider();
+
+        (await FixturesRepairCommand.RunAsync(_root, CancellationToken.None)).ShouldBe(0);
+        (await GenerateCommand.RunAsync(_root, CancellationToken.None)).ShouldBe(0);
+
+        // Guard against the generated suite silently missing the case, or the guard call, entirely
+        // — the same pattern every other live-wire test in this file uses.
+        var generatedFile = Directory.GetFiles(_root, "ScopedSecureTests.g.cs", SearchOption.AllDirectories)
+            .ShouldHaveSingleItem("generate should have produced exactly one ScopedSecureTests.g.cs");
+        var generated = File.ReadAllText(generatedFile);
+        generated.ShouldContain("GetScopedSecureResource_Forbidden",
+            customMessage: "the wrong-scope 403 case this test exists to prove must actually be generated");
+        generated.ShouldContain("RequireSecondaryIdentityLacks(\"orders.write\");",
+            customMessage: "Task 4: the scoped 403 case must carry both guards, not just RequireMultipleIdentities");
+
+        var build = await ProcessRunner.RunAsync("dotnet", $"build \"{_root}\" --nologo -v q");
+        build.ExitCode.ShouldBe(0, $"generated project failed to build:{Environment.NewLine}{build.Output}");
+
+        var resultsDir = Path.Combine(_root, "TestResults");
+        var test = await ProcessRunner.RunAsync("dotnet",
+            $"test \"{_root}\" --no-build --nologo --logger \"trx;LogFileName=results.trx\" --results-directory \"{resultsDir}\"");
+
+        var trxPath = Directory.GetFiles(resultsDir, "results.trx", SearchOption.AllDirectories)
+            .ShouldHaveSingleItem($"expected exactly one results.trx under {resultsDir}:{Environment.NewLine}{test.Output}");
+
+        var trx = XDocument.Load(trxPath);
+        var results = trx.Descendants().Where(e => e.Name.LocalName == "UnitTestResult").ToList();
+
+        results.Count.ShouldBe(3,
+            $"expected exactly 3 tests (Contract, Unauthorized, Forbidden) but the trx recorded {results.Count}:{Environment.NewLine}{test.Output}");
+
+        // "No failures" alone would also describe a suite that stopped generating the case at
+        // all — the count assertion above already rules that out, but this states the "no
+        // failures" half explicitly and by name, over every result in the run.
+        var failed = results.Where(e => e.Attribute("outcome")?.Value == "Failed").ToList();
+        failed.ShouldBeEmpty(
+            $"expected no failures in the run, but {failed.Count} test(s) failed:{Environment.NewLine}{test.Output}");
+
+        var forbiddenResult = results.SingleOrDefault(e =>
+            (e.Attribute("testName")?.Value ?? "").Contains("GetScopedSecureResource_Forbidden", StringComparison.Ordinal));
+        forbiddenResult.ShouldNotBeNull(
+            $"GetScopedSecureResource_Forbidden did not appear in the trx at all:{Environment.NewLine}{test.Output}");
+        forbiddenResult!.Attribute("outcome")?.Value.ShouldBe("NotExecuted",
+            $"GetScopedSecureResource_Forbidden should have been skipped by RequireSecondaryIdentityLacks " +
+            $"— the secondary identity holds the scope this operation requires, so it cannot produce a real " +
+            $"403:{Environment.NewLine}{test.Output}");
+
+        // The success and 401 cases must still genuinely pass — the guard must skip only the one
+        // case it exists for, not the whole class.
+        foreach (var name in new[] { "GetScopedSecureResource_Contract", "GetScopedSecureResource_Unauthorized" })
+        {
+            var result = results.SingleOrDefault(e => (e.Attribute("testName")?.Value ?? "").Contains(name, StringComparison.Ordinal));
+            result.ShouldNotBeNull($"{name} did not appear in the trx at all:{Environment.NewLine}{test.Output}");
+            result!.Attribute("outcome")?.Value.ShouldBe("Passed",
+                $"{name} did not receive its expected real status over the wire:{Environment.NewLine}{test.Output}");
+        }
+
+        test.ExitCode.ShouldBe(0, test.Output);
     }
 
     /// <summary>

@@ -6,6 +6,7 @@
       "get": {
         "operationId": "listOrders",
         "tags": ["Orders"],
+        "security": [{ "bearerAuth": ["orders.read"] }],
         "responses": { "200": { "description": "ok", "content": { "application/json": {
           "schema": { "type": "array", "items": { "$ref": "#/components/schemas/Order" } } } } } }
       }

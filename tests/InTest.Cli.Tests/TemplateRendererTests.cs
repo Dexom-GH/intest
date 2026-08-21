@@ -77,7 +77,8 @@ public class TemplateRendererTests
             NeedsFixture: false,
             PathParameterKinds: [PathParameterKind.Integer])]);
 
-    private static TestClassPlan PlanAuth(int expectedStatus, IdentitySlot slot, string httpMethod = "GET") => new(
+    private static TestClassPlan PlanAuth(
+        int expectedStatus, IdentitySlot slot, string httpMethod = "GET", IReadOnlyList<string>? requiredScopes = null) => new(
         "OrdersTests", "Orders",
         [new TestCasePlan(
             MethodName: expectedStatus == 401 ? "DeleteOrder_Unauthorized" : "DeleteOrder_Forbidden",
@@ -92,7 +93,8 @@ public class TemplateRendererTests
             Category: "Contract",
             Role: CaseRole.Auth,
             NeedsFixture: false,
-            Slot: slot)]);
+            Slot: slot,
+            RequiredScopes: requiredScopes)]);
 
     private static TestClassPlan PlanWithRole(CaseRole role) => new(
         "OrdersTests", "Orders",
@@ -462,6 +464,80 @@ public class TemplateRendererTests
         rendered.ShouldNotContain("RequireFixture(");
         rendered.ShouldContain("Guid.NewGuid().ToString()");
         rendered.ShouldNotContain("FixtureParameter(");
+    }
+
+    // --- Scope guard (Task 4, decision 3 continued) ---
+
+    [TestMethod]
+    public void AWrongScopeCaseCallsBothGuardsBeforeOverridingIdentityAndBuildingTheRequest()
+    {
+        // Ordering is the contract, the same way CallsRequireFixtureBeforeBuildingTheRequest
+        // pins RequireFixture ahead of the request: RequireMultipleIdentities (is there a
+        // second identity at all) must run before RequireSecondaryIdentityLacks (can it prove
+        // anything here), which must run before UseIdentity selects it, which must run before
+        // the request is built.
+        var rendered = Render(PlanAuth(403, IdentitySlot.Secondary, requiredScopes: ["orders.write"]));
+
+        rendered.ShouldContain("RequireMultipleIdentities();");
+        rendered.ShouldContain("RequireSecondaryIdentityLacks(\"orders.write\");");
+
+        var requireMultiple = rendered.IndexOf("RequireMultipleIdentities();", StringComparison.Ordinal);
+        var requireLacks = rendered.IndexOf("RequireSecondaryIdentityLacks(", StringComparison.Ordinal);
+        var useIdentity = rendered.IndexOf("using var _ = UseIdentity(", StringComparison.Ordinal);
+        var buildRequest = rendered.IndexOf("new HttpRequestMessage(", StringComparison.Ordinal);
+
+        requireMultiple.ShouldBeLessThan(requireLacks);
+        requireLacks.ShouldBeLessThan(useIdentity);
+        useIdentity.ShouldBeLessThan(buildRequest);
+    }
+
+    [TestMethod]
+    public void AWrongScopeCaseWithMultipleRequiredScopesPassesEachAsItsOwnArgumentInOrder()
+    {
+        var rendered = Render(PlanAuth(403, IdentitySlot.Secondary, requiredScopes: ["orders.read", "orders.write"]));
+
+        rendered.ShouldContain("RequireSecondaryIdentityLacks(\"orders.read\", \"orders.write\");");
+    }
+
+    [TestMethod]
+    public void AWrongScopeCaseWithNoRequiredScopesEmitsOnlyTheFirstGuard()
+    {
+        // A scope-free secured operation (bearerAuth with no scopes, e.g. GET /orders/{id} in
+        // the golden corpus) still needs a second identity to exist — but there is nothing to
+        // prove it lacks, so emitting a bare RequireSecondaryIdentityLacks() would read as a
+        // scope-free assertion rather than an absent one. RequiredScopes defaults to empty
+        // (never null) on TestCasePlan, so this is the ordinary, unremarkable case, not an edge
+        // case that needs an explicit empty array here.
+        var rendered = Render(PlanAuth(403, IdentitySlot.Secondary));
+
+        rendered.ShouldContain("RequireMultipleIdentities();");
+        rendered.ShouldNotContain("RequireSecondaryIdentityLacks(");
+    }
+
+    [TestMethod]
+    public void ANoTokenCaseEmitsNeitherGuardEvenWithRequiredScopes()
+    {
+        // Decision 3's table: the 401 case never needs a second identity, regardless of what
+        // the operation requires — so it must never call either guard, even if a plan somehow
+        // carried RequiredScopes on it (TestPlanBuilder never does, but the template's own
+        // condition on Slot must be what prevents this, not an assumption about the input it's
+        // handed).
+        var rendered = Render(PlanAuth(401, IdentitySlot.None, requiredScopes: ["orders.write"]));
+
+        rendered.ShouldNotContain("RequireMultipleIdentities(");
+        rendered.ShouldNotContain("RequireSecondaryIdentityLacks(");
+    }
+
+    [TestMethod]
+    public void EmitsNoStrayBlankLinesForAWrongScopeCaseWithRequiredScopes()
+    {
+        var rendered = Render(PlanAuth(403, IdentitySlot.Secondary, requiredScopes: ["orders.write"]));
+
+        rendered.ShouldNotContain("\n\n\n");
+        rendered.ShouldNotContain("\n\n    }");
+        rendered.ShouldContain(
+            "    {\n        RequireMultipleIdentities();\n        RequireSecondaryIdentityLacks(\"orders.write\");\n        using var _ = UseIdentity(IdentitySlot.Secondary);\n\n        using var request",
+            customMessage: "both guards and the override sit on adjacent lines, with exactly one blank line before the request");
     }
 
     [TestMethod]

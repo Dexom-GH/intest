@@ -46,6 +46,19 @@ public sealed class TemplateRenderer
                 // only slot that ever needs it — computed from the slot itself rather than the
                 // role so the condition stays meaningful if a future role ever reused Secondary.
                 identity_needs_guard = c.Slot == IdentitySlot.Secondary,
+                // Task 4: the second guard for the wrong-scope 403 case — a second identity
+                // existing (identity_needs_guard, above) is not enough to make a 403 provable;
+                // the secondary identity must also lack at least one scope the operation
+                // requires. Null (not empty string) when RequiredScopes is empty so the template
+                // can render nothing at all for a scope-free secured operation (e.g. bearerAuth
+                // with no scopes) rather than a bare RequireSecondaryIdentityLacks() call, which
+                // would read as an assertion that the identity holds zero scopes rather than as
+                // "there is nothing to check here". TestCasePlan.RequiredScopes is empty-never-
+                // null and already ordered with StringComparer.Ordinal (Task 3), so this only
+                // joins and quotes — it does not resort.
+                required_scopes_args = c.RequiredScopes.Count == 0
+                    ? null
+                    : string.Join(", ", c.RequiredScopes.Select(s => $"\"{s}\"")),
                 // Decision 7: Default (every case that predates Task 5, and every non-auth case)
                 // renders as null, which the template reads as "emit no override line at all" —
                 // the reason every existing Success case stays byte-identical in the golden file.

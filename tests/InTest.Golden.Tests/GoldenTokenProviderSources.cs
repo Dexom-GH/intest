@@ -18,6 +18,17 @@ internal static class GoldenTokenProviderSources
     /// scope without needing to parse a real JWT or run any identity protocol at all. The
     /// generated 401 case never reaches <c>GetTokenAsync</c> — <c>AuthHandler</c> short-circuits
     /// on the no-token sentinel before ever asking a provider for anything.
+    /// <para>
+    /// The secondary identity declares <c>"orders.write"</c> (Task 4 / F11) so that
+    /// <c>GeneratedSuiteExecutionTests.AForbiddenCaseTheSecondaryIdentityIsAuthorizedForSkipsRatherThanFails</c>
+    /// can prove <c>RequireSecondaryIdentityLacks</c> skips a 403 case whose secondary identity
+    /// actually holds what the operation requires. Harmless to the scope-free operation
+    /// <c>AuthCasesReceiveRealStatusesOverTheWireAndSuccessCasesStillPass</c> already exercises
+    /// (<c>getSecureResource</c>'s <c>security: [{ "bearerAuth": [] }]</c> carries no
+    /// <c>RequiredScopes</c> at all, so its generated 403 case never calls
+    /// <c>RequireSecondaryIdentityLacks</c> in the first place — declaring scopes here does not
+    /// change what that test's guard call looks like or does).
+    /// </para>
     /// </summary>
     public const string TwoIdentityTokenProvider = """
     using InTest.Runtime;
@@ -26,7 +37,8 @@ internal static class GoldenTokenProviderSources
 
     public sealed class TwoIdentityTokenProvider : ITestTokenProvider
     {
-        public IReadOnlyList<TestIdentity> Identities { get; } = [new TestIdentity("default"), new TestIdentity("secondary")];
+        public IReadOnlyList<TestIdentity> Identities { get; } =
+            [new TestIdentity("default"), new TestIdentity("secondary", ["orders.write"])];
 
         public Task<string> GetTokenAsync(string audience, string? identity = null, CancellationToken cancellationToken = default) =>
             Task.FromResult($"token-for-{identity ?? Identities[0].Name}");
