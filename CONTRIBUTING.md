@@ -45,8 +45,15 @@ The spec has conventions worth keeping:
 New implementation plans (`docs/superpowers/plans/`) name their decisions with short slugs —
 `[containment]`, `[descriptor]` — rather than numbering them. Numbered decisions drifted three
 times during v1-c, twice inside a single document: inserting a decision silently invalidates
-every reference after it, and one commit was already spent re-fixing the same failure across
-documents. F11's plan named its decisions instead — `[containment]`, `[descriptor]`,
+every reference after it. A related failure has already cost a commit of its own: `1448570`
+("docs: disambiguate v1-a and v1-b decision references") had to qualify every bare "decision N"
+in `src/` and `tests/` as "v1-b decision N", because decision numbering restarts in each plan and
+a bare number does not say which plan it belongs to. That is a different failure mode than
+reference drift within one document — but it is the same class, numbered decision references
+going wrong, and it is an additional argument for slugs rather than a restatement of the first
+one: a slug is unique across plans in a way `3` never is.
+
+F11's plan named its decisions instead — `[containment]`, `[descriptor]`,
 `[unknown-runs]`, `[counted]`, `[sample-unchanged]` — and had zero reference drift across 29
 commits and several rounds of insertions. A slug is a word that insertion and reordering cannot
 break; a number is not.
