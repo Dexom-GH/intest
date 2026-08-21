@@ -138,6 +138,28 @@ resolving to the wrong file at all — until it was closed by a test in
 `MSBuildEvaluationTests.cs` that runs the same `dotnet msbuild` evaluation itself and asserts on
 its output.
 
+## Working alongside other branches
+
+Two habits, both earned by real cost today.
+
+**`main` is not the whole picture.** An unmerged branch is invisible to it.
+Before starting work, check whether a branch already carries it, not just
+whether `main` does — `git branch --no-merged main` is the check. Four
+parallel efforts were dispatched against work already merged, and one was
+nearly dispatched twice because the finished implementation sat on a branch
+`main` hadn't absorbed yet.
+
+**Re-check your base before committing and before claiming done.** A
+baseline measured once can't see `main` move afterward — that's a reason to
+repeat the check, not skip it:
+
+```bash
+git merge-base --is-ancestor <your-base> main
+```
+
+A branch's base went stale mid-task; the author only found out because
+someone told them.
+
 ## Dependency policy
 
 New dependencies are held to a hard line, because adopters inherit whatever we take on.
