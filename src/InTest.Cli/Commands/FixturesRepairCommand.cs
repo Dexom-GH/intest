@@ -1,5 +1,5 @@
-using System.Text.Json;
 using System.Text.Json.Nodes;
+using InTest.Cli.Configuration;
 using InTest.Cli.Fixtures;
 using InTest.Cli.Planning;
 using InTest.Cli.Spec;
@@ -26,17 +26,15 @@ public static class FixturesRepairCommand
 
         try
         {
-            var configPath = Path.Combine(projectRoot, "intest.json");
-            if (!File.Exists(configPath))
-            {
-                Console.Error.WriteLine($"No intest.json found in '{projectRoot}'. Run `intest init` first.");
-                return ExitToolError;
-            }
+            // The whole of intest.json, through the same loader `generate` uses — not just the
+            // spec.source this command reads. A config that is valid for repair but not for
+            // generate is a state nobody can reason about: repair succeeds, the adopter concludes
+            // their config is sound, and they lose that conclusion one command later. §5's exit 2
+            // ("malformed intest.json") is a property of the document, not of a read set. Nothing
+            // is given up by refusing here, because repair cannot repair intest.json.
+            var config = ConfigLoader.Load(projectRoot);
 
-            using var config = JsonDocument.Parse(File.ReadAllText(configPath));
-            var specRelative = config.RootElement.GetProperty("spec").GetProperty("source").GetString()!;
-
-            var spec = await SpecLoader.LoadFromFileAsync(Path.Combine(projectRoot, specRelative), cancellationToken)
+            var spec = await SpecLoader.LoadFromFileAsync(Path.Combine(projectRoot, config.SpecSource), cancellationToken)
                                        .ConfigureAwait(false);
 
             // Iterates the test plan, not the raw document: TestPlanBuilder is the sole authority
@@ -134,6 +132,11 @@ public static class FixturesRepairCommand
                 : $"Created {created} fixture(s), updated {updated} fixture(s).");
 
             return failed == 0 ? ExitOk : ExitToolError;
+        }
+        catch (ConfigLoadException ex)
+        {
+            Console.Error.WriteLine(ex.Message);
+            return ExitToolError;
         }
         catch (SpecLoadException ex)
         {

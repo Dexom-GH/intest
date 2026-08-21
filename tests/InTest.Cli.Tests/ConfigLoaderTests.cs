@@ -1,0 +1,412 @@
+using InTest.Cli.Configuration;
+using Shouldly;
+
+namespace InTest.Cli.Tests;
+
+/// <summary>
+/// The adopter-config rule, tested at its source. Every case here is a hand-edited
+/// <c>intest.json</c> — the likeliest way any of them occurs — so the bar for each message is the
+/// one <see cref="Naming.CSharpIdentifier.TryValidateDottedName"/> and
+/// <see cref="Fixtures.FixtureDocument.TryValidateOperationKey"/> already meet: name the setting,
+/// quote what was actually written, narrow to the offending part, state the rule, and end with a
+/// remedy and an example.
+/// <para>
+/// Every test asserts the message does NOT contain "unexpected failure". Before this loader
+/// existed each of these reached <c>GenerateCommand</c>'s catch-all and surfaced as
+/// <c>intest: unexpected failure: KeyNotFoundException: …</c> — already exit 2, so an exit-code
+/// assertion alone would have passed against the defect. The absent-substring assertion is what
+/// makes these tests fail for the reason their names state.
+/// </para>
+/// </summary>
+[TestClass]
+public class ConfigLoaderTests
+{
+    private string _root = null!;
+
+    [TestInitialize]
+    public void CreateProject()
+    {
+        _root = Path.Combine(Path.GetTempPath(), "intest-cfg-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(_root);
+    }
+
+    [TestCleanup]
+    public void RemoveProject()
+    {
+        if (Directory.Exists(_root))
+        {
+            Directory.Delete(_root, recursive: true);
+        }
+    }
+
+    private void WriteConfig(string json) => File.WriteAllText(Path.Combine(_root, "intest.json"), json);
+
+    /// <summary>The message for a config that cannot load, with the stack-trace shape ruled out.</summary>
+    private string ReasonFor(string json)
+    {
+        WriteConfig(json);
+        var message = Should.Throw<ConfigLoadException>(() => ConfigLoader.Load(_root)).Message;
+        message.ShouldNotContain("unexpected failure");
+        message.ShouldNotContain("Exception");
+        return message;
+    }
+
+    private const string Valid = """
+    { "schemaVersion": 1, "spec": { "source": "orders.json" },
+      "project": { "rootNamespace": "Orders.ApiTests", "testBaseClass": "Orders.ApiTests.OrdersTestBase" } }
+    """;
+
+    [TestMethod]
+    public void LoadsAValidConfig()
+    {
+        WriteConfig(Valid);
+
+        var config = ConfigLoader.Load(_root);
+
+        config.SpecSource.ShouldBe("orders.json");
+        config.RootNamespace.ShouldBe("Orders.ApiTests");
+        config.TestBaseClass.ShouldBe("Orders.ApiTests.OrdersTestBase");
+    }
+
+    /// <summary>
+    /// The settings `intest init` does not write and no command reads — `producer`, `name`,
+    /// `intestVersion` — must stay optional, and unknown keys must not be rejected: §5's config
+    /// grows by addition, and a config written by a newer patch release still has to load.
+    /// </summary>
+    [TestMethod]
+    public void IgnoresSettingsItDoesNotRead()
+    {
+        WriteConfig("""
+        { "schemaVersion": 1, "intestVersion": "9.9.9",
+          "spec": { "source": "orders.json", "producer": "swashbuckle" },
+          "project": { "name": "Orders.ApiTests", "framework": "mstest", "assertions": ["shouldly"],
+                       "rootNamespace": "Orders.ApiTests", "testBaseClass": "Orders.ApiTests.OrdersTestBase" },
+          "somethingFromALaterRelease": { "nested": true } }
+        """);
+
+        ConfigLoader.Load(_root).SpecSource.ShouldBe("orders.json");
+    }
+
+    [TestMethod]
+    public void NamesTheProjectDirectoryWhenThereIsNoConfigAtAll()
+    {
+        var message = Should.Throw<ConfigLoadException>(() => ConfigLoader.Load(_root)).Message;
+
+        message.ShouldContain("intest.json");
+        message.ShouldContain(_root);
+        message.ShouldContain("intest init");
+    }
+
+    [TestMethod]
+    public void ExplainsJsonThatDoesNotParseRatherThanThrowingJsonException()
+    {
+        var reason = ReasonFor("""{ "schemaVersion": 1, "spec": { "source": "orders.json" } """);
+
+        reason.ShouldContain("intest.json");
+        reason.ShouldContain("not valid JSON");
+    }
+
+    [TestMethod]
+    public void ExplainsATopLevelThatIsNotAnObject()
+    {
+        var reason = ReasonFor("""[ { "spec": { "source": "orders.json" } } ]""");
+
+        reason.ShouldContain("intest.json");
+        reason.ShouldContain("array");
+        reason.ShouldContain("object");
+    }
+
+    // ---- spec ----------------------------------------------------------------------------
+
+    [TestMethod]
+    public void ExplainsAMissingSpecSection()
+    {
+        var reason = ReasonFor("""
+        { "schemaVersion": 1,
+          "project": { "rootNamespace": "Orders.ApiTests", "testBaseClass": "Orders.ApiTests.OrdersTestBase" } }
+        """);
+
+        reason.ShouldContain("spec");
+        reason.ShouldContain("source");
+    }
+
+    [TestMethod]
+    public void ExplainsASpecSectionThatIsNotAnObject()
+    {
+        var reason = ReasonFor("""
+        { "schemaVersion": 1, "spec": "orders.json",
+          "project": { "rootNamespace": "Orders.ApiTests", "testBaseClass": "Orders.ApiTests.OrdersTestBase" } }
+        """);
+
+        reason.ShouldContain("spec");
+        reason.ShouldContain("object");
+    }
+
+    [TestMethod]
+    public void ExplainsAMissingSpecSource()
+    {
+        var reason = ReasonFor("""
+        { "schemaVersion": 1, "spec": { "producer": "auto" },
+          "project": { "rootNamespace": "Orders.ApiTests", "testBaseClass": "Orders.ApiTests.OrdersTestBase" } }
+        """);
+
+        reason.ShouldContain("spec.source");
+    }
+
+    /// <summary>
+    /// The brief's first named defect. <c>.GetString()!</c> on a number threw
+    /// <see cref="InvalidOperationException"/> from deep inside <c>System.Text.Json</c>, naming
+    /// neither the file nor the setting.
+    /// </summary>
+    [TestMethod]
+    public void ExplainsASpecSourceThatIsNotAStringAndQuotesWhatWasWritten()
+    {
+        var reason = ReasonFor("""
+        { "schemaVersion": 1, "spec": { "source": 42 },
+          "project": { "rootNamespace": "Orders.ApiTests", "testBaseClass": "Orders.ApiTests.OrdersTestBase" } }
+        """);
+
+        reason.ShouldContain("spec.source");
+        reason.ShouldContain("42");
+        reason.ShouldContain("string");
+    }
+
+    /// <summary>
+    /// The other half of the same defect, and the more dangerous half: <c>.GetString()!</c>
+    /// returned null rather than throwing, so the failure surfaced later still — an
+    /// <see cref="ArgumentNullException"/> from <c>Path.Combine</c> naming its own <c>path2</c>
+    /// parameter, which points at a framework method rather than at the config.
+    /// </summary>
+    [TestMethod]
+    public void ExplainsASpecSourceThatIsJsonNull()
+    {
+        var reason = ReasonFor("""
+        { "schemaVersion": 1, "spec": { "source": null },
+          "project": { "rootNamespace": "Orders.ApiTests", "testBaseClass": "Orders.ApiTests.OrdersTestBase" } }
+        """);
+
+        reason.ShouldContain("spec.source");
+        reason.ShouldContain("null");
+    }
+
+    /// <summary>
+    /// An empty source is the one case that never threw at all: <c>Path.Combine(root, "")</c>
+    /// is <c>root</c>, so <c>SpecLoader</c> reported "Spec file not found:" against the project
+    /// directory — an accurate sentence about the wrong thing, which is worse than a crash
+    /// because it sends the adopter looking for a missing file that was never named.
+    /// </summary>
+    [TestMethod]
+    public void ExplainsAnEmptySpecSourceRatherThanReportingTheProjectDirectoryAsAMissingSpec()
+    {
+        var reason = ReasonFor("""
+        { "schemaVersion": 1, "spec": { "source": "   " },
+          "project": { "rootNamespace": "Orders.ApiTests", "testBaseClass": "Orders.ApiTests.OrdersTestBase" } }
+        """);
+
+        reason.ShouldContain("spec.source");
+        reason.ShouldContain("empty");
+        reason.ShouldNotContain("Spec file not found");
+    }
+
+    // ---- project -------------------------------------------------------------------------
+
+    /// <summary>The brief's second named defect: <c>KeyNotFoundException</c> through the catch-all.</summary>
+    [TestMethod]
+    public void ExplainsAMissingProjectSection()
+    {
+        var reason = ReasonFor("""{ "schemaVersion": 1, "spec": { "source": "orders.json" } }""");
+
+        reason.ShouldContain("project");
+        reason.ShouldContain("rootNamespace");
+        reason.ShouldContain("testBaseClass");
+    }
+
+    [TestMethod]
+    public void ExplainsAProjectSectionThatIsNotAnObject()
+    {
+        var reason = ReasonFor("""
+        { "schemaVersion": 1, "spec": { "source": "orders.json" }, "project": ["Orders.ApiTests"] }
+        """);
+
+        reason.ShouldContain("project");
+        reason.ShouldContain("object");
+    }
+
+    [TestMethod]
+    public void ExplainsAMissingRootNamespace()
+    {
+        var reason = ReasonFor("""
+        { "schemaVersion": 1, "spec": { "source": "orders.json" },
+          "project": { "testBaseClass": "Orders.ApiTests.OrdersTestBase" } }
+        """);
+
+        reason.ShouldContain("project.rootNamespace");
+    }
+
+    [TestMethod]
+    public void ExplainsAMissingTestBaseClass()
+    {
+        var reason = ReasonFor("""
+        { "schemaVersion": 1, "spec": { "source": "orders.json" },
+          "project": { "rootNamespace": "Orders.ApiTests" } }
+        """);
+
+        reason.ShouldContain("project.testBaseClass");
+    }
+
+    /// <summary>
+    /// The hole directly beneath 0f42984. <c>TryValidateDottedName</c> takes a <c>string?</c> and
+    /// handles null, so JSON null was already refused — but a number never reached it, because
+    /// <c>.GetString()</c> threw first. Validating the type here is what closes that.
+    /// </summary>
+    [TestMethod]
+    public void ExplainsARootNamespaceThatIsNotAString()
+    {
+        var reason = ReasonFor("""
+        { "schemaVersion": 1, "spec": { "source": "orders.json" },
+          "project": { "rootNamespace": 7, "testBaseClass": "Orders.ApiTests.OrdersTestBase" } }
+        """);
+
+        reason.ShouldContain("project.rootNamespace");
+        reason.ShouldContain("7");
+        reason.ShouldContain("string");
+    }
+
+    [TestMethod]
+    public void ExplainsATestBaseClassThatIsNotAString()
+    {
+        var reason = ReasonFor("""
+        { "schemaVersion": 1, "spec": { "source": "orders.json" },
+          "project": { "rootNamespace": "Orders.ApiTests", "testBaseClass": true } }
+        """);
+
+        reason.ShouldContain("project.testBaseClass");
+        reason.ShouldContain("string");
+    }
+
+    // ---- the rule 0f42984 established, still enforced from its new home -------------------
+
+    /// <summary>
+    /// Moving validation into the loader must not weaken it. These two pin the message text
+    /// <c>GenerateCommand</c> used to emit — including the remedy clause — so the injection fix
+    /// cannot regress into a bare type check.
+    /// </summary>
+    [TestMethod]
+    public void StillRefusesARootNamespaceThatIsNotAValidCSharpName()
+    {
+        var reason = ReasonFor("""
+        { "schemaVersion": 1, "spec": { "source": "orders.json" },
+          "project": { "rootNamespace": "Orders.ApiTests; public class Injected { } //",
+                       "testBaseClass": "Orders.ApiTests.OrdersTestBase" } }
+        """);
+
+        reason.ShouldContain("project.rootNamespace");
+        reason.ShouldContain("Change project.rootNamespace in intest.json");
+        reason.ShouldContain("Orders.ApiTests");
+    }
+
+    [TestMethod]
+    public void StillRefusesATestBaseClassThatIsNotAValidCSharpName()
+    {
+        var reason = ReasonFor("""
+        { "schemaVersion": 1, "spec": { "source": "orders.json" },
+          "project": { "rootNamespace": "Orders.ApiTests", "testBaseClass": "Orders.class" } }
+        """);
+
+        reason.ShouldContain("project.testBaseClass");
+        reason.ShouldContain("Change project.testBaseClass in intest.json");
+    }
+
+    [TestMethod]
+    public void StillRefusesARootNamespaceThatIsJsonNull()
+    {
+        ReasonFor("""
+        { "schemaVersion": 1, "spec": { "source": "orders.json" },
+          "project": { "rootNamespace": null, "testBaseClass": "Orders.ApiTests.OrdersTestBase" } }
+        """).ShouldContain("project.rootNamespace");
+    }
+
+    // ---- schemaVersion ---------------------------------------------------------------------
+    // §5: "schemaVersion in intest.json moves only on a major — it is how the CLI detects a
+    // config it must not silently reinterpret." Nothing read it until now, so that sentence
+    // described a capability the tool did not have: a schemaVersion 2 config was reinterpreted
+    // by a schemaVersion 1 CLI, producing wrong output and no error. It is the only failure on
+    // this surface that was silent rather than merely badly reported.
+
+    /// <summary>
+    /// The message must name the version the config declares and the version this CLI
+    /// implements, and must NOT point at `intest upgrade` — that command does not exist, and
+    /// naming it would reproduce one level down exactly the defect this check closes.
+    /// </summary>
+    [TestMethod]
+    public void RefusesASchemaVersionThisCliDoesNotImplement()
+    {
+        var reason = ReasonFor("""
+        { "schemaVersion": 2, "spec": { "source": "orders.json" },
+          "project": { "rootNamespace": "Orders.ApiTests", "testBaseClass": "Orders.ApiTests.OrdersTestBase" } }
+        """);
+
+        reason.ShouldContain("schemaVersion");
+        reason.ShouldContain("2");
+        reason.ShouldContain("1");
+        reason.ShouldNotContain("upgrade");
+    }
+
+    [TestMethod]
+    public void ExplainsAMissingSchemaVersion()
+    {
+        var reason = ReasonFor("""
+        { "spec": { "source": "orders.json" },
+          "project": { "rootNamespace": "Orders.ApiTests", "testBaseClass": "Orders.ApiTests.OrdersTestBase" } }
+        """);
+
+        reason.ShouldContain("schemaVersion");
+        reason.ShouldNotContain("upgrade");
+    }
+
+    [TestMethod]
+    public void ExplainsASchemaVersionThatIsNotAnInteger()
+    {
+        var reason = ReasonFor("""
+        { "schemaVersion": "1", "spec": { "source": "orders.json" },
+          "project": { "rootNamespace": "Orders.ApiTests", "testBaseClass": "Orders.ApiTests.OrdersTestBase" } }
+        """);
+
+        reason.ShouldContain("schemaVersion");
+        reason.ShouldContain("string");
+    }
+
+    /// <summary>
+    /// A fractional schemaVersion is a JSON number, so a ValueKind check alone would let it
+    /// through to an integer conversion that throws.
+    /// </summary>
+    [TestMethod]
+    public void ExplainsASchemaVersionThatIsNotAWholeNumber()
+    {
+        var reason = ReasonFor("""
+        { "schemaVersion": 1.5, "spec": { "source": "orders.json" },
+          "project": { "rootNamespace": "Orders.ApiTests", "testBaseClass": "Orders.ApiTests.OrdersTestBase" } }
+        """);
+
+        reason.ShouldContain("schemaVersion");
+        reason.ShouldContain("1.5");
+    }
+
+    /// <summary>
+    /// schemaVersion governs how every other setting is interpreted, so it is checked before
+    /// them: a config from a schema this CLI does not implement must not be reported as having
+    /// a bad rootNamespace, when the truth is that its rootNamespace may not mean what this
+    /// version thinks it means.
+    /// </summary>
+    [TestMethod]
+    public void ChecksSchemaVersionBeforeTheSettingsItGoverns()
+    {
+        var reason = ReasonFor("""
+        { "schemaVersion": 2, "spec": { "source": "orders.json" },
+          "project": { "rootNamespace": "not a valid name", "testBaseClass": "Orders.ApiTests.OrdersTestBase" } }
+        """);
+
+        reason.ShouldContain("schemaVersion");
+        reason.ShouldNotContain("rootNamespace");
+    }
+}

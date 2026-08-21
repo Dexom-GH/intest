@@ -1,8 +1,8 @@
 using System.Text.Json.Nodes;
 using System.Text.Json;
+using InTest.Cli.Configuration;
 using InTest.Cli.Coverage;
 using InTest.Cli.Fixtures;
-using InTest.Cli.Naming;
 using InTest.Cli.Planning;
 using InTest.Cli.Rendering;
 using InTest.Cli.Schemas;
@@ -57,35 +57,12 @@ public static class GenerateCommand
 
         try
         {
-            var configPath = Path.Combine(projectRoot, "intest.json");
-            if (!File.Exists(configPath))
-            {
-                Console.Error.WriteLine($"No intest.json found in '{projectRoot}'. Run `intest init` first.");
-                return ExitToolError;
-            }
+            // Every intest.json setting this command reads is validated here, before anything is
+            // written — including the two that reach generated code as declaration syntax. See
+            // ConfigLoader for why that lives in one loader rather than at each read site.
+            var config = ConfigLoader.Load(projectRoot);
 
-            using var config = JsonDocument.Parse(File.ReadAllText(configPath));
-            var specRelative = config.RootElement.GetProperty("spec").GetProperty("source").GetString()!;
-            var project = config.RootElement.GetProperty("project");
-            var rootNamespace = project.GetProperty("rootNamespace").GetString();
-            var baseClass = project.GetProperty("testBaseClass").GetString();
-
-            // rootNamespace and testBaseClass reach mstest-class.scriban as declaration syntax
-            // ("namespace {{ namespace }};" and ": {{ base_class }}"), not as a string literal —
-            // no escaping makes an invalid identifier resolve there, so refusing a bad value here,
-            // before anything is written, is the only fix. See CSharpIdentifier.TryValidateDottedName.
-            if (!CSharpIdentifier.TryValidateDottedName(rootNamespace, "project.rootNamespace", out var namespaceReason))
-            {
-                Console.Error.WriteLine($"{namespaceReason} Change project.rootNamespace in intest.json — for example \"Orders.ApiTests\".");
-                return ExitToolError;
-            }
-            if (!CSharpIdentifier.TryValidateDottedName(baseClass, "project.testBaseClass", out var baseClassReason))
-            {
-                Console.Error.WriteLine($"{baseClassReason} Change project.testBaseClass in intest.json — for example \"Orders.ApiTests.OrdersTestBase\".");
-                return ExitToolError;
-            }
-
-            var spec = await SpecLoader.LoadFromFileAsync(Path.Combine(projectRoot, specRelative), cancellationToken)
+            var spec = await SpecLoader.LoadFromFileAsync(Path.Combine(projectRoot, config.SpecSource), cancellationToken)
                                        .ConfigureAwait(false);
 
             var plan = TestPlanBuilder.Build(spec.Document);
@@ -117,7 +94,7 @@ public static class GenerateCommand
             var renderer = new TemplateRenderer();
             foreach (var testClass in plan.Classes)
             {
-                var source = renderer.RenderClass(testClass, rootNamespace, baseClass);
+                var source = renderer.RenderClass(testClass, config.RootNamespace, config.TestBaseClass);
                 await File.WriteAllTextAsync(Path.Combine(generated, testClass.ClassName + ".g.cs"), source, cancellationToken)
                           .ConfigureAwait(false);
             }
@@ -147,6 +124,11 @@ public static class GenerateCommand
             }
 
             return ExitOk;
+        }
+        catch (ConfigLoadException ex)
+        {
+            Console.Error.WriteLine(ex.Message);
+            return ExitToolError;
         }
         catch (SpecLoadException ex)
         {

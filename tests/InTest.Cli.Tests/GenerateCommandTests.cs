@@ -59,6 +59,43 @@ public class GenerateCommandTests
 
     private async Task<int> RunAsync() => await GenerateCommand.RunAsync(_root, CancellationToken.None);
 
+    /// <summary>Runs `generate` with stderr captured, so a test can assert what the adopter is told.</summary>
+    private async Task<(int ExitCode, string Error)> RunCapturingErrorAsync()
+    {
+        var originalError = Console.Error;
+        var capturedError = new StringWriter();
+        Console.SetError(capturedError);
+        try
+        {
+            return (await RunAsync(), capturedError.ToString());
+        }
+        finally
+        {
+            Console.SetError(originalError);
+        }
+    }
+
+    private void WriteConfig(string json) => File.WriteAllText(Path.Combine(_root, "intest.json"), json);
+
+    /// <summary>
+    /// The contract for every malformed-config case: exit 2 (§5 — "Nothing was written"), nothing
+    /// under Generated/, and an explanation rather than a stack-trace-shaped line. The
+    /// "unexpected failure" assertion is the load-bearing one — before ConfigLoader every case
+    /// below already exited 2 through the catch-all, so an exit-code assertion alone would have
+    /// passed against the defect.
+    /// </summary>
+    private async Task<string> ExpectExplainedConfigErrorAsync(string json)
+    {
+        WriteConfig(json);
+
+        var (exitCode, error) = await RunCapturingErrorAsync();
+
+        exitCode.ShouldBe(2);
+        Directory.Exists(Path.Combine(_root, "Generated")).ShouldBeFalse();
+        error.ShouldNotContain("unexpected failure");
+        return error;
+    }
+
     [TestMethod]
     public async Task WritesGeneratedClassesAndTheSchemaBundle()
     {
@@ -178,5 +215,86 @@ public class GenerateCommandTests
         }
 
         captured.ToString().ShouldContain("Noted 1 operation(s)");
+    }
+
+    // ---- intest.json is adopter-editable, so every read of it is an untrusted input ----------
+    // These assert the wiring: that `generate` routes ConfigLoadException to stderr and exit 2
+    // without writing. ConfigLoaderTests covers the message text of each individual setting.
+
+    /// <summary>
+    /// The brief's second named defect. A missing `project` key reached
+    /// `config.RootElement.GetProperty("project")` and surfaced through the catch-all as
+    /// `intest: unexpected failure: KeyNotFoundException: …` — a stack-trace-shaped message for
+    /// an ordinary hand-edit.
+    /// </summary>
+    [TestMethod]
+    public async Task ExplainsAMissingProjectSectionInsteadOfReportingAnUnexpectedFailure()
+    {
+        var error = await ExpectExplainedConfigErrorAsync(
+            """{ "schemaVersion": 1, "spec": { "source": "orders.json" } }""");
+
+        error.ShouldContain("project");
+        error.ShouldNotContain("KeyNotFoundException");
+    }
+
+    /// <summary>
+    /// The brief's first named defect: `spec.source` read with a bare `.GetString()!`. A number
+    /// threw InvalidOperationException from inside System.Text.Json, naming neither the file nor
+    /// the setting.
+    /// </summary>
+    [TestMethod]
+    public async Task ExplainsASpecSourceThatIsNotAStringInsteadOfReportingAnUnexpectedFailure()
+    {
+        var error = await ExpectExplainedConfigErrorAsync("""
+        { "schemaVersion": 1, "spec": { "source": 42 },
+          "project": { "rootNamespace": "Orders.ApiTests", "testBaseClass": "Orders.ApiTests.OrdersTestBase" } }
+        """);
+
+        error.ShouldContain("spec.source");
+        error.ShouldNotContain("InvalidOperationException");
+    }
+
+    /// <summary>
+    /// The other half of that defect. `.GetString()!` returned null rather than throwing, so the
+    /// failure surfaced further away still — `ArgumentNullException: Value cannot be null.
+    /// (Parameter 'path2')` from Path.Combine, which names a parameter of a framework method
+    /// rather than anything the adopter wrote.
+    /// </summary>
+    [TestMethod]
+    public async Task ExplainsASpecSourceThatIsJsonNullInsteadOfReportingAnUnexpectedFailure()
+    {
+        var error = await ExpectExplainedConfigErrorAsync("""
+        { "schemaVersion": 1, "spec": { "source": null },
+          "project": { "rootNamespace": "Orders.ApiTests", "testBaseClass": "Orders.ApiTests.OrdersTestBase" } }
+        """);
+
+        error.ShouldContain("spec.source");
+        error.ShouldNotContain("ArgumentNullException");
+    }
+
+    [TestMethod]
+    public async Task ExplainsAnIntestJsonThatIsNotValidJsonInsteadOfReportingAnUnexpectedFailure()
+    {
+        var error = await ExpectExplainedConfigErrorAsync(
+            """{ "schemaVersion": 1, "spec": { "source": "orders.json" } """);
+
+        error.ShouldContain("intest.json");
+        error.ShouldContain("not valid JSON");
+        error.ShouldNotContain("JsonReaderException");
+    }
+
+    /// <summary>
+    /// The hole directly beneath 0f42984: TryValidateDottedName never saw a non-string, because
+    /// `.GetString()` threw first. The injection guard and the type guard have to hold together.
+    /// </summary>
+    [TestMethod]
+    public async Task ExplainsARootNamespaceThatIsNotAStringInsteadOfReportingAnUnexpectedFailure()
+    {
+        var error = await ExpectExplainedConfigErrorAsync("""
+        { "schemaVersion": 1, "spec": { "source": "orders.json" },
+          "project": { "rootNamespace": 7, "testBaseClass": "Orders.ApiTests.OrdersTestBase" } }
+        """);
+
+        error.ShouldContain("project.rootNamespace");
     }
 }

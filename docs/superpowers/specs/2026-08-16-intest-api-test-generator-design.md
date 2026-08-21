@@ -454,10 +454,10 @@ Rev 2 and earlier drafts of rev 3 scattered commands across seven sections, and 
 | Command | Writes | Never writes | Exit |
 |---|---|---|---|
 | `intest init` | `intest.json`, `.csproj`, `.editorconfig`, `AssemblyInfo.cs`, `TestStartup.cs`, `<Name>TestBase.cs`, `appsettings*.json`, `*.runsettings`, `.config/dotnet-tools.json` | Anything already present — refuses rather than overwrites | 0 ok · 2 `--name` is not a valid C# name · 3 already initialised |
-| `intest generate` | `Generated/`, `coverage-report.json`, and `spec.json` when `spec.source` is a URL (§9) | `fixtures/`, team-owned files | 0 ok · 1 fixture drift or validation failure · 2 no `intest.json`, spec unparseable, or invalid `project.rootNamespace`/`testBaseClass` |
+| `intest generate` | `Generated/`, `coverage-report.json`, and `spec.json` when `spec.source` is a URL (§9) | `fixtures/`, team-owned files | 0 ok · 1 fixture drift or validation failure · 2 no `intest.json`, malformed `intest.json`, or spec unparseable |
 | `intest generate --check` | Nothing | Everything | 0 identical · 1 `Generated/` or `coverage-report.json` differs · 2 tool error · 4 tool-version mismatch |
 | `intest generate --emit-plan` | `TestPlan` JSON to stdout | Everything | 0 ok |
-| `intest fixtures repair` | `fixtures/` — **creates missing fixtures** by tier precedence, adds `TODO:` sentinels for newly-required properties, flags removed ones. Never overwrites an existing value | `Generated/`, team-owned files | 0 ok, including nothing to repair |
+| `intest fixtures repair` | `fixtures/` — **creates missing fixtures** by tier precedence, adds `TODO:` sentinels for newly-required properties, flags removed ones. Never overwrites an existing value | `Generated/`, team-owned files | 0 ok, including nothing to repair · 2 no `intest.json`, malformed `intest.json`, spec unparseable, or a committed fixture that cannot be read |
 | `intest fixtures promote` | Nothing — prints a paste-ready snippet and names the target file | Everything, `spec.source` especially (§10) | 0 ok |
 | `intest survey <spec-glob\|url>` | Nothing — prints a spec-population report (§17) | Everything | 0 ok · 2 no spec matched or unparseable |
 | `intest upgrade` | `intestVersion` in `intest.json`, the version in `.config/dotnet-tools.json`, then re-runs `generate` | `fixtures/`, team-owned files | 0 ok · 1 regeneration failed |

@@ -227,4 +227,105 @@ public class FixturesRepairCommandTests
         // The report should say which operation's fixture could not be read.
         report.ToString().ShouldContain("createProduct");
     }
+
+    // ---- intest.json is one document, so it is valid or it is not ---------------------------
+    // repair reads only spec.source, but it validates the whole file through the same loader
+    // `generate` uses. "Valid for repair but not for generate" is a state nobody can reason
+    // about: repair succeeds, the adopter believes their config is sound, and they lose that
+    // belief one command later. §5's exit 2 — "malformed intest.json" — is a property of the
+    // document, not of a command's read set.
+
+    /// <summary>Runs repair with stderr captured, so a test can assert what the adopter is told.</summary>
+    private async Task<(int ExitCode, string Error)> RunCapturingErrorAsync()
+    {
+        var originalError = Console.Error;
+        var capturedError = new StringWriter();
+        Console.SetError(capturedError);
+        try
+        {
+            return (await FixturesRepairCommand.RunAsync(_root, CancellationToken.None), capturedError.ToString());
+        }
+        finally
+        {
+            Console.SetError(originalError);
+        }
+    }
+
+    private async Task<string> ExpectExplainedConfigErrorAsync(string json)
+    {
+        File.WriteAllText(Path.Combine(_root, "intest.json"), json);
+
+        var (exitCode, error) = await RunCapturingErrorAsync();
+
+        exitCode.ShouldBe(FixturesRepairCommand.ExitToolError);
+        Directory.Exists(Path.Combine(_root, "fixtures")).ShouldBeFalse(
+            "§5 reserves exit 2 for a tool error where nothing was written");
+        error.ShouldNotContain("unexpected failure");
+        return error;
+    }
+
+    [TestMethod]
+    public async Task ExplainsAMissingProjectSectionInsteadOfReportingAnUnexpectedFailure()
+    {
+        var error = await ExpectExplainedConfigErrorAsync(
+            """{ "schemaVersion": 1, "spec": { "source": "spec.json" } }""");
+
+        error.ShouldContain("project");
+        error.ShouldNotContain("KeyNotFoundException");
+    }
+
+    [TestMethod]
+    public async Task ExplainsASpecSourceThatIsNotAStringInsteadOfReportingAnUnexpectedFailure()
+    {
+        var error = await ExpectExplainedConfigErrorAsync("""
+        { "schemaVersion": 1, "spec": { "source": 42 },
+          "project": { "rootNamespace": "T.ApiTests", "testBaseClass": "T.ApiTests.TTestBase" } }
+        """);
+
+        error.ShouldContain("spec.source");
+        error.ShouldNotContain("InvalidOperationException");
+    }
+
+    /// <summary>
+    /// The behaviour change this decision buys, stated as its own test so it cannot regress
+    /// silently: repair never renders rootNamespace and does not need it, and refuses anyway.
+    /// Nothing is lost by doing so — repair cannot repair intest.json — and the adopter learns
+    /// one command earlier about a failure they would hit deterministically on the next
+    /// `generate`.
+    /// </summary>
+    [TestMethod]
+    public async Task RefusesAnInvalidRootNamespaceEvenThoughItNeverRendersOne()
+    {
+        var error = await ExpectExplainedConfigErrorAsync("""
+        { "schemaVersion": 1, "spec": { "source": "spec.json" },
+          "project": { "rootNamespace": "T.ApiTests; class Injected { } //",
+                       "testBaseClass": "T.ApiTests.TTestBase" } }
+        """);
+
+        error.ShouldContain("project.rootNamespace");
+    }
+
+    [TestMethod]
+    public async Task RefusesASchemaVersionThisCliDoesNotImplement()
+    {
+        var error = await ExpectExplainedConfigErrorAsync("""
+        { "schemaVersion": 2, "spec": { "source": "spec.json" },
+          "project": { "rootNamespace": "T.ApiTests", "testBaseClass": "T.ApiTests.TTestBase" } }
+        """);
+
+        error.ShouldContain("schemaVersion");
+        error.ShouldNotContain("upgrade");
+    }
+
+    /// <summary>
+    /// The config `intest init` writes must load unchanged. This is the guard that a validation
+    /// rule added here can never contradict the scaffold — the two would otherwise drift, and a
+    /// fresh project that cannot run `repair` is the worst possible first experience.
+    /// </summary>
+    [TestMethod]
+    public async Task AcceptsTheConfigThatInitWrites()
+    {
+        // CreateProject already ran `init`; nothing here edits intest.json.
+        (await FixturesRepairCommand.RunAsync(_root, CancellationToken.None)).ShouldBe(0);
+    }
 }

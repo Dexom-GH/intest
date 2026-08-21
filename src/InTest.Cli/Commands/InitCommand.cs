@@ -1,3 +1,4 @@
+using InTest.Cli.Configuration;
 using InTest.Cli.Naming;
 
 namespace InTest.Cli.Commands;
@@ -36,7 +37,7 @@ public static class InitCommand
 
         Write(projectRoot, "intest.json", $$"""
         {
-          "schemaVersion": 1,
+          "schemaVersion": {{ConfigLoader.SupportedSchemaVersion}},
           "intestVersion": "{{CliVersion.Current}}",
           "spec": { "source": "{{specSource.Replace("\\", "/")}}", "producer": "auto" },
           "project": {
