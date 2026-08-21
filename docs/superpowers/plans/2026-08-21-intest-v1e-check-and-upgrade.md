@@ -52,6 +52,12 @@ Preamble principle 3: *"Generation never writes in the pipeline. `intest generat
 
 Covers `Generated/` **and** `coverage-report.json`.
 
+**What makes this enforceable rather than aspirational is a test, not this paragraph.** Task 3 Step 2's assertion that both are byte- and file-set-unchanged after a run reporting a difference makes write-then-restore fail mechanically, whatever shape the implementer chose. That is why the seam itself is left to the implementer.
+
+**But it only covers one of the two shapes forbidden here.** Write-to-a-temp-directory-and-compare passes that test, because nothing under the project changes. The **only** guard against that one is Task 3 Step 1's named seam plus review — so Step 1 is load-bearing, not a warm-up, and must not be skipped by someone who already knows what they are doing.
+
+Assert the **file set** as well as bytes: a stray temp file written *inside* the project is the most likely accidental form, and a bytes-only comparison of known files will not see it. Treat mtime as corroboration rather than the primary instrument — its granularity is coarse on some filesystems.
+
 ### `[exact-match]` — exit 4 fires on any version difference
 
 **Rev 1 said majors only. That was wrong, and the spec says so in text rather than by inference.** §8's worked example:
@@ -63,9 +69,13 @@ Covers `Generated/` **and** `coverage-report.json`.
 
 `1.0.0` vs `1.1.0` is a **minor** difference, presented as the failing case, with a prescribed message. Rev 1 reached for §3's `Runtime N.x accepts Cli N.y` guarantee — but that is a **different axis**: package-to-generated-code compatibility, not whether committed output is fresh. Conflating them is what produced the error.
 
-Rev 1's objection — "exit 4 on any difference breaks CI on every patch release" — is answered by the mechanism §8 already requires: `.config/dotnet-tools.json` pins the version (scaffolded by `init`) and CI runs `dotnet tool restore`. **CI runs the pinned version by construction.** Versions differ only when someone bumps the pin, and `upgrade` bumps the pin and `intestVersion` together. That pairing *is* the answer.
+Rev 1's objection — "exit 4 on any difference breaks CI on every patch release" — is answered by the mechanism §8 requires: `.config/dotnet-tools.json` pins the version (scaffolded by `init`) and CI runs `dotnet tool restore`, so CI runs the pinned version and versions differ only when someone bumps the pin — which `upgrade` does alongside `intestVersion`.
+
+**That mechanism is designed, not shipped.** Nothing is published to NuGet and there is no `nuget.config` or local feed in this repository, so `dotnet tool restore` cannot currently resolve the CLI at all (see Task 6 Step 1). The conclusion does not depend on it — §8's worked example settles `[exact-match]` on its own — but this plan does not get to assert that an unwired thing works. That is the defect it exists to close.
 
 And `[major-only]` would have made exit 4 **dead code for the project's entire pre-1.0 life**: everything is major 0 today, while under 0.x semver the minor is exactly where shape changes.
+
+**`CliVersion`'s fallback becomes user-visible.** `CliVersion.Read()` returns `"0.0.0"` when the informational-version attribute is missing. Under `[major-only]` that was masked; under `[exact-match]` it surfaces in §8's message as *"running tool is 0.0.0"* — a sentence pointing at a build problem while wearing the clothes of a version-drift problem. Decide whether that is worth a distinct message and say which.
 
 **Two deliverables rev 1 omitted:**
 - §8 requires the version check to fail **before comparing any output**. A version mismatch *and* a diff yields **4**, not 1. Order it explicitly.
@@ -94,7 +104,7 @@ This repository has already been bitten by exactly this and documented the fix i
 
 **But it must stay optional.** `ConfigLoaderTests.IgnoresSettingsItDoesNotRead` asserts exactly that, with reasoning: *"§5's config grows by addition, and a config written by a newer patch release still has to load."* Rev 1 would have reversed a reviewed decision without naming it.
 
-Surface it **nullable**, validate format-when-present, and leave *"missing means what?"* to `--check`. That satisfies `[read-what-init-wrote]` without making `fixtures repair` refuse a config over a field it has no interest in. Note the existing test's comment says no command reads `intestVersion` *and* that `init` does not write it — the second half is already wrong; correct it while you are there.
+Surface it **nullable**, validate format-when-present, and leave *"missing means what?"* to `--check`. That satisfies `[read-what-init-wrote]` without making `fixtures repair` refuse a config over a field it has no interest in. Note the existing test's comment is wrong about **all three** settings it names, not one: `init` writes `intestVersion` at `InitCommand.cs:139`, `producer` at `:140` and `name` at `:142`. What survives the rewrite is its **second** sentence — config grows by addition, and a config written by a newer patch release still has to load — which is sound and is the reason the test exists. Correct the premise, keep the reasoning.
 
 ---
 
@@ -126,11 +136,28 @@ Count `0x0D` in every generated artifact after a real `init` + `generate`. Recor
 
 - [ ] **Step 2: Normalize the JSON writers**
 
-Every `ToJsonString(WriteIndented: true)` site in `src/InTest.Cli/` — `CoverageReport.cs:151`, `GenerateCommand.cs:119`, `SchemaBundleBuilder.cs:40`, `FixtureDocument.cs:131`. Match what `TemplateRenderer.Normalize` already does. **Check `FixtureDocument` deliberately** — fixtures are adopter-edited, so normalizing them changes files people own; decide and say why either way.
+Every `ToJsonString(WriteIndented: true)` site in `src/InTest.Cli/` — and **"match `Normalize`" is ambiguous here, so do not**. `Normalize` is three operations (`Replace("\r\n","\n")`, `TrimEnd()`, `+ "\n"`) and the sites do not start from the same place:
 
-- [ ] **Step 3: Scaffold a `.gitattributes`**
+| Site | Today | Needs |
+|---|---|---|
+| `CoverageReport.cs:151` | already `+ "\n"` | the **replace only** |
+| `GenerateCommand.cs:119` | already `+ "\n"` | the **replace only** |
+| `FixtureDocument.cs:131` | already `+ "\n"` | the **replace only** |
+| `SchemaBundleBuilder.cs:40` | appends **nothing** | replace, and decide the trailing byte deliberately |
+
+Applying all three operations to the first three gives a double trailing newline. Applying them to the fourth also changes its trailing byte, which may be right but is a second behavioural change and should be intended rather than incidental. Either name the operation per site, or extract one helper and state which of the three it performs.
+
+**Check `FixtureDocument` deliberately** — fixtures are adopter-edited, so normalizing them changes files people own; decide and say why either way.
+
+- [ ] **Step 3: Scaffold a `.gitattributes` — and give it a migration path**
 
 `init` writes one pinning generated artifacts to LF. Model it on this repository's own, which documents the reasoning for the identical case.
+
+> **`init` alone is not enough, and the gap is this plan's own `[paired]` failure.** `init` refuses to run against an existing project (exit 3), so a project scaffolded before this ships never gets a `.gitattributes` — and `--check` is broken for it with **no remedy**. That is a documented gate with an unreachable fix, which is precisely the shape `[paired]` exists to prevent.
+>
+> **`upgrade` is the migration path**, it is being built in Task 4 of this plan, it already touches the project, and *"write it if absent, never overwrite"* is the same conservative rule `init` uses. Cheap here, awkward anywhere else.
+>
+> The cost to weigh honestly: §5's `upgrade` row lists only `intestVersion`, the tools pin, and the `generate` re-run, so this needs a **§5 amendment** — and Task 4 Step 1a is already arguing to cross the ownership line *narrowly*. Adding a file widens that. Decide it deliberately; the population is zero today, which makes this the cheapest moment it will ever be.
 
 - [ ] **Step 4: A test that would fail without it**
 
@@ -204,7 +231,15 @@ Five places assert these do not exist. Stale claims are this project's recurring
 
 **This task is the verdict.**
 
-- [ ] **Step 1:** Run Phase 8's pull-request block **verbatim** from the guide against a sample. It must pass.
+- [ ] **Step 1: Phase 8's first line cannot run — say what you substituted**
+
+Phase 8 opens with `dotnet tool restore`, which resolves `intest.cli` from the pin `init` writes. **Nothing is published to NuGet, and there is no `nuget.config` or local feed in this repository** — verified. So the restore fails and this task stalls on its first line.
+
+> **The likely failure here is not the restore — it is what an implementer does next.** Quietly substituting `dotnet run --project src/InTest.Cli`, recording a pass, and moving on reproduces *inside this plan's own verdict* the exact defect the plan exists to close: a documented workflow that does not run, reported as working.
+>
+> So: pick one — `dotnet pack` into a local feed with a temporary `nuget.config`, or invoke the built CLI directly — and **record which, and record that Phase 8's first line was therefore not exercised.** Everything after that line can be run as written.
+
+Run the rest of the block against a sample. It must pass.
 - [ ] **Step 2:** Edit the spec, do not regenerate, re-run. Exit **1**, naming what differs. Restore.
 - [ ] **Step 3:** Delete a path from the spec, regenerate nothing. Exit **1** — the stale-file case.
 - [ ] **Step 4:** Contrive a version difference. Exit **4**, with §8's message, **before** any diff is reported. Run `upgrade`; the workflow passes again.
