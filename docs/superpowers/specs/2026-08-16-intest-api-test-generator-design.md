@@ -453,8 +453,8 @@ Rev 2 and earlier drafts of rev 3 scattered commands across seven sections, and 
 
 | Command | Writes | Never writes | Exit |
 |---|---|---|---|
-| `intest init` | `intest.json`, `.csproj`, `.editorconfig`, `AssemblyInfo.cs`, `TestStartup.cs`, `<Name>TestBase.cs`, `appsettings*.json`, `*.runsettings`, `.config/dotnet-tools.json` | Anything already present — refuses rather than overwrites | 0 ok · 3 already initialised |
-| `intest generate` | `Generated/`, `coverage-report.json`, and `spec.json` when `spec.source` is a URL (§9) | `fixtures/`, team-owned files | 0 ok · 1 fixture drift or validation failure |
+| `intest init` | `intest.json`, `.csproj`, `.editorconfig`, `AssemblyInfo.cs`, `TestStartup.cs`, `<Name>TestBase.cs`, `appsettings*.json`, `*.runsettings`, `.config/dotnet-tools.json` | Anything already present — refuses rather than overwrites | 0 ok · 2 `--name` is not a valid C# name · 3 already initialised |
+| `intest generate` | `Generated/`, `coverage-report.json`, and `spec.json` when `spec.source` is a URL (§9) | `fixtures/`, team-owned files | 0 ok · 1 fixture drift or validation failure · 2 no `intest.json`, spec unparseable, or invalid `project.rootNamespace`/`testBaseClass` |
 | `intest generate --check` | Nothing | Everything | 0 identical · 1 `Generated/` or `coverage-report.json` differs · 2 tool error · 4 tool-version mismatch |
 | `intest generate --emit-plan` | `TestPlan` JSON to stdout | Everything | 0 ok |
 | `intest fixtures repair` | `fixtures/` — **creates missing fixtures** by tier precedence, adds `TODO:` sentinels for newly-required properties, flags removed ones. Never overwrites an existing value | `Generated/`, team-owned files | 0 ok, including nothing to repair |
