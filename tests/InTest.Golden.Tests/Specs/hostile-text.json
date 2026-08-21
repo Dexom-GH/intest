@@ -1,0 +1,43 @@
+{
+  "openapi": "3.0.3",
+  "info": { "title": "Hostile", "version": "1.0" },
+  "paths": {
+    "/widgets": {
+      "get": {
+        "operationId": "list\"Widgets\\Escaped",
+        "tags": ["Widgets"],
+        "responses": {
+          "200": {
+            "description": "ok",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object", "properties": { "id": { "type": "string" } } }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/widgets/say\"hi\\there": {
+      "get": {
+        "operationId": "getWeirdPath",
+        "tags": ["Widgets"],
+        "responses": {
+          "200": { "description": "ok" }
+        }
+      }
+    },
+    "/widgets/search": {
+      "get": {
+        "operationId": "searchWidgets",
+        "tags": ["Widgets"],
+        "parameters": [
+          { "name": "so\"rt\\key", "in": "query", "required": false, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "ok" }
+        }
+      }
+    }
+  }
+}

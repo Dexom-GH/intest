@@ -1,4 +1,5 @@
 using System.Reflection;
+using InTest.Cli.Naming;
 using InTest.Cli.Planning;
 using Scriban;
 
@@ -20,16 +21,21 @@ public sealed class TemplateRenderer
             cases = plan.Cases.Select(c => new
             {
                 method_name = c.MethodName,
-                display_name = c.DisplayName,
+                // '_literal' names every field below whose value is only valid pasted directly
+                // between a pair of '"' in the emitted source — CSharpLiteral.Escape's own doc
+                // comment says the same thing, but a model field is the use site a future
+                // template edit will actually look at. There is no check enforcing this; the
+                // name is the whole guard (see CSharpLiteral's doc comment).
+                display_name_literal = CSharpLiteral.Escape(c.DisplayName),
                 category = c.Category,
-                operation_key = c.OperationKey,
+                operation_key_literal = CSharpLiteral.Escape(c.OperationKey),
                 http_method_pascal = ToPascalMethod(c.HttpMethod),
-                path_template = c.PathTemplate,
+                path_template_literal = CSharpLiteral.Escape(c.PathTemplate),
                 path_argument_list = PathArguments(c),
                 query_expression = QueryExpression(c),
                 has_body = c.HasRequestBody,
                 expected_status = c.ExpectedStatus,
-                schema_key = c.SchemaKey,
+                schema_key_literal = c.SchemaKey is null ? null : CSharpLiteral.Escape(c.SchemaKey),
                 // [DoNotParallelize]'s source. Method alone was Task 4's implementation and, on
                 // review, its own bug: a declared-error or auth case always sends a generated,
                 // unmatchable id and no body (decision 6) — it mutates nothing real, regardless
@@ -58,7 +64,7 @@ public sealed class TemplateRenderer
                 // joins and quotes — it does not resort.
                 required_scopes_args = c.RequiredScopes.Count == 0
                     ? null
-                    : string.Join(", ", c.RequiredScopes.Select(s => $"\"{s}\"")),
+                    : string.Join(", ", c.RequiredScopes.Select(s => $"\"{CSharpLiteral.Escape(s)}\"")),
                 // Decision 7: Default (every case that predates Task 5, and every non-auth case)
                 // renders as null, which the template reads as "emit no override line at all" —
                 // the reason every existing Success case stays byte-identical in the golden file.
@@ -129,8 +135,10 @@ public sealed class TemplateRenderer
 
         if (plan.Role == CaseRole.Success)
         {
+            var operationKeyLiteral = CSharpLiteral.Escape(plan.OperationKey);
             return ", " + string.Join(", ",
-                plan.PathParameterNames.Select(n => $"FixtureParameter(\"{plan.OperationKey}\", \"{n}\")"));
+                plan.PathParameterNames.Select(n =>
+                    $"FixtureParameter(\"{operationKeyLiteral}\", \"{CSharpLiteral.Escape(n)}\")"));
         }
 
         var kinds = plan.PathParameterKinds;
@@ -181,8 +189,8 @@ public sealed class TemplateRenderer
             return string.Empty;
         }
 
-        var nameArgs = string.Join(", ", names.Select(n => $"\"{n}\""));
-        return $" + InTestUrl.BuildQuery(FixtureQueryParameters(\"{plan.OperationKey}\", {nameArgs}))";
+        var nameArgs = string.Join(", ", names.Select(n => $"\"{CSharpLiteral.Escape(n)}\""));
+        return $" + InTestUrl.BuildQuery(FixtureQueryParameters(\"{CSharpLiteral.Escape(plan.OperationKey)}\", {nameArgs}))";
     }
 
     private static string LoadEmbedded(string fileName)

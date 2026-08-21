@@ -15,7 +15,7 @@ public partial class {{ class_name }} : {{ base_class }}
 {
 {{- for tc in cases }}
     [TestMethod, TestCategory("{{ tc.category }}")]
-    [Description("{{ tc.display_name }}")]
+    [Description("{{ tc.display_name_literal }}")]
 {{~ if tc.mutates ~}}
     [DoNotParallelize]
 {{~ end ~}}
@@ -32,23 +32,23 @@ public partial class {{ class_name }} : {{ base_class }}
 
 {{~ end ~}}
 {{~ if tc.emits_fixture_lookup ~}}
-        RequireFixture("{{ tc.operation_key }}");
+        RequireFixture("{{ tc.operation_key_literal }}");
 
 {{~ end ~}}
         using var request = new HttpRequestMessage(
             HttpMethod.{{ tc.http_method_pascal }},
-            InTestUrl.Build("{{ tc.path_template }}"{{ tc.path_argument_list }}){{ tc.query_expression }});
+            InTestUrl.Build("{{ tc.path_template_literal }}"{{ tc.path_argument_list }}){{ tc.query_expression }});
 {{~ if tc.has_body ~}}
-        request.Content = new StringContent(FixtureBody("{{ tc.operation_key }}")!, Encoding.UTF8, "application/json");
+        request.Content = new StringContent(FixtureBody("{{ tc.operation_key_literal }}")!, Encoding.UTF8, "application/json");
 {{~ end ~}}
 
         var stopwatch = Stopwatch.StartNew();
         using var response = await Client.SendAsync(request, TestContext.CancellationToken);
         stopwatch.Stop();
 
-{{~ if tc.schema_key ~}}
+{{~ if tc.schema_key_literal ~}}
         await ApiResponseAssertions.ShouldMatchContractAsync(
-            response, {{ tc.expected_status }}, "{{ tc.schema_key }}", Schemas, TestId, stopwatch.Elapsed,
+            response, {{ tc.expected_status }}, "{{ tc.schema_key_literal }}", Schemas, TestId, stopwatch.Elapsed,
             TestContext.CancellationToken);
 {{~ else ~}}
         await ApiResponseAssertions.ShouldMatchStatusAsync(
