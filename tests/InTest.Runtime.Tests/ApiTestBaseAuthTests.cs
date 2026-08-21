@@ -392,6 +392,13 @@ public class ApiTestBaseAuthTests
         // (Identities[1], not just Identities.Count), so it must guard the same
         // provider-registered-but-Identities-itself-null shape that guard already does — v1-c's
         // live NullReferenceException on exactly this shape is why.
+        //
+        // This is the only one of these two null-shape tests that can actually carry a "runs"
+        // claim: a null Identities *list* fails RequireMultipleIdentities' count check (Count 0),
+        // so UseIdentity is never reached and "runs" is never falsified. Its sibling below, on a
+        // null *element*, passes that same count check (Count 2) and reaches UseIdentity, where
+        // ResolveIdentitySlot throws on the null element's .Name — so it cannot make the same
+        // claim. That asymmetry is intentional; see the sibling's own doc comment.
         TestHost.TokenProvider = new NullIdentitiesProvider();
 
         Should.NotThrow(() => ApiTestBase.RequireSecondaryIdentityLacks("orders.read"));
@@ -409,8 +416,18 @@ public class ApiTestBaseAuthTests
             throw new NotSupportedException("not exercised by this test");
     }
 
+    /// <summary>Confirms the null-element shape is not skipped by <see
+    /// cref="ApiTestBase.RequireSecondaryIdentityLacks"/> itself. It does not confirm the test
+    /// goes on to run: the second identity being null violates <see
+    /// cref="ITestTokenProvider.Identities"/>'s non-null element annotation, and <see
+    /// cref="ApiTestBase.UseIdentity"/>'s subsequent call to <c>ResolveIdentitySlot</c> throws
+    /// <see cref="NullReferenceException"/> on exactly this shape — intentionally, so a provider
+    /// that breaks its own contract fails loudly rather than being silently defended against.
+    /// Unlike <see cref="ANullIdentitiesListRunsRatherThanThrowing"/>, this one cannot carry a
+    /// "runs" claim: it passes the count guard that test relies on, so it reaches
+    /// <c>UseIdentity</c> instead of stopping short of it.</summary>
     [TestMethod]
-    public void ANullSecondaryIdentityElementRunsRatherThanThrowing()
+    public void ANullSecondaryIdentityElementIsNotSkippedByThisGuard()
     {
         TestHost.TokenProvider = new NullSecondaryIdentityProvider();
 

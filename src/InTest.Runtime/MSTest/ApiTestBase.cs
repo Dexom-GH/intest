@@ -203,6 +203,9 @@ public abstract class ApiTestBase
         // compares with the comparer passed to it. RFC 6749 scope tokens are case-sensitive, so
         // "ORDERS.READ" must not satisfy a requirement for "orders.read" regardless of how the
         // secondary identity's Scopes collection happens to compare equality internally.
+        //
+        // `Except` below has no such fast path to worry about either way: it always builds its
+        // own set with the default comparer, which is ordinal for `string`.
         var extra = scopes.Except(requiredScopes).Any();
         Assert.Inconclusive(extra
             ? $"Skipped: the secondary identity '{secondary.Name}' holds {string.Join(", ", scopes)} — " +
